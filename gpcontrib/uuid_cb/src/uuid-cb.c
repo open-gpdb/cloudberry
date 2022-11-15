@@ -24,7 +24,7 @@ uuid_cb_generate(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_EXTERNAL_ROUTINE_EXCEPTION),
 					errmsg("Could not generate CB UUID")));
 	}
-	PG_RETURN_VARCHAR_P((VarChar *)cstring_to_text_with_len(buf, CB_UUID_LEN));
+	PG_RETURN_TEXT_P(cstring_to_text_with_len(buf, CB_UUID_LEN));
 }
 
 Datum
@@ -32,11 +32,12 @@ uuid_cb_valid(PG_FUNCTION_ARGS)
 {
 	char 	*uuid_cb_str;
 	char	uuid_str[UUID_LEN + 1];
-	uuid_cb_str = DatumGetCString(DirectFunctionCall1(varcharout, PG_GETARG_DATUM(0)));
+	uuid_cb_str = text_to_cstring(PG_GETARG_TEXT_PP(0));
 	if (!uuid_cb_str || strlen(uuid_cb_str) != CB_UUID_LEN) {
 		PG_RETURN_BOOL(false);
 	}
 	strncpy(uuid_str, uuid_cb_str, UUID_LEN);
+	uuid_str[UUID_LEN] = 0;
 	PG_RETURN_BOOL(calc_ctrl(uuid_str) == uuid_cb_str[CB_UUID_LEN - 1]);
 }
 
