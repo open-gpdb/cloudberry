@@ -1439,6 +1439,14 @@ case $INSTALL in
 esac
 AC_SUBST(install_bin)
 
+#
+# MDB locales
+#
+
+PGAC_ARG_BOOL(with, mdblocales, yes, [build without MDB locales],
+              [AC_DEFINE([USE_MDBLOCALES], 1, [Define to 1 to build with MDB locales. (--with-mdblocales)])])
+AC_SUBST(USE_MDBLOCALES)
+
 PGAC_PATH_PROGS(TAR, tar)
 AC_PROG_LN_S
 AC_PROG_MKDIR_P
@@ -1600,6 +1608,11 @@ fi
 if test "$with_quicklz" = yes; then
   AC_CHECK_LIB(quicklz, qlz_compress, [],
                [AC_MSG_ERROR([quicklz library not found.])])
+fi
+
+if test "$with_mdblocales" = yes; then
+  AC_CHECK_LIB(mdblocales, mdb_setlocale, [],
+               [AC_MSG_ERROR([mdblocales library not found])])
 fi
 
 if test "$enable_external_fts" = yes; then
@@ -1977,6 +1990,10 @@ fi
 
 if test "$with_lz4" = yes; then
   AC_CHECK_HEADERS(lz4.h, [], [AC_MSG_ERROR([lz4.h header file is required for LZ4])])
+fi
+
+if test "$with_mdblocales" = yes; then
+  AC_CHECK_HEADER(mdblocales.h, [], [AC_MSG_ERROR([mdblocales header not found.])])
 fi
 
 if test "$with_gssapi" = yes ; then
