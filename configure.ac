@@ -1636,6 +1636,11 @@ if test "$with_mdblocales" = yes; then
                [AC_MSG_ERROR([mdblocales library not found])])
 fi
 
+if test "$with_mdblocales" = yes; then
+  AC_CHECK_LIB(mdblocales, mdb_setlocale, [],
+               [AC_MSG_ERROR([mdblocales library not found])])
+fi
+
 if test "$enable_external_fts" = yes; then
 AC_CHECK_LIB(jansson, jansson_version_str, [],
                [AC_MSG_ERROR([jansson library not found or version is too old, version must >= 2.13])])

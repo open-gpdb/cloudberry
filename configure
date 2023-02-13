@@ -2923,7 +2923,6 @@ ac_compiler_gnu=$ac_cv_c_compiler_gnu
 PG_PACKAGE_VERSION=14.7
 
 
-
 ac_aux_dir=
 for ac_dir in config "$srcdir"/config; do
   if test -f "$ac_dir/install-sh"; then
