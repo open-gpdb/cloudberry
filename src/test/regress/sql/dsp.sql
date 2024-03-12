@@ -245,18 +245,19 @@ show gp_default_storage_options;
 set default_table_access_method = ao_column;
 set gp_default_storage_options = "compresslevel=5";
 show gp_default_storage_options;
--- negative tests - should fail due to invalid combinations of
--- compresslevel and compresstype.
+-- RLE can inherit compresslevel=5 from the default storage options.
 create table co6(
 	a int encoding (compresstype=rle_type),
 	b float encoding (blocksize=8192))
 	distributed by (a);
+-- negative tests - should fail due to invalid combinations of
+-- compresslevel and compresstype.
 create table co7(a int, b float,
 	default column encoding (compresstype=RLE_TYPE, compresslevel=7))
 	distributed by (a);
 -- negative tests - session level set
 set gp_default_storage_options = "compresstype=zlib,compresslevel=11";
-set gp_default_storage_options = "compresslevel=5,compresstype=RLE_TYPE";
+set gp_default_storage_options = "compresslevel=7,compresstype=RLE_TYPE";
 set gp_default_storage_options = "compresslevel=1,compresstype=rle";
 set gp_default_storage_options = "checksum=1234";
 set gp_default_storage_options = "blocksize=true";
