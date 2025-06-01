@@ -39,11 +39,8 @@ extern void AttachSession(dsm_handle handle);
 extern void DetachSession(void);
 
 /* The current session, or NULL for none. */
-<<<<<<< HEAD
 extern Session *CurrentSession;
 extern Session *ParallelSession;
-=======
 extern PGDLLIMPORT Session *CurrentSession;
 
->>>>>>> REL_16_9
 #endif							/* SESSION_H */

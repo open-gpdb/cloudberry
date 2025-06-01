@@ -13,24 +13,18 @@
 
 #include "access/xlogbackup.h"
 #include "access/xlogdefs.h"
-<<<<<<< HEAD
 #include "access/xloginsert.h"
 #include "access/xlogreader.h"
 #include "common/kmgr_utils.h"
-=======
->>>>>>> REL_16_9
 #include "datatype/timestamp.h"
 #include "access/xlog_internal.h"
 #include "catalog/pg_control.h"
 #include "lib/stringinfo.h"
-<<<<<<< HEAD
 #include "storage/buf.h"
 #include "storage/fd.h"
 #include "utils/pg_crc.h"
 #include "utils/relcache.h"
 #include "cdb/cdbpublic.h"
-=======
->>>>>>> REL_16_9
 #include "nodes/pg_list.h"
 
 
@@ -47,58 +41,37 @@ extern PGDLLIMPORT XLogRecPtr XactLastRecEnd;
 extern PGDLLIMPORT XLogRecPtr XactLastCommitEnd;
 
 /* these variables are GUC parameters related to XLOG */
-<<<<<<< HEAD
-extern int	wal_segment_size;
-extern int	min_wal_size_mb;
-extern int	max_wal_size_mb;
-extern int	wal_keep_size_mb;
-extern int	max_slot_wal_keep_size_mb;
-extern int	XLOGbuffers;
-extern int	XLogArchiveTimeout;
-extern int	wal_retrieve_retry_interval;
-extern char *XLogArchiveCommand;
-extern bool EnableHotStandby;
-
-extern bool fullPageWrites;
-extern bool wal_log_hints;
-extern bool wal_compression;
-extern bool wal_init_zero;
-extern bool wal_recycle;
-extern bool *wal_consistency_checking;
-extern char *wal_consistency_checking_string;
-extern bool log_checkpoints;
-extern char *recoveryRestoreCommand;
-extern char *recoveryEndCommand;
-extern char *archiveCleanupCommand;
-extern bool recoveryTargetInclusive;
-extern int	recoveryTargetAction;
-extern int	recovery_min_apply_delay;
-extern char *PrimaryConnInfo;
-extern char *PrimarySlotName;
-extern bool wal_receiver_create_temp_slot;
-extern bool track_wal_io_timing;
-=======
-extern PGDLLIMPORT int wal_segment_size;
-extern PGDLLIMPORT int min_wal_size_mb;
-extern PGDLLIMPORT int max_wal_size_mb;
-extern PGDLLIMPORT int wal_keep_size_mb;
-extern PGDLLIMPORT int max_slot_wal_keep_size_mb;
-extern PGDLLIMPORT int XLOGbuffers;
-extern PGDLLIMPORT int XLogArchiveTimeout;
-extern PGDLLIMPORT int wal_retrieve_retry_interval;
+extern PGDLLIMPORT int	wal_segment_size;
+extern PGDLLIMPORT int	min_wal_size_mb;
+extern PGDLLIMPORT int	max_wal_size_mb;
+extern PGDLLIMPORT int	wal_keep_size_mb;
+extern PGDLLIMPORT int	max_slot_wal_keep_size_mb;
+extern PGDLLIMPORT int	XLOGbuffers;
+extern PGDLLIMPORT int	XLogArchiveTimeout;
+extern PGDLLIMPORT int	wal_retrieve_retry_interval;
 extern PGDLLIMPORT char *XLogArchiveCommand;
 extern PGDLLIMPORT bool EnableHotStandby;
+
 extern PGDLLIMPORT bool fullPageWrites;
 extern PGDLLIMPORT bool wal_log_hints;
-extern PGDLLIMPORT int wal_compression;
+extern PGDLLIMPORT bool wal_compression;
 extern PGDLLIMPORT bool wal_init_zero;
 extern PGDLLIMPORT bool wal_recycle;
 extern PGDLLIMPORT bool *wal_consistency_checking;
 extern PGDLLIMPORT char *wal_consistency_checking_string;
 extern PGDLLIMPORT bool log_checkpoints;
+extern PGDLLIMPORT char *recoveryRestoreCommand;
+extern PGDLLIMPORT char *recoveryEndCommand;
+extern PGDLLIMPORT char *archiveCleanupCommand;
+extern PGDLLIMPORT bool recoveryTargetInclusive;
+extern PGDLLIMPORT int	recoveryTargetAction;
+extern PGDLLIMPORT int	recovery_min_apply_delay;
+extern PGDLLIMPORT char *PrimaryConnInfo;
+extern PGDLLIMPORT char *PrimarySlotName;
+extern PGDLLIMPORT bool wal_receiver_create_temp_slot;
 extern PGDLLIMPORT bool track_wal_io_timing;
 extern PGDLLIMPORT int wal_decode_buffer_size;
->>>>>>> REL_16_9
+
 
 extern PGDLLIMPORT int CheckPointSegments;
 
@@ -226,10 +199,7 @@ extern PGDLLIMPORT bool XLOG_DEBUG;
  */
 #define XLOG_INCLUDE_ORIGIN		0x01	/* include the replication origin */
 #define XLOG_MARK_UNIMPORTANT	0x02	/* record not important for durability */
-<<<<<<< HEAD
 #define XLOG_INCLUDE_XID		0x04	/* WAL-internal message-passing hack */
-=======
->>>>>>> REL_16_9
 
 
 /* Checkpoint statistics */
@@ -332,7 +302,6 @@ extern XLogRecPtr GetFlushRecPtr(TimeLineID *insertTLI);
 extern TimeLineID GetWALInsertionTimeLine(void);
 extern XLogRecPtr GetLastImportantRecPtr(void);
 
-<<<<<<< HEAD
 extern void HandleStartupProcInterrupts(void);
 extern void StartupProcessMain(void);
 extern bool PromoteIsTriggered(void);
@@ -345,8 +314,6 @@ extern void XLogRequestWalReceiverReply(void);
 
 extern void assign_max_wal_size(int newval, void *extra);
 extern void assign_checkpoint_completion_target(double newval, void *extra);
-=======
-extern void SetWalWriterSleeping(bool sleeping);
 
 /*
  * Routines used by xlogrecovery.c to call back into xlog.c during recovery.
@@ -359,7 +326,6 @@ extern void SetInstallXLogFileSegmentActive(void);
 extern bool IsInstallXLogFileSegmentActive(void);
 extern void XLogShutdownWalRcv(void);
 
->>>>>>> REL_16_9
 /*
  * Routines to start, stop, and get status of a base backup.
  */

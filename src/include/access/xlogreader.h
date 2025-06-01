@@ -308,7 +308,6 @@ struct XLogReaderState
 
 	/* Buffer to hold error message */
 	char	   *errormsg_buf;
-<<<<<<< HEAD
 
 	/*
 	 * Set at the end of recovery: the start point of a partial record at the
@@ -319,7 +318,6 @@ struct XLogReaderState
 	XLogRecPtr	missingContrecPtr;
 	/* Set when XLP_FIRST_IS_OVERWRITE_CONTRECORD is found */
 	XLogRecPtr	overwrittenRecPtr;
-=======
 	bool		errormsg_deferred;
 
 	/*
@@ -327,7 +325,6 @@ struct XLogReaderState
 	 * data.
 	 */
 	bool		nonblocking;
->>>>>>> REL_16_9
 };
 
 /*
@@ -384,7 +381,6 @@ extern DecodedXLogRecord *XLogReadAhead(XLogReaderState *state,
 extern bool XLogReaderValidatePageHeader(XLogReaderState *state,
 										 XLogRecPtr recptr, char *phdr);
 
-<<<<<<< HEAD
 /* Validate a page */
 extern bool XLogReaderValidatePageHeader(XLogReaderState *state,
 					XLogRecPtr recptr, char *phdr);
@@ -394,10 +390,9 @@ extern bool XLogReaderValidatePageHeader(XLogReaderState *state,
 #if 1
 extern XLogRecPtr XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr);
 #endif							/* FRONTEND */
-=======
+
 /* Forget error produced by XLogReaderValidatePageHeader(). */
 extern void XLogReaderResetError(XLogReaderState *state);
->>>>>>> REL_16_9
 
 /*
  * Error information from WALRead that both backend and frontend caller can

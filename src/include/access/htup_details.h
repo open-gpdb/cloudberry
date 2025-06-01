@@ -705,7 +705,6 @@ struct MinimalTupleData
 #define HeapTupleClearHeapOnly(tuple) \
 		HeapTupleHeaderClearHeapOnly((tuple)->t_data)
 
-<<<<<<< HEAD
 
 extern Datum nocachegetattr(HeapTuple tup, int attnum,
 							TupleDesc att);
@@ -797,8 +796,6 @@ heap_getattr(HeapTuple tup, int attnum, TupleDesc tupleDesc, bool *isnull)
     return result;
 }                               /* heap_getattr */
 
-=======
->>>>>>> REL_16_9
 /* prototypes for functions in common/heaptuple.c */
 extern Size heap_compute_data_size(TupleDesc tupleDesc,
 								   Datum *values, bool *isnull);
@@ -807,7 +804,6 @@ extern Size heap_fill_tuple(TupleDesc tupleDesc,
 							char *data, Size data_size,
 							uint16 *infomask, bits8 *bit);
 extern bool heap_attisnull(HeapTuple tup, int attnum, TupleDesc tupleDesc);
-<<<<<<< HEAD
 
 extern HeapTuple heaptuple_copy_to(HeapTuple tup, HeapTuple result, uint32 *len);
 
@@ -815,15 +811,7 @@ static inline HeapTuple heap_copytuple(HeapTuple tuple)
 {
 	return heaptuple_copy_to(tuple, NULL, NULL);
 }
-=======
-extern Datum nocachegetattr(HeapTuple tup, int attnum,
-							TupleDesc tupleDesc);
-extern Datum heap_getsysattr(HeapTuple tup, int attnum, TupleDesc tupleDesc,
-							 bool *isnull);
-extern Datum getmissingattr(TupleDesc tupleDesc,
-							int attnum, bool *isnull);
-extern HeapTuple heap_copytuple(HeapTuple tuple);
->>>>>>> REL_16_9
+
 extern void heap_copytuple_with_tuple(HeapTuple src, HeapTuple dest);
 extern Datum heap_copy_tuple_as_datum(HeapTuple tuple, TupleDesc tupleDesc);
 

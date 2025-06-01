@@ -75,20 +75,18 @@ typedef enum
 								 * need to be replayed) */
 } XLogRedoAction;
 
-<<<<<<< HEAD
 /*
  * Returns true if we shouldn't do REDO on that block in record indicated by
  * block_id; false otherwise.
  */
 extern bool	(*redo_read_buffer_filter) (XLogReaderState *record, uint8 block_id);
-=======
+
 /* Private data of the read_local_xlog_page_no_wait callback. */
 typedef struct ReadLocalXLogPageNoWaitPrivate
 {
 	bool		end_of_wal;		/* true, when end of WAL is reached */
 } ReadLocalXLogPageNoWaitPrivate;
->>>>>>> REL_16_9
-
+\
 extern XLogRedoAction XLogReadBufferForRedo(XLogReaderState *record,
 											uint8 block_id, Buffer *buf);
 extern Buffer XLogInitBufferForRedo(XLogReaderState *record, uint8 block_id);

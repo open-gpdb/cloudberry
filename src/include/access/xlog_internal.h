@@ -370,14 +370,6 @@ typedef struct RmgrData
 							  struct XLogRecordBuffer *buf);
 } RmgrData;
 
-<<<<<<< HEAD
-extern RmgrData RmgrTable[];
-extern void RmgrStartup(void);
-extern void RmgrCleanup(void);
-extern void RmgrNotFound(RmgrId rmid);
-extern void RegisterCustomRmgr(RmgrId rmid, RmgrData *rmgr);
-
-=======
 extern PGDLLIMPORT RmgrData RmgrTable[];
 extern void RmgrStartup(void);
 extern void RmgrCleanup(void);
@@ -385,7 +377,6 @@ extern void RmgrNotFound(RmgrId rmid);
 extern void RegisterCustomRmgr(RmgrId rmid, const RmgrData *rmgr);
 
 #ifndef FRONTEND
->>>>>>> REL_16_9
 static inline bool
 RmgrIdExists(RmgrId rmid)
 {
@@ -399,10 +390,8 @@ GetRmgr(RmgrId rmid)
 		RmgrNotFound(rmid);
 	return RmgrTable[rmid];
 }
-<<<<<<< HEAD
-=======
+
 #endif
->>>>>>> REL_16_9
 
 /*
  * Exported to support xlog switching from checkpointer

@@ -4,11 +4,7 @@
  *		macros for accessing contents of visibility map pages
  *
  *
-<<<<<<< HEAD
- * Copyright (c) 2021, PostgreSQL Global Development Group
-=======
  * Copyright (c) 2021-2023, PostgreSQL Global Development Group
->>>>>>> REL_16_9
  *
  * src/include/access/visibilitymapdefs.h
  *
@@ -25,8 +21,7 @@
 #define VISIBILITYMAP_ALL_FROZEN	0x02
 #define VISIBILITYMAP_VALID_BITS	0x03	/* OR of all valid visibilitymap
 											 * flags bits */
-<<<<<<< HEAD
-=======
+
 /*
  * To detect recovery conflicts during logical decoding on a standby, we need
  * to know if a table is a user catalog table. For that we add an additional
@@ -36,6 +31,5 @@
  */
 #define VISIBILITYMAP_XLOG_CATALOG_REL	0x04
 #define VISIBILITYMAP_XLOG_VALID_BITS	(VISIBILITYMAP_VALID_BITS | VISIBILITYMAP_XLOG_CATALOG_REL)
->>>>>>> REL_16_9
 
 #endif							/* VISIBILITYMAPDEFS_H */

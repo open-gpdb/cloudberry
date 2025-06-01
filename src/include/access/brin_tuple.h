@@ -44,11 +44,7 @@ typedef struct BrinValues
 typedef struct BrinMemTuple
 {
 	bool		bt_placeholder; /* this is a placeholder tuple */
-<<<<<<< HEAD
-	bool		bt_empty_range;	/* range represents no tuples */
-=======
 	bool		bt_empty_range; /* range represents no tuples */
->>>>>>> REL_16_9
 	BlockNumber bt_blkno;		/* heap blkno that the tuple is for */
 	MemoryContext bt_context;	/* memcxt holding the bt_columns values */
 	/* output arrays for brin_deform_tuple: */

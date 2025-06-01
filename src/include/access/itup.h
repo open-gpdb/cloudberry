@@ -114,36 +114,6 @@ IndexInfoFindDataOffset(unsigned short t_info)
  *
  * ----------------
  */
-<<<<<<< HEAD
-#define index_getattr(tup, attnum, tupleDesc, isnull) \
-( \
-	AssertMacro(PointerIsValid(isnull) && (attnum) > 0), \
-	*(isnull) = false, \
-	!IndexTupleHasNulls(tup) ? \
-	( \
-		TupleDescAttr((tupleDesc), (attnum)-1)->attcacheoff >= 0 ? \
-		( \
-			fetchatt(TupleDescAttr((tupleDesc), (attnum)-1), \
-			(char *) (tup) + IndexInfoFindDataOffset((tup)->t_info) \
-			+ TupleDescAttr((tupleDesc), (attnum)-1)->attcacheoff) \
-		) \
-		: \
-			nocache_index_getattr((tup), (attnum), (tupleDesc)) \
-	) \
-	: \
-	( \
-		(att_isnull((attnum)-1, (char *)(tup) + sizeof(IndexTupleData))) ? \
-		( \
-			*(isnull) = true, \
-			(Datum)0 \
-		) \
-		: \
-		( \
-			nocache_index_getattr((tup), (attnum), (tupleDesc)) \
-		) \
-	) \
-)
-=======
 static inline Datum
 index_getattr(IndexTuple tup, int attnum, TupleDesc tupleDesc, bool *isnull)
 {
@@ -176,7 +146,6 @@ index_getattr(IndexTuple tup, int attnum, TupleDesc tupleDesc, bool *isnull)
 }
 
 #endif
->>>>>>> REL_16_9
 
 /*
  * MaxIndexTuplesPerPage is an upper bound on the number of tuples that can

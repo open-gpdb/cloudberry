@@ -293,14 +293,10 @@ typedef struct xl_heap_lock
 {
 	TransactionId xmax;			/* might be a MultiXactId */
 	OffsetNumber offnum;		/* locked tuple's offset on page */
-<<<<<<< HEAD
 #ifdef SERVERLESS
 	uint32       t_cid;         /* current command id */
 #endif
-	int8		infobits_set;	/* infomask and infomask2 bits to set */
-=======
 	uint8		infobits_set;	/* infomask and infomask2 bits to set */
->>>>>>> REL_16_9
 	uint8		flags;			/* XLH_LOCK_* flag bits */
 } xl_heap_lock;
 

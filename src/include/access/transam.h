@@ -317,11 +317,8 @@ extern PGDLLIMPORT NewSegRelfilenode_assign_hook_type NewSegRelfilenode_assign_h
  */
 extern bool TransactionIdDidCommit(TransactionId transactionId);
 extern bool TransactionIdDidAbort(TransactionId transactionId);
-<<<<<<< HEAD
 extern bool TransactionIdDidAbortForReader(TransactionId transactionId);
 extern bool TransactionIdIsKnownCompleted(TransactionId transactionId);
-=======
->>>>>>> REL_16_9
 extern void TransactionIdCommitTree(TransactionId xid, int nxids, TransactionId *xids);
 extern void TransactionIdAsyncCommitTree(TransactionId xid, int nxids, TransactionId *xids, XLogRecPtr lsn);
 extern void TransactionIdAbortTree(TransactionId xid, int nxids, TransactionId *xids);
@@ -342,13 +339,10 @@ extern void SetTransactionIdLimit(TransactionId oldest_datfrozenxid,
 extern void AdvanceOldestClogXid(TransactionId oldest_datfrozenxid);
 extern bool ForceTransactionIdLimitUpdate(void);
 extern Oid	GetNewObjectId(void);
-<<<<<<< HEAD
 extern void AdvanceObjectId(Oid newOid);
 extern Oid	GetNewSegRelfilenode(void);
 extern bool OidFollowsNextOid(Oid id);
-=======
 extern void StopGeneratingPinnedObjectIds(void);
->>>>>>> REL_16_9
 
 #ifdef USE_ASSERT_CHECKING
 extern void AssertTransactionIdInAllowableRange(TransactionId xid);

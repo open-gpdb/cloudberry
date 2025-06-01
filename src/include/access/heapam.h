@@ -228,14 +228,10 @@ extern bool heap_getnextslot_tidrange(TableScanDesc sscan,
 									  TupleTableSlot *slot);
 extern uint32 heap_scan_flags(Relation relation);
 extern bool heap_fetch(Relation relation, Snapshot snapshot,
-<<<<<<< HEAD
-					   HeapTuple tuple, Buffer *userbuf);
+					   HeapTuple tuple, Buffer *userbuf, bool keep_buf);
 extern bool heap_fetch_extended(Relation relation, Snapshot snapshot,
 								HeapTuple tuple, Buffer *userbuf,
 								bool keep_buf);
-=======
-					   HeapTuple tuple, Buffer *userbuf, bool keep_buf);
->>>>>>> REL_16_9
 extern bool heap_hot_search_buffer(ItemPointer tid, Relation relation,
 								   Buffer buffer, Snapshot snapshot, HeapTuple heapTuple,
 								   bool *all_dead, bool first_call);
@@ -284,18 +280,14 @@ extern void heap_freeze_execute_prepared(Relation rel, Buffer buffer,
 										 HeapTupleFreeze *tuples, int ntuples);
 extern bool heap_freeze_tuple(HeapTupleHeader tuple,
 							  TransactionId relfrozenxid, TransactionId relminmxid,
-<<<<<<< HEAD
-							  TransactionId cutoff_xid, TransactionId cutoff_multi);
+							  TransactionId FreezeLimit, TransactionId MultiXactCutoff);
 extern void heap_freeze_tuple_wal_logged(Relation rel, HeapTuple tuple);
 extern bool heap_tuple_needs_freeze(HeapTupleHeader tuple, TransactionId cutoff_xid,
 									MultiXactId cutoff_multi, Buffer buf);
-=======
-							  TransactionId FreezeLimit, TransactionId MultiXactCutoff);
 extern bool heap_tuple_should_freeze(HeapTupleHeader tuple,
 									 const struct VacuumCutoffs *cutoffs,
 									 TransactionId *NoFreezePageRelfrozenXid,
 									 MultiXactId *NoFreezePageRelminMxid);
->>>>>>> REL_16_9
 extern bool heap_tuple_needs_eventual_freeze(HeapTupleHeader tuple);
 
 extern void simple_heap_insert(Relation relation, HeapTuple tup);
@@ -329,7 +321,6 @@ extern void heap_vacuum_rel(Relation rel,
 							struct VacuumParams *params, BufferAccessStrategy bstrategy);
 
 /* in heap/heapam_visibility.c */
-<<<<<<< HEAD
 extern bool HeapTupleSatisfiesVisibility(Relation relation, HeapTuple stup, Snapshot snapshot,
 										 Buffer buffer);
 extern TM_Result HeapTupleSatisfiesUpdate(Relation relation, HeapTuple stup, CommandId curcid,
@@ -337,27 +328,15 @@ extern TM_Result HeapTupleSatisfiesUpdate(Relation relation, HeapTuple stup, Com
 extern HTSV_Result HeapTupleSatisfiesVacuum(Relation relation, HeapTuple stup, TransactionId OldestXmin,
 											Buffer buffer);
 extern HTSV_Result HeapTupleSatisfiesVacuumHorizon(Relation relation, HeapTuple stup, Buffer buffer,
-=======
-extern bool HeapTupleSatisfiesVisibility(HeapTuple htup, Snapshot snapshot,
-										 Buffer buffer);
-extern TM_Result HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
-										  Buffer buffer);
-extern HTSV_Result HeapTupleSatisfiesVacuum(HeapTuple htup, TransactionId OldestXmin,
-											Buffer buffer);
-extern HTSV_Result HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer,
->>>>>>> REL_16_9
 												   TransactionId *dead_after);
 extern void HeapTupleSetHintBits(HeapTupleHeader tuple, Buffer buffer, Relation rel,
 								 uint16 infomask, TransactionId xid);
 extern bool HeapTupleHeaderIsOnlyLocked(HeapTupleHeader tuple);
-<<<<<<< HEAD
 
 extern XidInMVCCSnapshotCheckResult XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot,
 													  bool distributedSnapshotIgnore,
 													  bool *setDistributedSnapshotIgnore);
 
-=======
->>>>>>> REL_16_9
 extern bool HeapTupleIsSurelyDead(HeapTuple htup,
 								  struct GlobalVisState *vistest);
 
