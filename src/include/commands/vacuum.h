@@ -192,7 +192,6 @@ typedef struct VacAttrStats
 	float4		corrval;	  /* correlation gathered from segments */
 } VacAttrStats;
 
-<<<<<<< HEAD
 typedef enum VacuumOption
 {
 	VACOPT_VACUUM = 1 << 0,		/* do VACUUM */
@@ -208,31 +207,19 @@ typedef enum VacuumOption
 	VACOPT_AO_AUX_ONLY = 1 << 8,
 	VACOPT_ROOTONLY = 1 << 10,
 	VACOPT_FULLSCAN = 1 << 11,
+	VACOPT_SKIP_DATABASE_STATS = 1 << 12,
+	VACOPT_ONLY_DATABASE_STATS = 1 << 13
 
 	/* AO vacuum phases. Mutually exclusive */
-	VACOPT_AO_PRE_CLEANUP_PHASE = 1 << 12,
-	VACOPT_AO_COMPACT_PHASE = 1 << 13,
-	VACOPT_AO_POST_CLEANUP_PHASE = 1 << 14,
-	VACOPT_UPDATE_DATFROZENXID = 1 << 15
+	VACOPT_AO_PRE_CLEANUP_PHASE = 1 << 14,
+	VACOPT_AO_COMPACT_PHASE = 1 << 15,
+	VACOPT_AO_POST_CLEANUP_PHASE = 1 << 16,
+	VACOPT_UPDATE_DATFROZENXID = 1 << 17
 } VacuumOption;
 
 #define VACUUM_AO_PHASE_MASK (VACOPT_AO_PRE_CLEANUP_PHASE | \
 							  VACOPT_AO_COMPACT_PHASE | \
 							  VACOPT_AO_POST_CLEANUP_PHASE)
-=======
-/* flag bits for VacuumParams->options */
-#define VACOPT_VACUUM 0x01		/* do VACUUM */
-#define VACOPT_ANALYZE 0x02		/* do ANALYZE */
-#define VACOPT_VERBOSE 0x04		/* output INFO instrumentation messages */
-#define VACOPT_FREEZE 0x08		/* FREEZE option */
-#define VACOPT_FULL 0x10		/* FULL (non-concurrent) vacuum */
-#define VACOPT_SKIP_LOCKED 0x20 /* skip if cannot get lock */
-#define VACOPT_PROCESS_MAIN 0x40	/* process main relation */
-#define VACOPT_PROCESS_TOAST 0x80	/* process the TOAST table, if any */
-#define VACOPT_DISABLE_PAGE_SKIPPING 0x100	/* don't skip any pages */
-#define VACOPT_SKIP_DATABASE_STATS 0x200	/* skip vac_update_datfrozenxid() */
-#define VACOPT_ONLY_DATABASE_STATS 0x400	/* only vac_update_datfrozenxid() */
->>>>>>> REL_16_9
 
 /*
  * Values used by index_cleanup and truncate params.
@@ -331,7 +318,6 @@ typedef struct VacuumParams
 	bool auto_stats;      /* invoked via automatic statistic collection */
 } VacuumParams;
 
-<<<<<<< HEAD
 typedef struct
 {
 	/* Table being sampled */
@@ -377,7 +363,7 @@ typedef struct
 	int			index;
 	int			totalAttr;
 } gp_acquire_correlation_context;
-=======
+
 /*
  * VacuumCutoffs is immutable state that describes the cutoffs used by VACUUM.
  * Established at the beginning of each VACUUM operation.
@@ -431,7 +417,6 @@ typedef struct VacDeadItems
 
 #define MAXDEADITEMS(avail_mem) \
 	(((avail_mem) - offsetof(VacDeadItems, items)) / sizeof(ItemPointerData))
->>>>>>> REL_16_9
 
 /* GUC parameters */
 extern PGDLLIMPORT int default_statistics_target;	/* PGDLLIMPORT for PostGIS */
@@ -474,7 +459,8 @@ extern void vac_update_relstats(Relation relation,
 								bool hasindex,
 								TransactionId frozenxid,
 								MultiXactId minmulti,
-<<<<<<< HEAD
+								bool *frozenxid_updated,
+								bool *minmulti_updated,
 								bool in_outer_xact,
 								bool isvacuum);
 extern void vacuum_set_xid_limits(Relation rel,
@@ -486,16 +472,9 @@ extern void vacuum_set_xid_limits(Relation rel,
 								  TransactionId *xidFullScanLimit,
 								  MultiXactId *multiXactCutoff,
 								  MultiXactId *mxactFullScanLimit);
-extern bool vacuum_xid_failsafe_check(TransactionId relfrozenxid,
-									  MultiXactId relminmxid);
-=======
-								bool *frozenxid_updated,
-								bool *minmulti_updated,
-								bool in_outer_xact);
 extern bool vacuum_get_cutoffs(Relation rel, const VacuumParams *params,
 							   struct VacuumCutoffs *cutoffs);
 extern bool vacuum_xid_failsafe_check(const struct VacuumCutoffs *cutoffs);
->>>>>>> REL_16_9
 extern void vac_update_datfrozenxid(void);
 extern void vacuum_delay_point(void);
 extern bool vacuum_is_relation_owner(Oid relid, Form_pg_class reltuple,

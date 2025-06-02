@@ -49,9 +49,6 @@ extern void HandleNotifyInterrupt(void);
 
 /* process interrupts */
 extern void ProcessNotifyInterrupt(bool flush);
-<<<<<<< HEAD
 extern void NotifyMyFrontEnd(const char *channel, const char *payload, int32 srcPid);
-=======
->>>>>>> REL_16_9
 
 #endif							/* ASYNC_H */

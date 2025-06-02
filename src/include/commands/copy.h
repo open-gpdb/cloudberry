@@ -140,7 +140,6 @@ typedef struct CopyFormatOptions
 typedef struct CopyFromStateData *CopyFromState;
 typedef struct CopyToStateData *CopyToState;
 
-<<<<<<< HEAD
 /* DestReceiver for COPY (query) TO */
 typedef struct
 {
@@ -151,21 +150,14 @@ typedef struct
 } DR_copy;
 
 typedef int (*copy_data_source_cb) (void *outbuf, int minread, int maxread, void *extra);
-=======
-typedef int (*copy_data_source_cb) (void *outbuf, int minread, int maxread);
 typedef void (*copy_data_dest_cb) (void *data, int len);
->>>>>>> REL_16_9
 
 extern void DoCopy(ParseState *pstate, const CopyStmt *stmt,
 				   int stmt_location, int stmt_len,
 				   uint64 *processed);
 
-<<<<<<< HEAD
-extern void ProcessCopyOptions(ParseState *pstate, CopyFormatOptions *ops_out, bool is_from, List *options, Oid rel_oid);
 extern void ProcessCopyDirectoryTableOptions(ParseState *pstate, CopyFormatOptions *ops_out, bool is_from, List *options, Oid rel_oid);
-=======
-extern void ProcessCopyOptions(ParseState *pstate, CopyFormatOptions *opts_out, bool is_from, List *options);
->>>>>>> REL_16_9
+extern void ProcessCopyOptions(ParseState *pstate, CopyFormatOptions *opts_out, bool is_from, List *options, Oid rel_oid);
 extern CopyFromState BeginCopyFrom(ParseState *pstate, Relation rel, Node *whereClause,
 								   const char *filename,
 								   bool is_program, copy_data_source_cb data_source_cb,
@@ -210,13 +202,8 @@ typedef struct GpDistributionData
  */
 extern CopyToState BeginCopyTo(ParseState *pstate, Relation rel, RawStmt *raw_query,
 							   Oid queryRelId, const char *filename, bool is_program,
-<<<<<<< HEAD
-							   List *attnamelist, List *options);
-extern void EndCopyTo(CopyToState cstate, uint64 *processed);
-=======
 							   copy_data_dest_cb data_dest_cb, List *attnamelist, List *options);
-extern void EndCopyTo(CopyToState cstate);
->>>>>>> REL_16_9
+extern void EndCopyTo(CopyToState cstate, uint64 *processed);
 extern uint64 DoCopyTo(CopyToState cstate);
 extern List *CopyGetAttnums(TupleDesc tupDesc, Relation rel,
 							List *attnamelist);

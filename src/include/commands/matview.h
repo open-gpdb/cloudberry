@@ -31,12 +31,8 @@ extern void SetDynamicTableState(Relation relation);
 extern ObjectAddress ExecRefreshMatView(RefreshMatViewStmt *stmt, const char *queryString,
 										ParamListInfo params, QueryCompletion *qc);
 
-<<<<<<< HEAD
 extern DestReceiver *CreateTransientRelDestReceiver(Oid oid, Oid oldreloid, bool concurrent,
 													char relpersistence, bool skipdata);
-=======
-extern DestReceiver *CreateTransientRelDestReceiver(Oid transientoid);
->>>>>>> REL_16_9
 
 extern bool MatViewIncrementalMaintenanceIsEnabled(void);
 

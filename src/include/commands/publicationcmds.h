@@ -16,16 +16,6 @@
 #define PUBLICATIONCMDS_H
 
 #include "catalog/objectaddress.h"
-<<<<<<< HEAD
-#include "nodes/parsenodes.h"
-#include "utils/inval.h"
-
-/* Same as MAXNUMMESSAGES in sinvaladt.c */
-#define MAX_RELCACHE_INVAL_MSGS 4096
-
-extern ObjectAddress CreatePublication(CreatePublicationStmt *stmt);
-extern void AlterPublication(AlterPublicationStmt *stmt);
-=======
 #include "parser/parse_node.h"
 #include "utils/inval.h"
 
@@ -34,22 +24,16 @@ extern void AlterPublication(AlterPublicationStmt *stmt);
 
 extern ObjectAddress CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt);
 extern void AlterPublication(ParseState *pstate, AlterPublicationStmt *stmt);
->>>>>>> REL_16_9
 extern void RemovePublicationById(Oid pubid);
 extern void RemovePublicationRelById(Oid proid);
 extern void RemovePublicationSchemaById(Oid psoid);
 
 extern ObjectAddress AlterPublicationOwner(const char *name, Oid newOwnerId);
-<<<<<<< HEAD
-extern void AlterPublicationOwner_oid(Oid pubid, Oid newOwnerId);
-extern void InvalidatePublicationRels(List *relids);
-=======
 extern void AlterPublicationOwner_oid(Oid subid, Oid newOwnerId);
 extern void InvalidatePublicationRels(List *relids);
 extern bool pub_rf_contains_invalid_column(Oid pubid, Relation relation,
 										   List *ancestors, bool pubviaroot);
 extern bool pub_collist_contains_invalid_column(Oid pubid, Relation relation,
 												List *ancestors, bool pubviaroot);
->>>>>>> REL_16_9
 
 #endif							/* PUBLICATIONCMDS_H */

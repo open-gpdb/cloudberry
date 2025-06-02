@@ -129,11 +129,7 @@ void		RegisterPendingDelete(struct PendingRelDelete *pending);
  */
 extern void smgrDoPendingDeletes(bool isCommit);
 extern void smgrDoPendingSyncs(bool isCommit, bool isParallelWorker);
-<<<<<<< HEAD
 extern int	smgrGetPendingDeletes(bool forCommit, RelFileNodePendingDelete **ptr);
-=======
-extern int	smgrGetPendingDeletes(bool forCommit, RelFileLocator **ptr);
->>>>>>> REL_16_9
 extern void AtSubCommit_smgr(void);
 extern void AtSubAbort_smgr(void);
 extern void PostPrepare_smgr(void);

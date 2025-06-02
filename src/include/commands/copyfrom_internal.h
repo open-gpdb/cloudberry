@@ -29,9 +29,6 @@ typedef enum CopySource
 } CopySource;
 
 /*
-<<<<<<< HEAD
- * Represents the heap insert method to be used during COPY FROM.
-=======
  *	Represents the end-of-line terminator type of the input
  */
 typedef enum EolType
@@ -44,7 +41,6 @@ typedef enum EolType
 
 /*
  * Represents the insert method to be used during COPY FROM.
->>>>>>> REL_16_9
  */
 typedef enum CopyInsertMethod
 {
