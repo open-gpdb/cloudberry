@@ -15,11 +15,8 @@
 
 #include <signal.h>
 
-<<<<<<< HEAD
 #define PG_SETMASK(mask)	sigprocmask(SIG_SETMASK, mask, NULL)
 
-=======
->>>>>>> REL_16_9
 #ifdef WIN32
 /* Emulate POSIX sigset_t APIs on Windows */
 typedef int sigset_t;

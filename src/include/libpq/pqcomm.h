@@ -24,11 +24,7 @@
 typedef struct
 {
 	struct sockaddr_storage addr;
-<<<<<<< HEAD
-	socklen_t salen;
-=======
 	socklen_t	salen;
->>>>>>> REL_16_9
 } SockAddr;
 
 typedef struct

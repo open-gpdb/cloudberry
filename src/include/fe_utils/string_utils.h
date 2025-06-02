@@ -24,13 +24,8 @@ extern PGDLLIMPORT int quote_all_identifiers;
 extern PQExpBuffer (*getLocalPQExpBuffer) (void);
 
 /* Functions */
-<<<<<<< HEAD
-extern const char *fmtId(const char *identifier);
-extern const char *fmtIdEnc(const char *identifier, int encoding);
-=======
 extern const char *fmtId(const char *rawid);
 extern const char *fmtIdEnc(const char *rawid, int encoding);
->>>>>>> REL_16_9
 extern const char *fmtQualifiedId(const char *schema, const char *id);
 extern const char *fmtQualifiedIdEnc(const char *schema, const char *id, int encoding);
 extern void setFmtEncoding(int encoding);
