@@ -4,13 +4,9 @@
  *	  definitions for query plan nodes
  *
  *
-<<<<<<< HEAD
  * Portions Copyright (c) 2005-2008, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
-=======
  * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
->>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/nodes/plannodes.h
@@ -440,13 +436,10 @@ typedef struct ModifyTable
 	Node	   *onConflictWhere;	/* WHERE for ON CONFLICT UPDATE */
 	Index		exclRelRTI;		/* RTI of the EXCLUDED pseudo relation */
 	List	   *exclRelTlist;	/* tlist of the EXCLUDED pseudo relation */
-<<<<<<< HEAD
 	/* CBDB_CHERRYPICK_FIXME: need enable it */
 	bool		forceTupleRouting; /* dynamic scans require tuple routing */
-=======
 	List	   *mergeActionLists;	/* per-target-table lists of actions for
 									 * MERGE */
->>>>>>> REL_16_9
 } ModifyTable;
 
 struct PartitionPruneInfo;		/* forward reference to struct below */
@@ -740,11 +733,8 @@ typedef struct IndexOnlyScan
 	Scan		scan;
 	Oid			indexid;		/* OID of index to scan */
 	List	   *indexqual;		/* list of index quals (usually OpExprs) */
-<<<<<<< HEAD
 	List	   *indexqualorig;	/* the same in original form (GPDB keeps it) */
-=======
 	List	   *recheckqual;	/* index quals in recheckable form */
->>>>>>> REL_16_9
 	List	   *indexorderby;	/* list of index ORDER BY exprs */
 	List	   *indextlist;		/* TargetEntry list describing index's cols */
 	ScanDirection indexorderdir;	/* forward or backward or don't care */
@@ -1262,13 +1252,6 @@ typedef struct MergeJoin
 	List	   *mergeclauses;
 
 	/* these are arrays, but have the same length as the mergeclauses list: */
-<<<<<<< HEAD
-	Oid		   *mergeFamilies;	/* per-clause OIDs of btree opfamilies */
-	Oid		   *mergeCollations;	/* per-clause OIDs of collations */
-	int		   *mergeStrategies;	/* per-clause ordering (ASC or DESC) */
-	bool	   *mergeNullsFirst;	/* per-clause nulls ordering */
-	bool		unique_outer; /*CDB-OLAP true => outer is unique in merge key */
-=======
 
 	/* per-clause OIDs of btree opfamilies */
 	Oid		   *mergeFamilies pg_node_attr(array_size(mergeclauses));
@@ -1281,7 +1264,7 @@ typedef struct MergeJoin
 
 	/* per-clause nulls ordering */
 	bool	   *mergeNullsFirst pg_node_attr(array_size(mergeclauses));
->>>>>>> REL_16_9
+	bool		unique_outer; /*CDB-OLAP true => outer is unique in merge key */
 } MergeJoin;
 
 /* ----------------
@@ -1373,21 +1356,6 @@ typedef struct Memoize
 	/* size of the two arrays below */
 	int			numKeys;
 
-<<<<<<< HEAD
-	Oid		   *hashOperators;	/* hash operators for each key */
-	Oid		   *collations;		/* collations for each key */
-	List	   *param_exprs;	/* cache keys in the form of exprs containing
-								 * parameters */
-	bool		singlerow;		/* true if the cache entry should be marked as
-								 * complete after we store the first tuple in
-								 * it. */
-	bool		binary_mode;	/* true when cache key should be compared bit
-								 * by bit, false when using hash equality ops */
-	uint32		est_entries;	/* The maximum number of entries that the
-								 * planner expects will fit in the cache, or 0
-								 * if unknown */
-	Bitmapset   *keyparamids;	/* paramids from param_exprs */
-=======
 	/* hash operators for each key */
 	Oid		   *hashOperators pg_node_attr(array_size(numKeys));
 
@@ -1417,7 +1385,6 @@ typedef struct Memoize
 
 	/* paramids from param_exprs */
 	Bitmapset  *keyparamids;
->>>>>>> REL_16_9
 } Memoize;
 
 /* ----------------
@@ -1519,23 +1486,18 @@ typedef struct Agg
 	Bitmapset  *aggParams;
 
 	/* Note: planner provides numGroups & aggParams only in HASHED/MIXED case */
-<<<<<<< HEAD
-	List	   *groupingSets;	/* grouping sets to use */
-	List	   *chain;			/* chained Agg/Sort nodes */
-
-	/* Stream entries when out of memory instead of spilling to disk */
-	bool		streaming;
-
-	/* if input tuple has an AggExprId, save the tlist index */
-	Index       agg_expr_id;
-=======
 
 	/* grouping sets to use */
 	List	   *groupingSets;
 
 	/* chained Agg/Sort nodes */
 	List	   *chain;
->>>>>>> REL_16_9
+
+	/* Stream entries when out of memory instead of spilling to disk */
+	bool		streaming;
+
+	/* if input tuple has an AggExprId, save the tlist index */
+	Index       agg_expr_id;
 } Agg;
 
 /* ---------------
@@ -1585,36 +1547,6 @@ typedef struct TupleSplit
 typedef struct WindowAgg
 {
 	Plan		plan;
-<<<<<<< HEAD
-	Index		winref;			/* ID referenced by window functions */
-	int			partNumCols;	/* number of columns in partition clause */
-	AttrNumber *partColIdx;		/* their indexes in the target list */
-	Oid		   *partOperators;	/* equality operators for partition columns */
-	Oid		   *partCollations; /* collations for partition columns */
-	int			ordNumCols;		/* number of columns in ordering clause */
-	AttrNumber *ordColIdx;		/* their indexes in the target list */
-	Oid		   *ordOperators;	/* equality operators for ordering columns */
-	Oid		   *ordCollations;	/* collations for ordering columns */
-
-	/*
-	 * GPDB: Information on the first ORDER BY column. This is different from
-	 * simply taking the first element of the ordColIdx/ordOperators fields,
-	 * because those arrays don't include any columns that are also present
-	 * in the PARTITION BY. For example, in "OVER (PARTITION BY foo ORDER BY
-	 * foo, bar)", ordColIdx/ordOperators would not include column 'foo'. But
-	 * for computing with RANGE BETWEEN values correctly, we need the first
-	 * actual ORDER BY column, even if it's redundant with the PARTITION BY.
-	 * firstOrder* has that information. Also, we need a sort operator, not
-	 * equality operator, here.
-	 */
-	AttrNumber	firstOrderCol;
-	Oid			firstOrderCmpOperator; /* ordering op */
-	bool		firstOrderNullsFirst;
-
-	int			frameOptions;	/* frame_clause options, see WindowDef */
-	Node	   *startOffset;	/* expression for starting bound, if any */
-	Node	   *endOffset;		/* expression for ending bound, if any */
-=======
 
 	/* ID referenced by window functions */
 	Index		winref;
@@ -1658,7 +1590,21 @@ typedef struct WindowAgg
 	/* runCondition for display in EXPLAIN */
 	List	   *runConditionOrig;
 
->>>>>>> REL_16_9
+	/*
+	 * GPDB: Information on the first ORDER BY column. This is different from
+	 * simply taking the first element of the ordColIdx/ordOperators fields,
+	 * because those arrays don't include any columns that are also present
+	 * in the PARTITION BY. For example, in "OVER (PARTITION BY foo ORDER BY
+	 * foo, bar)", ordColIdx/ordOperators would not include column 'foo'. But
+	 * for computing with RANGE BETWEEN values correctly, we need the first
+	 * actual ORDER BY column, even if it's redundant with the PARTITION BY.
+	 * firstOrder* has that information. Also, we need a sort operator, not
+	 * equality operator, here.
+	 */
+	AttrNumber	firstOrderCol;
+	Oid			firstOrderCmpOperator; /* ordering op */
+	bool		firstOrderNullsFirst;
+
 	/* these fields are used with RANGE offset PRECEDING/FOLLOWING: */
 
 	/* in_range function for startOffset */
@@ -1785,13 +1731,9 @@ typedef struct Hash
 	AttrNumber	skewColumn;		/* outer join key's column #, or zero */
 	bool		skewInherit;	/* is outer join rel an inheritance tree? */
 	/* all other info is in the parent HashJoin node */
-<<<<<<< HEAD
-	double		rows_total;		/* estimate total rows if parallel_aware */
+	Cardinality rows_total;		/* estimate total rows if parallel_aware */
 	bool		rescannable;            /* CDB: true => save rows for rescan */
 	bool		sync_barrier;
-=======
-	Cardinality rows_total;		/* estimate total rows if parallel_aware */
->>>>>>> REL_16_9
 } Hash;
 
 /* ----------------
@@ -2246,7 +2188,6 @@ typedef struct PlanInvalItem
 	uint32		hashValue;		/* hash value of object's cache lookup key */
 } PlanInvalItem;
 
-<<<<<<< HEAD
 /* ----------------
  * PartitionSelector node
  *
@@ -2266,7 +2207,7 @@ typedef struct PartitionSelector
 	int32		paramid;	/* result is stored here */
 
 } PartitionSelector;
-=======
+
 /*
  * MonotonicFunction
  *
@@ -2283,6 +2224,5 @@ typedef enum MonotonicFunction
 	MONOTONICFUNC_DECREASING = (1 << 1),
 	MONOTONICFUNC_BOTH = MONOTONICFUNC_INCREASING | MONOTONICFUNC_DECREASING
 } MonotonicFunction;
->>>>>>> REL_16_9
 
 #endif							/* PLANNODES_H */

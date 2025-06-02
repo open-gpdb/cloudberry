@@ -222,7 +222,6 @@ extern bool planstate_tree_walker_impl(struct PlanState *planstate,
 									   planstate_tree_walker_callback walker,
 									   void *context);
 
-<<<<<<< HEAD
 struct PlanState;
 extern bool planstate_tree_walker(struct PlanState *planstate, bool (*walker) (),
 								  void *context);
@@ -255,6 +254,4 @@ extern bool query_tree_walker_wrapper(Query *query,
 									  void *context,
 									  int flags);
 
-=======
->>>>>>> REL_16_9
 #endif							/* NODEFUNCS_H */

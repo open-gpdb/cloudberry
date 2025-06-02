@@ -7,13 +7,9 @@
  *	  and join trees.
  *
  *
-<<<<<<< HEAD
  * Portions Copyright (c) 2005-2009, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
-=======
  * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
->>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/nodes/primnodes.h
@@ -453,30 +449,6 @@ typedef struct Param
 typedef struct Aggref
 {
 	Expr		xpr;
-<<<<<<< HEAD
-	Oid			aggfnoid;		/* pg_proc Oid of the aggregate */
-	Oid			aggtype;		/* type Oid of result of the aggregate */
-	Oid			aggcollid;		/* OID of collation of result */
-	Oid			inputcollid;	/* OID of collation that function should use */
-	Oid			aggtranstype;	/* type Oid of aggregate's transition value */
-	List	   *aggargtypes;	/* type Oids of direct and aggregated args */
-	List	   *aggdirectargs;	/* direct arguments, if an ordered-set agg */
-	List	   *args;			/* aggregated arguments and sort expressions */
-	List	   *aggorder;		/* ORDER BY (list of SortGroupClause) */
-	List	   *aggdistinct;	/* DISTINCT (list of SortGroupClause) */
-	Expr	   *aggfilter;		/* FILTER expression, if any */
-	bool		aggstar;		/* true if argument list was really '*' */
-	bool		aggvariadic;	/* true if variadic arguments have been
-								 * combined into an array last argument */
-	char		aggkind;		/* aggregate kind (see pg_aggregate.h) */
-	Index		agglevelsup;	/* > 0 if agg belongs to outer query */
-	AggSplit	aggsplit;		/* expected agg-splitting mode of parent Agg */
-	int			aggno;			/* unique ID within the Agg node */
-	int			aggtransno;		/* unique ID of transition state in the Agg */
-	int			location;		/* token location, or -1 if unknown */
-
-	int         agg_expr_id;    /* gpdb private, if aggref is distinct qualified, record AggExprId value in tuple split */
-=======
 
 	/* pg_proc Oid of the aggregate */
 	Oid			aggfnoid;
@@ -543,7 +515,9 @@ typedef struct Aggref
 
 	/* token location, or -1 if unknown */
 	int			location;
->>>>>>> REL_16_9
+
+	int         agg_expr_id;    /* gpdb private, if aggref is distinct qualified, record AggExprId value in tuple split */
+
 } Aggref;
 
 typedef struct
@@ -681,31 +655,12 @@ typedef struct GroupingFunc
 /*
  * WindowFunc
  *
-<<<<<<< HEAD
- * In a query tree, a WindowFunc corresponds to a SQL window function
- * call.  In a plan tree, a WindowRef is an expression the corresponds
- * to some or all of the calculation of the window function result.
-=======
  * Collation information is irrelevant for the query jumbling, as is the
  * internal state information of the node like "winstar" and "winagg".
->>>>>>> REL_16_9
  */
 typedef struct WindowFunc
 {
 	Expr		xpr;
-<<<<<<< HEAD
-	Oid			winfnoid;		/* pg_proc Oid of the function */
-	Oid			wintype;		/* type Oid of result of the window function */
-	Oid			wincollid;		/* OID of collation of result */
-	Oid			inputcollid;	/* OID of collation that function should use */
-	List	   *args;			/* arguments to the window function */
-	Expr	   *aggfilter;		/* FILTER expression, if any */
-	Index		winref;			/* index of associated WindowClause */
-	bool		winstar;		/* true if argument list was really '*' */
-	bool		winagg;			/* is function a simple aggregate? */
-	bool		windistinct;	/* TRUE if it's agg(DISTINCT ...) */
-	int			location;		/* token location, or -1 if unknown */
-=======
 	/* pg_proc Oid of the function */
 	Oid			winfnoid;
 	/* type Oid of result of the window function */
@@ -726,7 +681,8 @@ typedef struct WindowFunc
 	bool		winagg pg_node_attr(query_jumble_ignore);
 	/* token location, or -1 if unknown */
 	int			location;
->>>>>>> REL_16_9
+
+	bool		windistinct;	/* TRUE if it's agg(DISTINCT ...) */
 } WindowFunc;
 
 /*
@@ -839,19 +795,6 @@ typedef enum CoercionForm
 typedef struct FuncExpr
 {
 	Expr		xpr;
-<<<<<<< HEAD
-	Oid			funcid;			/* PG_PROC OID of the function */
-	Oid			funcresulttype; /* PG_TYPE OID of result value */
-	bool		funcretset;		/* true if function returns set */
-	bool		funcvariadic;	/* true if variadic arguments have been
-								 * combined into an array last argument */
-	CoercionForm funcformat;	/* how to display this function call */
-	Oid			funccollid;		/* OID of collation of result */
-	Oid			inputcollid;	/* OID of collation that function should use */
-	List	   *args;			/* arguments to the function */
-	int			location;		/* token location, or -1 if unknown */
-	bool        is_tablefunc;   /* Is a TableFunction reference */
-=======
 	/* PG_PROC OID of the function */
 	Oid			funcid;
 	/* PG_TYPE OID of result value */
@@ -874,7 +817,8 @@ typedef struct FuncExpr
 	List	   *args;
 	/* token location, or -1 if unknown */
 	int			location;
->>>>>>> REL_16_9
+	bool        is_tablefunc;   /* Is a TableFunction reference */
+
 } FuncExpr;
 
 /*

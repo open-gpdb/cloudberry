@@ -6,13 +6,9 @@
  * We don't support copying RelOptInfo, IndexOptInfo, or Path nodes.
  * There are some subsidiary structs that are useful to copy, though.
  *
-<<<<<<< HEAD
  * Portions Copyright (c) 2005-2010, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
-=======
  * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
->>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/nodes/pathnodes.h
@@ -173,14 +169,10 @@ typedef struct PlannerGlobal
 	/* PlannerInfos for SubPlan nodes */
 	List	   *subroots pg_node_attr(read_write_ignore);
 
-<<<<<<< HEAD
 	int		   *subplan_sliceIds;	/* slice IDs for SubPlan nodes. */
 
-	Bitmapset  *rewindPlanIDs;	/* indices of subplans that require REWIND */
-=======
 	/* indices of subplans that require REWIND */
 	Bitmapset  *rewindPlanIDs;
->>>>>>> REL_16_9
 
 	/* "flat" rangetable for executor */
 	List	   *finalrtable;
@@ -212,16 +204,14 @@ typedef struct PlannerGlobal
 	/* highest PlanRowMark ID assigned */
 	Index		lastRowMarkId;
 
-<<<<<<< HEAD
 	bool		transientPlan;	/* redo plan when TransactionXmin changes? */
 	bool		oneoffPlan;		/* redo plan on every execution? */
 	Oid			simplyUpdatableRel; /* if valid, query can be used with CURRENT OF for this rel */
 
 	ApplyShareInputContext share;	/* workspace for GPDB plan sharing */
-=======
+
 	/* highest plan node ID assigned */
 	int			lastPlanNodeId;
->>>>>>> REL_16_9
 
 	/* redo plan when TransactionXmin changes? */
 	bool		transientPlan;
@@ -235,8 +225,11 @@ typedef struct PlannerGlobal
 	/* parallel mode actually required? */
 	bool		parallelModeNeeded;
 
-<<<<<<< HEAD
-	PartitionDirectory partition_directory; /* partition descriptors */
+	/* worst PROPARALLEL hazard level */
+	char		maxParallelHazard;
+
+	/* partition descriptors */
+	PartitionDirectory partition_directory pg_node_attr(read_write_ignore);
 
 	/* GPDB: flags to support COPY's IGNORE EXTERNAL PARTITIONS option. */
 	bool		skip_foreign_partitions;	/* don't expand foreign partitions */
@@ -249,14 +242,6 @@ typedef struct PlannerGlobal
 	 */
 	int			numSlices;
 	struct PlanSlice *slices;
-
-=======
-	/* worst PROPARALLEL hazard level */
-	char		maxParallelHazard;
-
-	/* partition descriptors */
-	PartitionDirectory partition_directory pg_node_attr(read_write_ignore);
->>>>>>> REL_16_9
 } PlannerGlobal;
 
 /* macro for fetching the Plan associated with a SubPlan node */
@@ -371,16 +356,11 @@ struct PlannerInfo
 	 * even when using the hash table for lookups; this simplifies life for
 	 * GEQO.
 	 */
-<<<<<<< HEAD
-	List	   *join_rel_list;	/* list of join-relation RelOptInfos */
-	struct HTAB *join_rel_hash; /* optional hashtable for join relations */
+	List	   *join_rel_list;
+	struct HTAB *join_rel_hash pg_node_attr(read_write_ignore);
 	bool		setup_agg_pushdown; /* true if agg push-down is set */
 	List	   *grouped_rel_info_list; /* list of RelAggInfo */
 	struct HTAB *grouped_rel_info_hash; /* optional hashtable for RelAggInfo */
-=======
-	List	   *join_rel_list;
-	struct HTAB *join_rel_hash pg_node_attr(read_write_ignore);
->>>>>>> REL_16_9
 
 	/*
 	 * When doing a dynamic-programming-style join search, join_rel_level[k]
@@ -400,16 +380,11 @@ struct PlannerInfo
 	/* init SubPlans for query */
 	List	   *init_plans;
 
-<<<<<<< HEAD
-	List	   *cte_plan_ids;	/* per-CTE-item list of subplan IDs (or -1 if
-								 * no subplan was made for that CTE) */
-=======
 	/*
 	 * per-CTE-item list of subplan IDs (or -1 if no subplan was made for that
 	 * CTE)
 	 */
 	List	   *cte_plan_ids;
->>>>>>> REL_16_9
 
 	/* List of Lists of Params for MULTIEXPR subquery outputs */
 	List	   *multiexpr_params;
@@ -417,19 +392,16 @@ struct PlannerInfo
 	/* list of JoinDomains used in the query (higher ones first) */
 	List	   *join_domains;
 
-<<<<<<< HEAD
 	List	   *non_eq_clauses;	/* list of non-equivalence clauses */
 
 	bool		ec_merging_done;	/* set true once ECs are canonical */
-=======
+
 	/* list of active EquivalenceClasses */
 	List	   *eq_classes;
->>>>>>> REL_16_9
 
 	/* set true once ECs are canonical */
 	bool		ec_merging_done;
 
-<<<<<<< HEAD
 	List       *list_cteplaninfo; /* list of CtePlannerInfo, one for each CTE */
 
 	/*
@@ -438,10 +410,9 @@ struct PlannerInfo
 	List	   *left_join_clauses;	/* list of RestrictInfos for mergejoinable
 									 * outer join clauses w/nonnullable var on
 									 * left */
-=======
+
 	/* list of "canonical" PathKeys */
 	List	   *canon_pathkeys;
->>>>>>> REL_16_9
 
 	/*
 	 * list of OuterJoinClauseInfos for mergejoinable outer join clauses
@@ -497,16 +468,14 @@ struct PlannerInfo
 	/* list of PlaceHolderInfos */
 	List	   *placeholder_list;
 
-<<<<<<< HEAD
 	List	   *grouped_var_list;	/* List of GroupedVarInfos. */
 
 	List	   *fkey_list;		/* list of ForeignKeyOptInfos */
-=======
+
 	/* array of PlaceHolderInfos indexed by phid */
 	struct PlaceHolderInfo **placeholder_array pg_node_attr(read_write_ignore, array_size(placeholder_array_size));
 	/* allocated size of array */
 	int			placeholder_array_size pg_node_attr(read_write_ignore);
->>>>>>> REL_16_9
 
 	/* list of ForeignKeyOptInfos */
 	List	   *fkey_list;
@@ -517,19 +486,18 @@ struct PlannerInfo
 	/* groupClause pathkeys, if any */
 	List	   *group_pathkeys;
 
-<<<<<<< HEAD
 	/* hint on where the result of the query will be needed. Null if not known */
 	CdbPathLocus final_locus;
 
 	List	   *initial_rels;	/* RelOptInfos we are now trying to join */
-=======
+
 	/*
 	 * The number of elements in the group_pathkeys list which belong to the
 	 * GROUP BY clause.  Additional ones belong to ORDER BY / DISTINCT
 	 * aggregates.
 	 */
 	int			num_groupby_pathkeys;
->>>>>>> REL_16_9
+
 
 	/* pathkeys of bottom window, if any */
 	List	   *window_pathkeys;
@@ -606,20 +574,14 @@ struct PlannerInfo
 	 */
 	List	   *update_colnos;
 
-<<<<<<< HEAD
-	/* Fields filled during create_plan() for use in setrefs.c */
-	AttrNumber *grouping_map;	/* for GroupingFunc fixup */
-	int			grouping_map_size;
-	List	   *minmax_aggs;	/* List of MinMaxAggInfos */
-=======
 	/*
 	 * Fields filled during create_plan() for use in setrefs.c
 	 */
 	/* for GroupingFunc fixup (can't print: array length not known here) */
 	AttrNumber *grouping_map pg_node_attr(read_write_ignore);
+	int			grouping_map_size;
 	/* List of MinMaxAggInfos */
 	List	   *minmax_aggs;
->>>>>>> REL_16_9
 
 	/* context holding PlannerInfo */
 	MemoryContext planner_cxt pg_node_attr(read_write_ignore);
@@ -675,10 +637,14 @@ struct PlannerInfo
 	/* a path for non-recursive term */
 	struct Path *non_recursive_path;
 
-<<<<<<< HEAD
-	/* These fields are workspace for createplan.c */
-	Relids		curOuterRels;	/* outer rels above current node */
-	List	   *curOuterParams; /* not-yet-assigned NestLoopParams */
+	/*
+	 * These fields are workspace for createplan.c
+	 */
+	/* outer rels above current node */
+	Relids		curOuterRels;
+	/* not-yet-assigned NestLoopParams */
+	List	   *curOuterParams;
+
 	int			numMotions;
 
 	PlanSlice  *curSlice;
@@ -696,18 +662,6 @@ struct PlannerInfo
 	 */
 	List	   *partition_selector_candidates;
 
-	/* These fields are workspace for setrefs.c */
-	bool	   *isAltSubplan;	/* array corresponding to glob->subplans */
-	bool	   *isUsedSubplan;	/* array corresponding to glob->subplans */
-=======
-	/*
-	 * These fields are workspace for createplan.c
-	 */
-	/* outer rels above current node */
-	Relids		curOuterRels;
-	/* not-yet-assigned NestLoopParams */
-	List	   *curOuterParams;
-
 	/*
 	 * These fields are workspace for setrefs.c.  Each is an array
 	 * corresponding to glob->subplans.  (We could probably teach
@@ -716,7 +670,6 @@ struct PlannerInfo
 	 */
 	bool	   *isAltSubplan pg_node_attr(read_write_ignore);
 	bool	   *isUsedSubplan pg_node_attr(read_write_ignore);
->>>>>>> REL_16_9
 
 	/* optional private data for join_search_hook, e.g., GEQO */
 	void	   *join_search_private pg_node_attr(read_write_ignore);
@@ -1151,26 +1104,6 @@ typedef struct RelOptInfo
 	 * information about a base rel (not set for join rels!)
 	 */
 	Index		relid;
-<<<<<<< HEAD
-	Oid			reltablespace;	/* containing tablespace */
-	RTEKind		rtekind;		/* RELATION, SUBQUERY, FUNCTION, etc */
-	AttrNumber	min_attr;		/* smallest attrno of rel (often <0) */
-	AttrNumber	max_attr;		/* largest attrno of rel */
-	Relids	   *attr_needed;	/* array indexed [min_attr .. max_attr] */
-	int32	   *attr_widths;	/* array indexed [min_attr .. max_attr] */
-	List	   *lateral_vars;	/* LATERAL Vars and PHVs referenced by rel */
-	Relids		lateral_referencers;	/* rels that reference me laterally */
-	List	   *indexlist;		/* list of IndexOptInfo */
-	List	   *statlist;		/* list of StatisticExtInfo */
-	BlockNumber pages;			/* size estimates derived from pg_class */
-	double		tuples;
-    struct GpPolicy   *cdbpolicy;      /* distribution of stored tuples */
-	Oid			amhandler;			/* from relcache entry */
-	double		allvisfrac;
-	Bitmapset  *eclass_indexes; /* Indexes in PlannerInfo's eq_classes list of
-								 * ECs that mention this rel */
-	PlannerInfo *subroot;		/* if subquery (in GPDB: or CTE) */
-=======
 	/* containing tablespace */
 	Oid			reltablespace;
 	/* RELATION, SUBQUERY, FUNCTION, etc */
@@ -1196,36 +1129,30 @@ typedef struct RelOptInfo
 	/* size estimates derived from pg_class */
 	BlockNumber pages;
 	Cardinality tuples;
+	struct GpPolicy   *cdbpolicy;      /* distribution of stored tuples */
+	Oid			amhandler;			/* from relcache entry */
 	double		allvisfrac;
 	/* indexes in PlannerInfo's eq_classes list of ECs that mention this rel */
 	Bitmapset  *eclass_indexes;
 	PlannerInfo *subroot;		/* if subquery */
->>>>>>> REL_16_9
 	List	   *subplan_params; /* if subquery */
 	/* wanted number of parallel workers */
 	int			rel_parallel_workers;
 	/* Bitmask of optional features supported by the table AM */
 	uint32		amflags;
 
-<<<<<<< HEAD
-	/* Information about foreign tables and foreign joins */
-	Oid			serverid;		/* identifies server for the table or join */
-	List	   *segSeverids;	/* server segments for mpp fdw */
-	Oid			userid;			/* identifies user to check access as */
-	bool		useridiscurrent;	/* join is only valid for current user */
-	char		exec_location;  /* execute on MASTER, ANY or ALL SEGMENTS, Cloudberry MPP specific */
-	int32		num_segments;  /* number of segments, Cloudberry MPP specific */
-=======
 	/*
 	 * Information about foreign tables and foreign joins
 	 */
 	/* identifies server for the table or join */
 	Oid			serverid;
+	List	   *segSeverids;	/* server segments for mpp fdw */
 	/* identifies user to check access as; 0 means to check as current user */
 	Oid			userid;
 	/* join is only valid for current user */
 	bool		useridiscurrent;
->>>>>>> REL_16_9
+	char		exec_location;  /* execute on MASTER, ANY or ALL SEGMENTS, Cloudberry MPP specific */
+	int32		num_segments;  /* number of segments, Cloudberry MPP specific */
 	/* use "struct FdwRoutine" to avoid including fdwapi.h here */
 	struct FdwRoutine *fdwroutine pg_node_attr(read_write_ignore);
 	void	   *fdw_private pg_node_attr(read_write_ignore);
@@ -1258,31 +1185,6 @@ typedef struct RelOptInfo
 	/* consider partitionwise join paths? (if partitioned rel) */
 	bool		consider_partitionwise_join;
 
-<<<<<<< HEAD
-	/* used for partitioned relations: */
-	PartitionScheme part_scheme;	/* Partitioning scheme */
-	int			nparts;			/* Number of partitions; -1 if not yet set; in
-								 * case of a join relation 0 means it's
-								 * considered unpartitioned */
-	struct PartitionBoundInfoData *boundinfo;	/* Partition bounds */
-	bool		partbounds_merged;	/* True if partition bounds were created
-									 * by partition_bounds_merge() */
-	List	   *partition_qual; /* Partition constraint, if not the root */
-	struct RelOptInfo **part_rels;	/* Array of RelOptInfos of partitions,
-									 * stored in the same order as bounds */
-	Relids		all_partrels;	/* Relids set of all partition relids */
-	List	  **partexprs;		/* Non-nullable partition key expressions */
-	List	  **nullable_partexprs; /* Nullable partition key expressions */
-
-	/*
-	 * In a subquery, if this base relation contains quals that must
-	 * be evaluated at "outerquery" locus, and the base relation has a
-	 * different locus, they are kept here in 'upperrestrictinfo', instead of
-	 * 'baserestrictinfo'.
-	 */
-	List	   *upperrestrictinfo;		/* RestrictInfo structures (if base
-										 * rel) */
-=======
 	/*
 	 * inheritance links, if this is an otherrel (otherwise NULL):
 	 */
@@ -1334,7 +1236,15 @@ typedef struct RelOptInfo
 	List	  **partexprs pg_node_attr(read_write_ignore);
 	/* Nullable partition key expressions */
 	List	  **nullable_partexprs pg_node_attr(read_write_ignore);
->>>>>>> REL_16_9
+
+	/*
+	 * In a subquery, if this base relation contains quals that must
+	 * be evaluated at "outerquery" locus, and the base relation has a
+	 * different locus, they are kept here in 'upperrestrictinfo', instead of
+	 * 'baserestrictinfo'.
+	 */
+	List	   *upperrestrictinfo;		/* RestrictInfo structures (if base
+										 * rel) */
 } RelOptInfo;
 
 /*
@@ -1930,12 +1840,6 @@ typedef struct PathTarget
  * Note: ppi_clauses is only used in ParamPathInfos for base relation paths;
  * in join cases it's NIL because the set of relevant clauses varies depending
  * on how the join is formed.  The relevant clauses will appear in each
-<<<<<<< HEAD
- * parameterized join path's joinrestrictinfo list, instead.
- *
- * GPDB: Like the rowcount in RelOptInfo, 'ppi_rows' is the total across all
- * segments.
-=======
  * parameterized join path's joinrestrictinfo list, instead.  ParamPathInfos
  * for append relations don't bother with this, either.
  *
@@ -1943,7 +1847,6 @@ typedef struct PathTarget
  * by this path.  As with ppi_clauses, it's only maintained for baserels.
  * (We could construct it on-the-fly from ppi_clauses, but it seems better
  * to materialize a copy.)
->>>>>>> REL_16_9
  */
 typedef struct ParamPathInfo
 {
@@ -1987,18 +1890,15 @@ typedef struct ParamPathInfo
  * "pathkeys" is a List of PathKey nodes (see above), describing the sort
  * ordering of the path's output rows.
  *
-<<<<<<< HEAD
  * GPDB: The 'rows' estimate, as well as al the costs, are *per node* values.
  * That's similar to upstream parallel Paths, which also hold estimates
  * per worker. But note that the 'rows', 'tuples', 'pages' in RelOptInfo
  * are for the whole relation, across all segmnents! So you cannot generally
  * assign RelOptInfo->rows to Path->rows, you will need to adjust it for
  * the number of segments used to execute the Path..
-=======
  * We do not support copying Path trees, mainly because the circular linkages
  * between RelOptInfo and Path nodes can't be handled easily in a simple
  * depth-first traversal.  We also don't have read support at the moment.
->>>>>>> REL_16_9
  */
 typedef struct Path
 {
@@ -2045,7 +1945,6 @@ typedef struct Path
 	Cost		startup_cost;	/* cost expended before fetching any tuples */
 	Cost		total_cost;		/* total cost (assuming all tuples fetched) */
 
-<<<<<<< HEAD
 	EstimatedBytes  memory;     /* executor RAM needed for Path + kids */
 
 	CdbPathLocus    locus;      /* distribution of the result tuples */
@@ -2057,8 +1956,8 @@ typedef struct Path
 								   which should be executed in non or all workers. */
 	bool		rescannable;    /* CDB: true => path can accept ExecRescan call
                                  */
-	List	   *pathkeys;		/* sort ordering of path's output */
-	/* pathkeys is a List of PathKey nodes; see above */
+	/* sort ordering of path's output; a List of PathKey nodes; see above */
+	List	   *pathkeys;
 
 	/*
 	 * sameslice_relids indicates which (base) relations will be executed in
@@ -2072,10 +1971,6 @@ typedef struct Path
 	 * optimizations.
 	 */
 	Relids		sameslice_relids;
-=======
-	/* sort ordering of path's output; a List of PathKey nodes; see above */
-	List	   *pathkeys;
->>>>>>> REL_16_9
 } Path;
 
 /* 
@@ -2289,7 +2184,6 @@ typedef struct TidPath
 } TidPath;
 
 /*
-<<<<<<< HEAD
  * CdbMotionPath represents transmission of the child Path results
  * from a set of sending processes to a set of receiving processes.
  *
@@ -2308,10 +2202,7 @@ typedef struct CdbMotionPath
 } CdbMotionPath;
 
 /*
- * TidRangePath represents a scan by a continguous range of TIDs
-=======
  * TidRangePath represents a scan by a contiguous range of TIDs
->>>>>>> REL_16_9
  *
  * tidrangequals is an implicitly AND'ed list of qual expressions of the form
  * "CTID relop pseudoconstant", where relop is one of >,>=,<,<=.
@@ -2500,11 +2391,7 @@ typedef struct MemoizePath
 								 * complete after caching the first record. */
 	bool		binary_mode;	/* true when cache key should be compared bit
 								 * by bit, false when using hash equality ops */
-<<<<<<< HEAD
-	double		calls;			/* expected number of rescans */
-=======
 	Cardinality calls;			/* expected number of rescans */
->>>>>>> REL_16_9
 	uint32		est_entries;	/* The maximum number of entries that the
 								 * planner expects will fit in the cache, or 0
 								 * if unknown */
@@ -2667,12 +2554,8 @@ typedef struct HashPath
 	JoinPath	jpath;
 	List	   *path_hashclauses;	/* join clauses used for hashing */
 	int			num_batches;	/* number of batches expected */
-<<<<<<< HEAD
-	double		inner_rows_total;	/* total inner rows expected */
-	bool		batch0_barrier;
-=======
 	Cardinality inner_rows_total;	/* total inner rows expected */
->>>>>>> REL_16_9
+	bool		batch0_barrier;
 } HashPath;
 
 /*
@@ -2922,7 +2805,6 @@ typedef struct LockRowsPath
 } LockRowsPath;
 
 /*
-<<<<<<< HEAD
  * SplitUpdatePath
  */
 typedef struct SplitUpdatePath
@@ -2933,10 +2815,7 @@ typedef struct SplitUpdatePath
 } SplitUpdatePath;
 
 /*
- * ModifyTablePath represents performing INSERT/UPDATE/DELETE modifications
-=======
  * ModifyTablePath represents performing INSERT/UPDATE/DELETE/MERGE
->>>>>>> REL_16_9
  *
  * We represent most things that will be in the ModifyTable plan node
  * literally, except we have a child Path not Plan.  But analysis of the
@@ -3156,22 +3035,17 @@ typedef struct RestrictInfo
 	/* see comment above */
 	Index		security_level;
 
-<<<<<<< HEAD
 	/*
 	 * GPDB: does the clause refer to outer query levels? (Which implies that
 	 * it must be evaluted in the same slice as the parent query)
 	 */
 	bool		contain_outer_query_references;
 
-	/* The set of relids (varnos) actually referenced in the clause: */
-	Relids		clause_relids;
-=======
 	/* number of base rels in clause_relids */
 	int			num_base_rels pg_node_attr(equal_ignore);
 
 	/* The relids (varnos+varnullingrels) actually referenced in the clause: */
 	Relids		clause_relids pg_node_attr(equal_ignore);
->>>>>>> REL_16_9
 
 	/* The set of relids required to evaluate the clause: */
 	Relids		required_relids;
@@ -3251,10 +3125,9 @@ typedef struct RestrictInfo
 	/* EquivalenceMember for righthand */
 	EquivalenceMember *right_em pg_node_attr(copy_as_scalar, equal_ignore);
 
-<<<<<<< HEAD
 	/* hash equality operator used for memoize nodes, else InvalidOid */
 	Oid			hasheqoperator;
-=======
+
 	/*
 	 * List of MergeScanSelCache structs.  Those aren't Nodes, so hard to
 	 * copy; instead replace with NIL.  That has the effect that copying will
@@ -3289,7 +3162,6 @@ typedef struct RestrictInfo
 	/* hash equality operators used for memoize nodes, else InvalidOid */
 	Oid			left_hasheqoperator pg_node_attr(equal_ignore);
 	Oid			right_hasheqoperator pg_node_attr(equal_ignore);
->>>>>>> REL_16_9
 } RestrictInfo;
 
 /*

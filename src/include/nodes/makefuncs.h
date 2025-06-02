@@ -108,9 +108,7 @@ extern GroupingSet *makeGroupingSet(GroupingSetKind kind, List *content, int loc
 
 extern VacuumRelation *makeVacuumRelation(RangeVar *relation, Oid oid, List *va_cols);
 
-<<<<<<< HEAD
 extern ReindexIndexInfo *makeReindexIndexInfo(Oid indexId, Oid tableId, Oid amId, bool safe);
-=======
 extern JsonFormat *makeJsonFormat(JsonFormatType type, JsonEncoding encoding,
 								  int location);
 extern JsonValueExpr *makeJsonValueExpr(Expr *raw_expr, Expr *formatted_expr,
@@ -120,6 +118,5 @@ extern Node *makeJsonIsPredicate(Node *expr, JsonFormat *format,
 								 JsonValueType item_type, bool unique_keys,
 								 int location);
 extern JsonEncoding makeJsonEncoding(char *name);
->>>>>>> REL_16_9
 
 #endif							/* MAKEFUNC_H */

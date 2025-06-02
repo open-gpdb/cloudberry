@@ -10,11 +10,6 @@
  * their state needs to be shared with other parts of the executor, as
  * for example with SubPlanState, which nodeSubplan.c has to modify.
  *
-<<<<<<< HEAD
- * Portions Copyright (c) 2005-2009, Greenplum inc
- * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
-=======
  * Node types declared in this file do not have any copy/equal/out/read
  * support.  (That is currently hard-wired in gen_node_support.pl, rather
  * than being explicitly represented by pg_node_attr decorations here.)
@@ -23,9 +18,8 @@
  * specialized fields that would require custom code, so for now it's
  * not provided.
  *
- *
+ * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
  * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
->>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/nodes/execnodes.h
@@ -743,7 +737,6 @@ typedef struct EState
 	struct JitContext *es_jit;
 	struct JitInstrumentation *es_jit_worker_instr;
 
-<<<<<<< HEAD
 	/* Additions for MPP plan slicing. */
 	struct SliceTable *es_sliceTable;
 
@@ -797,14 +790,12 @@ typedef struct EState
 	/* partition oid that is being scanned, used by DynamicBitmapHeapScan/IndexScan */
 	int			partitionOid;
 
-=======
 	/*
 	 * Lists of ResultRelInfos for foreign tables on which batch-inserts are
 	 * to be executed and owning ModifyTableStates, stored in the same order.
 	 */
 	List	   *es_insert_pending_result_relations;
 	List	   *es_insert_pending_modifytables;
->>>>>>> REL_16_9
 } EState;
 
 struct PlanState;
@@ -1453,13 +1444,12 @@ typedef struct ModifyTableState
 	/* controls transition table population for INSERT...ON CONFLICT UPDATE */
 	struct TransitionCaptureState *mt_oc_transition_capture;
 
-<<<<<<< HEAD
 	/* Record modified leaf relation(s) */
 	bool		has_leaf_changed;
 	Bitmapset	*mt_leaf_relids_inserted;
 	Bitmapset	*mt_leaf_relids_updated;
 	Bitmapset	*mt_leaf_relids_deleted;
-=======
+
 	/* Flags showing which subcommands are present INS/UPD/DEL/DO NOTHING */
 	int			mt_merge_subcommands;
 
@@ -1467,7 +1457,6 @@ typedef struct ModifyTableState
 	double		mt_merge_inserted;
 	double		mt_merge_updated;
 	double		mt_merge_deleted;
->>>>>>> REL_16_9
 } ModifyTableState;
 
 /* ----------------
@@ -2673,13 +2662,8 @@ typedef struct MemoizeState
 								 * by bit, false when using hash equality ops */
 	MemoizeInstrumentation stats;	/* execution statistics */
 	SharedMemoizeInfo *shared_info; /* statistics for parallel workers */
-<<<<<<< HEAD
-	Bitmapset	   *keyparamids; /* Param->paramids of expressions belonging to
-								  * param_exprs */
-=======
 	Bitmapset  *keyparamids;	/* Param->paramids of expressions belonging to
 								 * param_exprs */
->>>>>>> REL_16_9
 } MemoizeState;
 
 /* ----------------

@@ -12,13 +12,9 @@
  * identifying statement boundaries in multi-statement source strings.
  *
  *
-<<<<<<< HEAD
  * Portions Copyright (c) 2006-2009, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
-=======
  * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
->>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/nodes/parsenodes.h
@@ -182,22 +178,6 @@ typedef struct Query
 	 */
 	int			resultRelation pg_node_attr(query_jumble_ignore);
 
-<<<<<<< HEAD
-	bool		hasAggs;		/* has aggregates in tlist or havingQual */
-	bool		hasWindowFuncs; /* has window functions in tlist */
-	bool		hasTargetSRFs;	/* has set-returning functions in tlist */
-	bool		hasSubLinks;	/* has subquery SubLink */
-	bool        hasDynamicFunctions; /* has functions with unstable return types */
-	bool		hasFuncsWithExecRestrictions; /* has functions with EXECUTE ON MASTER or ALL SEGMENTS */
-	bool		hasDistinctOn;	/* distinctClause is from DISTINCT ON */
-	bool		hasRecursive;	/* WITH RECURSIVE was specified */
-	bool		hasModifyingCTE;	/* has INSERT/UPDATE/DELETE in WITH */
-	bool		hasForUpdate;	/* FOR [KEY] UPDATE/SHARE was specified */
-	bool		hasRowSecurity; /* rewriter has applied some RLS policy */
-	bool        canOptSelectLockingClause; /* Whether can do some optimization on select with locking clause */
-
-	bool		isReturn;		/* is a RETURN statement */
-=======
 	/* has aggregates in tlist or havingQual */
 	bool		hasAggs pg_node_attr(query_jumble_ignore);
 	/* has window functions in tlist */
@@ -218,7 +198,11 @@ typedef struct Query
 	bool		hasRowSecurity pg_node_attr(query_jumble_ignore);
 	/* is a RETURN statement */
 	bool		isReturn pg_node_attr(query_jumble_ignore);
->>>>>>> REL_16_9
+
+	bool        hasDynamicFunctions; /* has functions with unstable return types */
+	bool		hasFuncsWithExecRestrictions; /* has functions with EXECUTE ON MASTER or ALL SEGMENTS */
+	bool        canOptSelectLockingClause; /* Whether can do some optimization on select with locking clause */
+
 
 	List	   *cteList;		/* WITH list (of CommonTableExpr's) */
 
@@ -269,17 +253,12 @@ typedef struct Query
 
 	Node	   *setOperations;	/* set-operation tree if this is top level of
 								 * a UNION/INTERSECT/EXCEPT query */
-<<<<<<< HEAD
-	List	   *constraintDeps; /* a list of pg_constraint OIDs that the query
-								 * depends on to be semantically valid */
-=======
 
 	/*
 	 * A list of pg_constraint OIDs that the query depends on to be
 	 * semantically valid
 	 */
 	List	   *constraintDeps pg_node_attr(query_jumble_ignore);
->>>>>>> REL_16_9
 
 	/* a list of WithCheckOption's (added during rewrite) */
 	List	   *withCheckOptions pg_node_attr(query_jumble_ignore);
@@ -302,16 +281,11 @@ typedef struct Query
 	 * Queries, not in sub-queries.  When not set, they might both be zero, or
 	 * both be -1 meaning "unknown".
 	 */
-<<<<<<< HEAD
-	int			stmt_location;	/* start location, or -1 if unknown */
-	int			stmt_len;		/* length in bytes; 0 means "rest of string" */
-=======
+
 	/* start location, or -1 if unknown */
 	int			stmt_location;
 	/* length in bytes; 0 means "rest of string" */
 	int			stmt_len pg_node_attr(query_jumble_ignore);
-} Query;
->>>>>>> REL_16_9
 
 	bool		expandMatViews; /* force expansion of materialized views during rewrite to treat as views */
 } Query;
@@ -1115,7 +1089,6 @@ typedef struct PartitionCmd
  *	  q.v.); the parser now uses a separate "namespace" data structure to
  *	  control visibility.  But it is needed by ruleutils.c to determine
  *	  whether RTEs should be shown in decompiled queries.
-<<<<<<< HEAD
  *
  *	  requiredPerms and checkAsUser specify run-time access permissions
  *	  checks to be performed at query startup.  The user must have *all*
@@ -1147,8 +1120,6 @@ typedef struct PartitionCmd
  *	  an extraInsertedCols, but it could exist.)  Note that extraUpdatedCols
  *	  is populated during query rewrite, NOT in the parser, since generated
  *	  columns could be added after a rule has been parsed and stored.
-=======
->>>>>>> REL_16_9
  *
  *	  securityQuals is a list of security barrier quals (boolean expressions),
  *	  to be tested in the listed order before returning a row from the
@@ -1225,12 +1196,9 @@ typedef struct RangeTblEntry
 	char		relkind;		/* relation kind (see pg_class.relkind) */
 	int			rellockmode;	/* lock level that query requires on the rel */
 	struct TableSampleClause *tablesample;	/* sampling info, or NULL */
-<<<<<<< HEAD
 	bool		relisivm;		/* ivm relation or not */
-=======
 	Index		perminfoindex;
 
->>>>>>> REL_16_9
 	/*
 	 * Fields valid for a subquery RTE (else NULL):
 	 */
@@ -1443,15 +1411,7 @@ typedef struct RangeTblFunction
 	Node	   *funcexpr;		/* expression tree for func call */
 	/* number of columns it contributes to RTE */
 	int			funccolcount pg_node_attr(query_jumble_ignore);
-	/* These fields record the contents of a column definition list, if any: */
-<<<<<<< HEAD
-	List	   *funccolnames;	/* column names (list of String) */
-	List	   *funccoltypes;	/* OID list of column type OIDs */
-	List	   *funccoltypmods; /* integer list of column typmods */
-	List	   *funccolcollations;	/* OID list of column collation OIDs */
 
-	bytea	   *funcuserdata;	/* describe function user data. assume bytea */
-=======
 	/* column names (list of String) */
 	List	   *funccolnames pg_node_attr(query_jumble_ignore);
 	/* OID list of column type OIDs */
@@ -1460,7 +1420,7 @@ typedef struct RangeTblFunction
 	List	   *funccoltypmods pg_node_attr(query_jumble_ignore);
 	/* OID list of column collation OIDs */
 	List	   *funccolcollations pg_node_attr(query_jumble_ignore);
->>>>>>> REL_16_9
+	bytea	   *funcuserdata;	/* describe function user data. assume bytea */
 
 	/* This is set during planning for use by the executor: */
 	/* PARAM_EXEC Param IDs affecting this func */
@@ -2556,7 +2516,7 @@ typedef struct AlterTableCmd	/* one subcommand of an ALTER TABLE */
 	Node	   *transform;		/* transformation expr for ALTER TYPE */
 	DropBehavior behavior;		/* RESTRICT or CASCADE for DROP cases */
 	bool		missing_ok;		/* skip error if missing? */
-<<<<<<< HEAD
+	bool		recurse;		/* exec-time recursion */
 
 	/*
 	 * Extra information dispatched from QD to QEs in AT_SetDistributedBy and
@@ -2571,10 +2531,6 @@ typedef struct AlterTableCmd	/* one subcommand of an ALTER TABLE */
 	
 	List	   *tags;			/* List of tags, DefElem or String nodes */
 	bool		unsettag;		/* Whether unset tag */
-
-=======
-	bool		recurse;		/* exec-time recursion */
->>>>>>> REL_16_9
 } AlterTableCmd;
 
 typedef enum GpAlterPartitionIdType
@@ -4793,8 +4749,6 @@ typedef struct AlterTSConfigurationStmt
 	bool		missing_ok;		/* for DROP - skip error if missing? */
 } AlterTSConfigurationStmt;
 
-<<<<<<< HEAD
-=======
 typedef struct PublicationTable
 {
 	NodeTag		type;
@@ -4824,7 +4778,6 @@ typedef struct PublicationObjSpec
 	int			location;		/* token location, or -1 if unknown */
 } PublicationObjSpec;
 
->>>>>>> REL_16_9
 typedef struct CreatePublicationStmt
 {
 	NodeTag		type;
