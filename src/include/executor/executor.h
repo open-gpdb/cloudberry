@@ -4,13 +4,9 @@
  *	  support for the POSTGRES executor module
  *
  *
-<<<<<<< HEAD
  * Portions Copyright (c) 2005-2009, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
-=======
  * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
->>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/executor/executor.h
@@ -45,10 +41,8 @@ struct ChunkTransportState;             /* #include "cdb/cdbinterconnect.h" */
  * of startup should occur.  However, error checks (such as permission checks)
  * should be performed.
  *
-<<<<<<< HEAD
  * REWIND indicates that the plan node should expect to be rescanned. This
  * implies delaying freeing up resources when EagerFree is called. XXX
-=======
  * EXPLAIN_GENERIC can only be used together with EXPLAIN_ONLY.  It indicates
  * that a generic plan is being shown using EXPLAIN (GENERIC_PLAN), which
  * means that missing parameter values must be tolerated.  Currently, the only
@@ -59,7 +53,6 @@ struct ChunkTransportState;             /* #include "cdb/cdbinterconnect.h" */
  * in any case, but if this flag was not given, they are at liberty to do it
  * through complete recalculation.  Note that a parameter change forces a
  * full recalculation in any case.)
->>>>>>> REL_16_9
  *
  * BACKWARD indicates that the plan node must respect the es_direction flag.
  * When this is not passed, the plan node will only be run forwards.
@@ -76,14 +69,6 @@ struct ChunkTransportState;             /* #include "cdb/cdbinterconnect.h" */
  * ... WITH NO DATA.  Currently, the only effect is to suppress errors about
  * scanning unpopulated materialized views.
  */
-<<<<<<< HEAD
-#define EXEC_FLAG_EXPLAIN_ONLY	0x0001	/* EXPLAIN, no ANALYZE */
-#define EXEC_FLAG_REWIND		0x0002	/* expect rescan */
-#define EXEC_FLAG_BACKWARD		0x0004	/* need backward scan */
-#define EXEC_FLAG_MARK			0x0008	/* need mark/restore */
-#define EXEC_FLAG_SKIP_TRIGGERS 0x0010	/* skip AfterTrigger calls */
-#define EXEC_FLAG_WITH_NO_DATA	0x0020	/* rel scannability doesn't matter */
-=======
 #define EXEC_FLAG_EXPLAIN_ONLY		0x0001	/* EXPLAIN, no ANALYZE */
 #define EXEC_FLAG_EXPLAIN_GENERIC	0x0002	/* EXPLAIN (GENERIC_PLAN) */
 #define EXEC_FLAG_REWIND			0x0004	/* need efficient rescan */
@@ -91,7 +76,6 @@ struct ChunkTransportState;             /* #include "cdb/cdbinterconnect.h" */
 #define EXEC_FLAG_MARK				0x0010	/* need mark/restore */
 #define EXEC_FLAG_SKIP_TRIGGERS		0x0020	/* skip AfterTrigger setup */
 #define EXEC_FLAG_WITH_NO_DATA		0x0040	/* REFRESH ... WITH NO DATA */
->>>>>>> REL_16_9
 
 #define RelinfoGetStorage(relinfo) ((relinfo)->ri_RelationDesc->rd_rel->relstorage)
 
@@ -251,14 +235,10 @@ extern void standard_ExecutorFinish(QueryDesc *queryDesc);
 extern void ExecutorEnd(QueryDesc *queryDesc);
 extern void standard_ExecutorEnd(QueryDesc *queryDesc);
 extern void ExecutorRewind(QueryDesc *queryDesc);
-<<<<<<< HEAD
 extern bool ExecCheckRTPerms(List *rangeTable, bool ereport_on_violation);
 extern void CheckValidResultRel(ResultRelInfo *resultRelInfo, CmdType operation, ModifyTableState *mtstate);
-=======
 extern bool ExecCheckPermissions(List *rangeTable,
 								 List *rteperminfos, bool ereport_on_violation);
-extern void CheckValidResultRel(ResultRelInfo *resultRelInfo, CmdType operation);
->>>>>>> REL_16_9
 extern void InitResultRelInfo(ResultRelInfo *resultRelInfo,
 							  Relation resultRelationDesc,
 							  Index resultRelationIndex,

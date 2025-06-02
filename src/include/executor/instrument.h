@@ -4,13 +4,9 @@
  *	  definitions for run-time statistics collection
  *
  *
-<<<<<<< HEAD
  * Portions Copyright (c) 2006-2009, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
- * Copyright (c) 2001-2021, PostgreSQL Global Development Group
-=======
  * Copyright (c) 2001-2023, PostgreSQL Global Development Group
->>>>>>> REL_16_9
  *
  * src/include/executor/instrument.h
  *

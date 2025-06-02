@@ -121,7 +121,6 @@ typedef struct PartitionPruneState
 	PartitionPruningData *partprunedata[FLEXIBLE_ARRAY_MEMBER];
 } PartitionPruneState;
 
-<<<<<<< HEAD
 extern PartitionTupleRouting *ExecSetupPartitionTupleRouting(EState *estate,
 															 Relation rel);
 extern ResultRelInfo *ExecFindPartition(ModifyTableState *mtstate,
@@ -134,6 +133,7 @@ extern void ExecCleanupTupleRouting(ModifyTableState *mtstate,
 extern PartitionPruneState *ExecCreatePartitionPruneState(PlanState *planstate,
 														  PartitionPruneInfo *partitionpruneinfo);
 extern Bitmapset *ExecFindMatchingSubPlans(PartitionPruneState *prunestate,
+										   bool initial_prune,
 										   EState *estate,
 										   int nplans, List *join_prune_paramids);
 extern Bitmapset *ExecFindInitialMatchingSubPlans(PartitionPruneState *prunestate,
@@ -142,13 +142,10 @@ extern int get_partition_for_tuple(PartitionKey key, PartitionDesc partdesc,
 								   Datum *values, bool *isnull);
 
 extern Bitmapset *ExecAddMatchingSubPlans(PartitionPruneState *prunestate, Bitmapset *result);
-=======
+
 extern PartitionPruneState *ExecInitPartitionPruning(PlanState *planstate,
 													 int n_total_subplans,
 													 PartitionPruneInfo *pruneinfo,
 													 Bitmapset **initially_valid_subplans);
-extern Bitmapset *ExecFindMatchingSubPlans(PartitionPruneState *prunestate,
-										   bool initial_prune);
->>>>>>> REL_16_9
 
 #endif							/* EXECPARTITION_H */

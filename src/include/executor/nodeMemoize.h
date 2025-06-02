@@ -4,11 +4,7 @@
  *
  *
  *
-<<<<<<< HEAD
- * Portions Copyright (c) 2021, PostgreSQL Global Development Group
-=======
  * Portions Copyright (c) 2021-2023, PostgreSQL Global Development Group
->>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/executor/nodeMemoize.h
@@ -33,9 +29,6 @@ extern void ExecMemoizeInitializeWorker(MemoizeState *node,
 										ParallelWorkerContext *pwcxt);
 extern void ExecMemoizeRetrieveInstrumentation(MemoizeState *node);
 
-<<<<<<< HEAD
 extern void ExecSquelchMemoize(MemoizeState *node, bool force);
 
-=======
->>>>>>> REL_16_9
 #endif							/* NODEMEMOIZE_H */

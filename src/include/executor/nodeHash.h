@@ -4,13 +4,9 @@
  *	  prototypes for nodeHash.c
  *
  *
-<<<<<<< HEAD
  * Portions Copyright (c) 2007-2008, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
-=======
  * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
->>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/executor/nodeHash.h
@@ -71,13 +67,8 @@ extern void ExecPrepHashTableForUnmatched(HashJoinState *hjstate);
 extern bool ExecParallelPrepHashTableForUnmatched(HashJoinState *hjstate);
 extern bool ExecScanHashTableForUnmatched(HashJoinState *hjstate,
 										  ExprContext *econtext);
-<<<<<<< HEAD
-extern void ExecHashTableReset(HashState *hashState, HashJoinTable hashtable);
-=======
 extern bool ExecParallelScanHashTableForUnmatched(HashJoinState *hjstate,
 												  ExprContext *econtext);
-extern void ExecHashTableReset(HashJoinTable hashtable);
->>>>>>> REL_16_9
 extern void ExecHashTableResetMatchFlags(HashJoinTable hashtable);
 extern void ExecChooseHashTableSize(double ntuples, int tupwidth, bool useskew,
                                     uint64 operatorMemKB,
