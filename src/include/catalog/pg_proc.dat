@@ -913,6 +913,14 @@
   prorettype => 'table_am_handler', proargtypes => 'internal',
   prosrc => 'heap_tableam_handler' },
 
+{ oid => '6291', descr => 'arbitrary value from among input values',
+  proname => 'any_value', prokind => 'a', proisstrict => 'f',
+  prorettype => 'anyelement', proargtypes => 'anyelement',
+  prosrc => 'aggregate_dummy' },
+{ oid => '6292', descr => 'aggregate transition function',
+  proname => 'any_value_transfn', prorettype => 'anyelement',
+  proargtypes => 'anyelement anyelement', prosrc => 'any_value_transfn' },
+
 # GPDB-specific table access method
 { oid => '7091', 
   descr => 'row-oriented append-optimized table access method handler',
@@ -5496,15 +5504,9 @@
   proname => 'pg_stat_get_activity', prorows => '100', proisstrict => 'f',
   proretset => 't', provolatile => 's', proparallel => 'r',
   prorettype => 'record', proargtypes => 'int4',
-<<<<<<< HEAD
-  proallargtypes => '{int4,oid,int4,oid,text,text,text,text,text,timestamptz,timestamptz,timestamptz,timestamptz,inet,text,int4,xid,xid,text,bool,text,text,int4,text,numeric,text,bool,text,bool,int4,int8,int4,int4,text,oid}',
-  proargmodes => '{i,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o}',
-  proargnames => '{pid,datid,pid,usesysid,application_name,state,query,wait_event_type,wait_event,xact_start,query_start,backend_start,state_change,client_addr,client_hostname,client_port,backend_xid,backend_xmin,backend_type,ssl,sslversion,sslcipher,sslbits,ssl_client_dn,ssl_client_serial,ssl_issuer_dn,gss_auth,gss_princ,gss_enc,leader_pid,query_id,sess_id,rsgid,rsgname,warehouse_id}',
-=======
-  proallargtypes => '{int4,oid,int4,oid,text,text,text,text,text,timestamptz,timestamptz,timestamptz,timestamptz,inet,text,int4,xid,xid,text,bool,text,text,int4,text,numeric,text,bool,text,bool,bool,int4,int8}',
-  proargmodes => '{i,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o}',
-  proargnames => '{pid,datid,pid,usesysid,application_name,state,query,wait_event_type,wait_event,xact_start,query_start,backend_start,state_change,client_addr,client_hostname,client_port,backend_xid,backend_xmin,backend_type,ssl,sslversion,sslcipher,sslbits,ssl_client_dn,ssl_client_serial,ssl_issuer_dn,gss_auth,gss_princ,gss_enc,gss_delegation,leader_pid,query_id}',
->>>>>>> REL_16_9
+  proallargtypes => '{int4,oid,int4,oid,text,text,text,text,text,timestamptz,timestamptz,timestamptz,timestamptz,inet,text,int4,xid,xid,text,bool,text,text,int4,text,numeric,text,bool,text,bool,bool,int4,int8,int4,int4,text,oid}',
+  proargmodes => '{i,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o}',
+  proargnames => '{pid,datid,pid,usesysid,application_name,state,query,wait_event_type,wait_event,xact_start,query_start,backend_start,state_change,client_addr,client_hostname,client_port,backend_xid,backend_xmin,backend_type,ssl,sslversion,sslcipher,sslbits,ssl_client_dn,ssl_client_serial,ssl_issuer_dn,gss_auth,gss_princ,gss_enc,gss_delegation,leader_pid,query_id,sess_id,rsgid,rsgname,warehouse_id}',
   prosrc => 'pg_stat_get_activity' },
 { oid => '3318',
   descr => 'statistics: information about progress of backends running maintenance command',
@@ -6580,11 +6582,7 @@
   prorettype => 'text', proargtypes => '',
   prosrc => 'pg_get_wal_replay_pause_state' },
 
-<<<<<<< HEAD
 { oid => '8189', descr => 'get resource managers loaded in system',
-=======
-{ oid => '6224', descr => 'get resource managers loaded in system',
->>>>>>> REL_16_9
   proname => 'pg_get_wal_resource_managers', prorows => '50', proretset => 't',
   provolatile => 'v', prorettype => 'record', proargtypes => '',
   proallargtypes => '{int4,text,bool}', proargmodes => '{o,o,o}',
@@ -10459,18 +10457,13 @@
 
 # SQL-spec window functions
 { oid => '3100', descr => 'row number within partition',
-<<<<<<< HEAD
   proexeclocation => 'a',
-  proname => 'row_number', prokind => 'w', proisstrict => 'f',
-  prorettype => 'int8', proargtypes => '', prosrc => 'window_row_number' },
-=======
   proname => 'row_number', prosupport => 'window_row_number_support',
   prokind => 'w', proisstrict => 'f', prorettype => 'int8', proargtypes => '',
   prosrc => 'window_row_number' },
 { oid => '6233', descr => 'planner support for row_number',
   proname => 'window_row_number_support', prorettype => 'internal',
   proargtypes => 'internal', prosrc => 'window_row_number_support' },
->>>>>>> REL_16_9
 { oid => '3101', descr => 'integer rank with gaps',
   proname => 'rank', prosupport => 'window_rank_support', prokind => 'w',
   proisstrict => 'f', prorettype => 'int8', proargtypes => '',
@@ -11042,13 +11035,8 @@
   prorettype => 'anymultirange', proargtypes => 'anymultirange',
   prosrc => 'aggregate_dummy' },
 { oid => '1293', descr => 'expand multirange to set of ranges',
-<<<<<<< HEAD
-  proname => 'unnest', prorows => '100',
-  proretset => 't', prorettype => 'anyrange', proargtypes => 'anymultirange',
-=======
   proname => 'unnest', prorows => '100', proretset => 't',
   prorettype => 'anyrange', proargtypes => 'anymultirange',
->>>>>>> REL_16_9
   prosrc => 'multirange_unnest' },
 
 # date, time, timestamp constructors
@@ -12178,7 +12166,6 @@
   prorettype => 'bytea', proargtypes => 'pg_brin_minmax_multi_summary',
   prosrc => 'brin_minmax_multi_summary_send' },
 
-<<<<<<< HEAD
 #
 # GPDB ADDITIONS START HERE
 #
@@ -13034,16 +13021,7 @@
   proname => 'pg_export_snapshot_def', provolatile => 'v', proparallel => 'u',
   prorettype => 'text', proargtypes => 'oid text',
   prosrc => 'pg_export_snapshot_def', proexeclocation => 's' },
-=======
-{ oid => '6291', descr => 'arbitrary value from among input values',
-  proname => 'any_value', prokind => 'a', proisstrict => 'f',
-  prorettype => 'anyelement', proargtypes => 'anyelement',
-  prosrc => 'aggregate_dummy' },
-{ oid => '6292', descr => 'aggregate transition function',
-  proname => 'any_value_transfn', prorettype => 'anyelement',
-  proargtypes => 'anyelement anyelement', prosrc => 'any_value_transfn' },
 
->>>>>>> REL_16_9
 ]
 
 #Cloudberry specific functions

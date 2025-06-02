@@ -85,17 +85,12 @@ typedef struct CheckPoint
 #define XLOG_END_OF_RECOVERY			0x90
 #define XLOG_FPI_FOR_HINT				0xA0
 #define XLOG_FPI						0xB0
-<<<<<<< HEAD
 #define XLOG_NEXTRELFILENODE			0xC0
 #define XLOG_NEXTGXID					0xD0
 /* GPDB_14_MERGE_FIXME: Compatible, Figure out whether 0xC0 already used? */
 /* 0xC0 is used in Postgres 9.5-11 */
 #define XLOG_OVERWRITE_CONTRECORD		0xE0
 #define XLOG_ENCRYPTION_LSN				0xF0
-=======
-/* 0xC0 is used in Postgres 9.5-11 */
-#define XLOG_OVERWRITE_CONTRECORD		0xD0
->>>>>>> REL_16_9
 
 
 /*

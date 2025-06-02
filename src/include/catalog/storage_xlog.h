@@ -17,12 +17,9 @@
 #include "access/xlogreader.h"
 #include "lib/stringinfo.h"
 #include "storage/block.h"
-<<<<<<< HEAD
 #include "storage/relfilenode.h"
 #include "storage/smgr.h"
-=======
 #include "storage/relfilelocator.h"
->>>>>>> REL_16_9
 
 /*
  * Declarations for smgr-related XLOG records
@@ -56,11 +53,7 @@ typedef struct xl_smgr_truncate
 	int			flags;
 } xl_smgr_truncate;
 
-<<<<<<< HEAD
-extern void log_smgrcreate(const RelFileNode *rnode, ForkNumber forkNum, SMgrImpl impl);
-=======
-extern void log_smgrcreate(const RelFileLocator *rlocator, ForkNumber forkNum);
->>>>>>> REL_16_9
+extern void log_smgrcreate(const RelFileLocator *rlocator, ForkNumber forkNum, SMgrImpl impl);
 
 extern void smgr_redo(XLogReaderState *record);
 extern void smgr_desc(StringInfo buf, XLogReaderState *record);

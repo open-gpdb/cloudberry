@@ -50,7 +50,6 @@ extern char* GetReservedPrefix(const char *name);
 
 extern bool IsSharedRelation(Oid relationId);
 
-<<<<<<< HEAD
 extern Oid GetNewOidWithIndex(Relation relation, Oid indexId,
 							  AttrNumber oidcolumn);
 extern Oid GetNewRelFileNode(Oid reltablespace, Relation pg_class,
@@ -61,7 +60,7 @@ extern void reldir_and_filename(RelFileNode rnode, BackendId backend, ForkNumber
 extern char *aorelpathbackend(RelFileNode node, BackendId backend, int32 segno);
 
 extern bool system_relation_modified;
-=======
+
 extern bool IsPinnedObject(Oid classId, Oid objectId);
 
 extern Oid	GetNewOidWithIndex(Relation relation, Oid indexId,
@@ -69,6 +68,5 @@ extern Oid	GetNewOidWithIndex(Relation relation, Oid indexId,
 extern RelFileNumber GetNewRelFileNumber(Oid reltablespace,
 										 Relation pg_class,
 										 char relpersistence);
->>>>>>> REL_16_9
 
 #endif							/* CATALOG_H */

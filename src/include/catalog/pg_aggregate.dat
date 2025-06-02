@@ -552,7 +552,6 @@
   aggcombinefn => 'array_agg_array_combine',
   aggserialfn => 'array_agg_array_serialize',
   aggdeserialfn => 'array_agg_array_deserialize', aggfinalextra => 't',
-<<<<<<< HEAD
   aggtranstype => 'internal' },
 { aggfnoid => 'gp_array_agg(anynonarray)', aggtransfn => 'array_agg_transfn',
   aggfinalfn => 'array_agg_finalfn', aggcombinefn => 'array_agg_combine',
@@ -564,8 +563,6 @@
   aggcombinefn => 'array_agg_array_combine',
   aggserialfn => 'array_agg_array_serialize',
   aggdeserialfn => 'array_agg_array_deserialize', aggfinalextra => 't',
-=======
->>>>>>> REL_16_9
   aggtranstype => 'internal' },
 
 # text
@@ -676,7 +673,6 @@
   aggfinalfn => 'dense_rank_final', aggfinalextra => 't', aggfinalmodify => 'w',
   aggmfinalmodify => 'w', aggtranstype => 'internal' },
 
-<<<<<<< HEAD
 # MPP Aggregate -- array_sum -- special for prospective customer.
 { aggfnoid => 'array_sum(_int4)', aggtransfn => 'array_add(_int4,_int4)',
   aggtranstype => '_int4', agginitval => '{}' },
@@ -760,10 +756,8 @@
   aggtransfn => 'gp_percentile_disc_transition',
   aggfinalfn => 'gp_percentile_final', aggtranstype => 'anyelement' },
 
-=======
 # any_value
 { aggfnoid => 'any_value(anyelement)', aggtransfn => 'any_value_transfn',
   aggcombinefn => 'any_value_transfn', aggtranstype => 'anyelement' },
->>>>>>> REL_16_9
 
 ]

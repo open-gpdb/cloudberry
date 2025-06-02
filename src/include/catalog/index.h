@@ -76,7 +76,6 @@ extern void index_check_primary_key(Relation heapRel,
 #define	INDEX_CREATE_PARTITIONED			(1 << 5)
 #define INDEX_CREATE_INVALID				(1 << 6)
 
-<<<<<<< HEAD
 typedef Oid (*index_create_hook_type)(Relation heapRelation,
         const char *indexRelationName,
         Oid indexRelationId,
@@ -98,25 +97,6 @@ typedef Oid (*index_create_hook_type)(Relation heapRelation,
         Oid *constraintId);
 extern PGDLLIMPORT index_create_hook_type index_create_hook;
 
-extern Oid index_create(Relation heapRelation,
-						const char *indexRelationName,
-						Oid indexRelationId,
-						Oid parentIndexRelid,
-						Oid parentConstraintId,
-						Oid relFileNode,
-						IndexInfo *indexInfo,
-						List *indexColNames,
-						Oid accessMethodObjectId,
-						Oid tableSpaceId,
-						Oid *collationObjectId,
-						Oid *classObjectId,
-						int16 *coloptions,
-						Datum reloptions,
-						bits16 flags,
-						bits16 constr_flags,
-						bool allow_system_table_mods,
-						bool is_internal,
-						Oid *constraintId);
 extern Oid index_create_internal(Relation heapRelation,
                                  const char *indexRelationName,
                                  Oid indexRelationId,
@@ -138,7 +118,7 @@ extern Oid index_create_internal(Relation heapRelation,
                                  Oid *constraintId);
 
 extern PGDLLIMPORT ambuild_function index_build_hook;
-=======
+
 extern Oid	index_create(Relation heapRelation,
 						 const char *indexRelationName,
 						 Oid indexRelationId,
@@ -158,7 +138,6 @@ extern Oid	index_create(Relation heapRelation,
 						 bool allow_system_table_mods,
 						 bool is_internal,
 						 Oid *constraintId);
->>>>>>> REL_16_9
 
 #define	INDEX_CONSTR_CREATE_MARK_AS_PRIMARY	(1 << 0)
 #define	INDEX_CONSTR_CREATE_DEFERRABLE		(1 << 1)
@@ -248,13 +227,9 @@ extern Size EstimateReindexStateSpace(void);
 extern void SerializeReindexState(Size maxsize, char *start_address);
 extern void RestoreReindexState(void *reindexstate);
 
-<<<<<<< HEAD
-extern void IndexSetParentIndex(Relation idx, Oid parentOid);
 extern bool check_default_index_access_method(char **newval, void **extra,
                                               GucSource source);
-=======
 extern void IndexSetParentIndex(Relation partitionIdx, Oid parentOid);
->>>>>>> REL_16_9
 
 
 /*

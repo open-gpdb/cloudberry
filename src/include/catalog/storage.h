@@ -22,7 +22,6 @@
 /* GUC variables */
 extern PGDLLIMPORT int wal_skip_threshold;
 
-<<<<<<< HEAD
 /*
  * We keep a list of all relations (represented as RelFileNode values)
  * that have been created or deleted in the current transaction.  When
@@ -104,15 +103,12 @@ struct PendingRelDeleteAction
 */
 #define PENDING_REL_DELETE_DEFAULT_FLAG PENDING_REL_DELETE_NEED_DROP_DELAY_DELETE
 
-extern SMgrRelation RelationCreateStorage(RelFileNode rnode,
-										  char relpersistence,
-										  SMgrImpl smgr_which,
-										  Relation rel);
-=======
 extern SMgrRelation RelationCreateStorage(RelFileLocator rlocator,
 										  char relpersistence,
-										  bool register_delete);
->>>>>>> REL_16_9
+										  bool register_delete,
+										  SMgrImpl smgr_which,
+										  Relation rel);
+
 extern void RelationDropStorage(Relation rel);
 extern void RelationPreserveStorage(RelFileLocator rlocator, bool atCommit);
 extern void RelationPreTruncate(Relation rel);
