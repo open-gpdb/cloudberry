@@ -18,25 +18,6 @@ extern PGDLLIMPORT bool EnableSSL;
 extern PGDLLIMPORT int SuperuserReservedConnections;
 extern PGDLLIMPORT int ReservedConnections;
 extern PGDLLIMPORT int PostPortNumber;
-<<<<<<< HEAD
-extern int	Unix_socket_permissions;
-extern char *Unix_socket_group;
-extern char *Unix_socket_directories;
-extern char *ListenAddresses;
-extern char *interconnect_address;
-extern bool ClientAuthInProgress;
-extern int	PreAuthDelay;
-extern int	AuthenticationTimeout;
-extern bool Log_connections;
-extern bool log_hostname;
-extern bool enable_bonjour;
-extern char *bonjour_name;
-extern bool restart_after_crash;
-extern bool remove_temp_files_after_crash;
-extern bool enable_password_profile;
-
-extern int	terminal_fd;
-=======
 extern PGDLLIMPORT int Unix_socket_permissions;
 extern PGDLLIMPORT char *Unix_socket_group;
 extern PGDLLIMPORT char *Unix_socket_directories;
@@ -52,7 +33,11 @@ extern PGDLLIMPORT bool restart_after_crash;
 extern PGDLLIMPORT bool remove_temp_files_after_crash;
 extern PGDLLIMPORT bool send_abort_for_crash;
 extern PGDLLIMPORT bool send_abort_for_kill;
->>>>>>> REL_16_9
+
+extern char *interconnect_address;
+extern bool enable_password_profile;
+extern int	terminal_fd;
+
 
 #ifdef WIN32
 extern PGDLLIMPORT HANDLE PostmasterHandle;

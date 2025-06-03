@@ -122,7 +122,6 @@ pg_clock_gettime_ns(void)
 #define INSTR_TIME_SET_CURRENT(t) \
 	((t) = pg_clock_gettime_ns())
 
-<<<<<<< HEAD
 #ifdef CLOCK_MONOTONIC_COARSE
 #define INSTR_TIME_SET_CURRENT_COARSE(t)	((void) clock_gettime(CLOCK_MONOTONIC_COARSE, &(t)))
 #else
@@ -250,11 +249,10 @@ typedef struct timeval instr_time;
 	(((uint64) (t).tv_sec * (uint64) 1000000) + (uint64) (t).tv_usec)
 
 #endif							/* HAVE_CLOCK_GETTIME */
-=======
+
 #define INSTR_TIME_GET_NANOSEC(t) \
 	((int64) (t).ticks)
 
->>>>>>> REL_16_9
 
 #else							/* WIN32 */
 
@@ -270,8 +268,9 @@ pg_query_performance_counter(void)
 
 	QueryPerformanceCounter(&tmp);
 	now.ticks = tmp.QuadPart;
+	return now;
+}
 
-<<<<<<< HEAD
 #define INSTR_TIME_SET_ZERO(t)	((t).QuadPart = 0)
 
 #define INSTR_TIME_SET_CURRENT(t)	QueryPerformanceCounter(&(t))
@@ -297,10 +296,7 @@ pg_query_performance_counter(void)
 
 #define INSTR_TIME_GET_MICROSEC(t) \
 	((uint64) (((double) (t).QuadPart * 1000000.0) / GetTimerFrequency()))
-=======
-	return now;
-}
->>>>>>> REL_16_9
+
 
 static inline double
 GetTimerFrequency(void)

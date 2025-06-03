@@ -221,7 +221,6 @@ pg_nextpower2_64(uint64 num)
 }
 
 /*
-<<<<<<< HEAD
  * pg_nextpower2_size_t
  *		Returns the next higher power of 2 above 'num', for a size_t input.
  */
@@ -232,8 +231,6 @@ pg_nextpower2_64(uint64 num)
 #endif
 
 /*
-=======
->>>>>>> REL_16_9
  * pg_prevpower2_32
  *		Returns the next lower power of 2 below 'num', or 'num' if it's
  *		already a power of 2.
@@ -260,7 +257,6 @@ pg_prevpower2_64(uint64 num)
 }
 
 /*
-<<<<<<< HEAD
  * pg_prevpower2_size_t
  *		Returns the next lower power of 2 below 'num', for a size_t input.
  */
@@ -271,8 +267,6 @@ pg_prevpower2_64(uint64 num)
 #endif
 
 /*
-=======
->>>>>>> REL_16_9
  * pg_ceil_log2_32
  *		Returns equivalent of ceil(log2(num))
  */

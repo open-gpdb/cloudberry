@@ -128,12 +128,8 @@ extern bool RegisterDynamicBackgroundWorker(BackgroundWorker *worker,
 /* Query the status of a bgworker */
 extern BgwHandleStatus GetBackgroundWorkerPid(BackgroundWorkerHandle *handle,
 											  pid_t *pidp);
-<<<<<<< HEAD
 
-extern BgwHandleStatus WaitForBackgroundWorkerStartup(BackgroundWorkerHandle *handle, pid_t *pid);
-=======
 extern BgwHandleStatus WaitForBackgroundWorkerStartup(BackgroundWorkerHandle *handle, pid_t *pidp);
->>>>>>> REL_16_9
 extern BgwHandleStatus
 			WaitForBackgroundWorkerShutdown(BackgroundWorkerHandle *);
 extern const char *GetBackgroundWorkerTypeByPid(pid_t pid);

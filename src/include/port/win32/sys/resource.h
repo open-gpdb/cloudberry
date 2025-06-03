@@ -1,6 +1,3 @@
-<<<<<<< HEAD
- 
-=======
 /*
  * Replacement for <sys/resource.h> for Windows.
  */
@@ -21,4 +18,3 @@ struct rusage
 extern int	getrusage(int who, struct rusage *rusage);
 
 #endif							/* WIN32_SYS_RESOURCE_H */
->>>>>>> REL_16_9

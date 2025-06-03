@@ -35,14 +35,11 @@ struct iovec
 /* Define a reasonable maximum that is safe to use on the stack. */
 #define PG_IOV_MAX Min(IOV_MAX, 32)
 
-<<<<<<< HEAD
-=======
 /*
  * Note that pg_preadv and pg_pwritev have a pg_ prefix as a warning that the
  * Windows implementations have the side-effect of changing the file position.
  */
 
->>>>>>> REL_16_9
 #if HAVE_DECL_PREADV
 #define pg_preadv preadv
 #else

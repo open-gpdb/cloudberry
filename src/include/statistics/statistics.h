@@ -94,15 +94,10 @@ typedef struct MCVList
 	MCVItem		items[FLEXIBLE_ARRAY_MEMBER];	/* array of MCV items */
 } MCVList;
 
-<<<<<<< HEAD
-extern MVNDistinct *statext_ndistinct_load(Oid mvoid);
-extern MVDependencies *statext_dependencies_load(Oid mvoid, bool allow_null);
-extern MCVList *statext_mcv_load(Oid mvoid);
-=======
+
 extern MVNDistinct *statext_ndistinct_load(Oid mvoid, bool inh);
 extern MVDependencies *statext_dependencies_load(Oid mvoid, bool inh);
 extern MCVList *statext_mcv_load(Oid mvoid, bool inh);
->>>>>>> REL_16_9
 
 extern void BuildRelationExtStatistics(Relation onerel, bool inh, double totalrows,
 									   int numrows, HeapTuple *rows,

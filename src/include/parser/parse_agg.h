@@ -19,12 +19,8 @@ extern void transformAggregateCall(ParseState *pstate, Aggref *agg,
 								   List *args, List *aggorder,
 								   bool agg_distinct);
 
-<<<<<<< HEAD
-extern Node *transformGroupingFunc(ParseState *pstate, GroupingFunc *g);
-extern Node *transformGroupId(ParseState *pstate, GroupId *g);
-=======
 extern Node *transformGroupingFunc(ParseState *pstate, GroupingFunc *p);
->>>>>>> REL_16_9
+extern Node *transformGroupId(ParseState *pstate, GroupId *g);
 
 extern void transformWindowFuncCall(ParseState *pstate, WindowFunc *wfunc,
 									WindowDef *windef);

@@ -101,7 +101,6 @@ extern int	SyncRepGetCandidateStandbys(SyncRepStandbyData **standbys);
 /* called by checkpointer */
 extern void SyncRepUpdateSyncStandbysDefined(void);
 
-<<<<<<< HEAD
 /* called by various procs */
 extern int  SyncRepWakeQueue(bool all, int mode);
 
@@ -110,8 +109,6 @@ extern bool check_synchronous_standby_names(char **newval, void **extra, GucSour
 extern void assign_synchronous_standby_names(const char *newval, void *extra);
 extern void assign_synchronous_commit(int newval, void *extra);
 
-=======
->>>>>>> REL_16_9
 /*
  * Internal functions for parsing synchronous_standby_names grammar,
  * in syncrep_gram.y and syncrep_scanner.l

@@ -74,7 +74,6 @@ typedef struct
 	int32		zero;			/* leading zero */
 	int32		len;			/* len, not including hdr */
 	int32		pid;			/* writer's pid */
-<<<<<<< HEAD
 	int32       thid;			/* thread id */
 	int32		main_thid;		/* main thread id */
 	int32		chunk_no;		/* chunk number */
@@ -83,10 +82,8 @@ typedef struct
 	char		is_segv_msg;	/* indicate whether this is a message sent in SEGV/BUS/ILL handler */
 	int64		log_line_number;	/* indicate the order of the message */
 	int64		next;			/* next chained chunk.  also force an 8 bytes align */
-=======
 	bits8		flags;			/* bitmask of PIPE_PROTO_* */
 	char		data[FLEXIBLE_ARRAY_MEMBER];	/* data payload starts here */
->>>>>>> REL_16_9
 } PipeProtoHeader;
 
 #define PIPE_HEADER_UNALIGNED_SIZE  sizeof(PipeProtoHeader)
@@ -102,7 +99,6 @@ typedef struct
 
 #define PIPE_HEADER_SIZE offsetof(PipeProtoChunk, data)
 
-<<<<<<< HEAD
 typedef struct CSVChunkStr
 {
     const PipeProtoChunk *chunk;
@@ -178,14 +174,13 @@ typedef struct
 	/* The depth of stack frame addresses that are stored after this structure */
 	int32 frame_depth;
 } GpSegvErrorData;
-=======
+
 /* flag bits for PipeProtoHeader->flags */
 #define PIPE_PROTO_IS_LAST	0x01	/* last chunk of message? */
 /* log destinations */
 #define PIPE_PROTO_DEST_STDERR	0x10
 #define PIPE_PROTO_DEST_CSVLOG	0x20
 #define PIPE_PROTO_DEST_JSONLOG	0x40
->>>>>>> REL_16_9
 
 /* GUC options */
 extern PGDLLIMPORT bool Logging_collector;
@@ -193,14 +188,10 @@ extern PGDLLIMPORT int Log_RotationAge;
 extern PGDLLIMPORT int Log_RotationSize;
 extern PGDLLIMPORT char *Log_directory;
 extern PGDLLIMPORT char *Log_filename;
-<<<<<<< HEAD
-extern bool Log_truncate_on_rotation;
-extern int	Log_file_mode;
-extern int gp_log_format;
-=======
 extern PGDLLIMPORT bool Log_truncate_on_rotation;
 extern PGDLLIMPORT int Log_file_mode;
->>>>>>> REL_16_9
+extern int gp_log_format;
+
 
 #ifndef WIN32
 extern PGDLLIMPORT int syslogPipe[2];

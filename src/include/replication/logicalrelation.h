@@ -48,10 +48,7 @@ extern LogicalRepRelMapEntry *logicalrep_partition_open(LogicalRepRelMapEntry *r
 														Relation partrel, AttrMap *map);
 extern void logicalrep_rel_close(LogicalRepRelMapEntry *rel,
 								 LOCKMODE lockmode);
-<<<<<<< HEAD
-=======
 extern bool IsIndexUsableForReplicaIdentityFull(IndexInfo *indexInfo, AttrMap *attrmap);
 extern Oid	GetRelationIdentityOrPK(Relation rel);
->>>>>>> REL_16_9
 
 #endif							/* LOGICALRELATION_H */
