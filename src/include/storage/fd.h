@@ -4,13 +4,9 @@
  *	  Virtual file descriptor definitions.
  *
  *
-<<<<<<< HEAD
  * Portions Copyright (c) 2007-2008, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
-=======
  * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
->>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/storage/fd.h
@@ -198,15 +194,10 @@ extern void pg_flush_data(int fd, off_t offset, off_t nbytes);
 extern int	pg_truncate(const char *path, off_t length);
 extern void fsync_fname(const char *fname, bool isdir);
 extern int	fsync_fname_ext(const char *fname, bool isdir, bool ignore_perm, int elevel);
-<<<<<<< HEAD
-extern int	durable_rename(const char *oldfile, const char *newfile, int loglevel);
-extern int	durable_unlink(const char *fname, int loglevel);
-extern int	durable_rename_excl(const char *oldfile, const char *newfile, int loglevel);
-extern void SyncAllXLogFiles(void);
-=======
 extern int	durable_rename(const char *oldfile, const char *newfile, int elevel);
 extern int	durable_unlink(const char *fname, int elevel);
->>>>>>> REL_16_9
+extern int	durable_rename_excl(const char *oldfile, const char *newfile, int loglevel);
+extern void SyncAllXLogFiles(void);
 extern void SyncDataDirectory(void);
 extern int	data_sync_elevel(int elevel);
 

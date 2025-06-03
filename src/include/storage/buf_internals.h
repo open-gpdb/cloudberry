@@ -88,17 +88,7 @@
  * relation is visible yet (its xact may have started before the xact that
  * created the rel).  The storage manager must be able to cope anyway.
  *
-<<<<<<< HEAD
- * GPDB_91_MERGE_FIXME: The argument in the previous note doesn't quite hold in
- * GPDB.  Temp tables in GPDB use shared buffers.  But there is no way to
- * distinguish a temp relation's buffers from a non-temp relation's buffers
- * from buffer tag.  The flag BM_TEMP from buffer header is used to identify a
- * temp relation's bufffers.
- *
- * Note: if there's any pad bytes in the struct, INIT_BUFFERTAG will have
-=======
  * Note: if there's any pad bytes in the struct, InitBufferTag will have
->>>>>>> REL_16_9
  * to be fixed to zero them, since this struct is used as a hash key.
  */
 typedef struct buftag
@@ -387,11 +377,7 @@ UnlockBufHdr(BufferDesc *desc, uint32 buf_state)
 typedef struct CkptSortItem
 {
 	Oid			tsId;
-<<<<<<< HEAD
-	Oid 		relNode;
-=======
 	RelFileNumber relNumber;
->>>>>>> REL_16_9
 	ForkNumber	forkNum;
 	BlockNumber blockNum;
 	int			buf_id;
@@ -438,10 +424,7 @@ extern PrefetchBufferResult PrefetchLocalBuffer(SMgrRelation smgr,
 												ForkNumber forkNum,
 												BlockNumber blockNum);
 extern BufferDesc *LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum,
-<<<<<<< HEAD
                                     BlockNumber blockNum, bool *foundPtr, Buffer non_evited_buffer);
-=======
-									BlockNumber blockNum, bool *foundPtr);
 extern BlockNumber ExtendBufferedRelLocal(BufferManagerRelation bmr,
 										  ForkNumber fork,
 										  uint32 flags,
@@ -449,7 +432,6 @@ extern BlockNumber ExtendBufferedRelLocal(BufferManagerRelation bmr,
 										  BlockNumber extend_upto,
 										  Buffer *buffers,
 										  uint32 *extended_by);
->>>>>>> REL_16_9
 extern void MarkLocalBufferDirty(Buffer buffer);
 extern void DropRelationLocalBuffers(RelFileLocator rlocator,
 									 ForkNumber forkNum,

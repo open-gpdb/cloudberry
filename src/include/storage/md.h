@@ -45,11 +45,7 @@ extern void mdtruncate(SMgrRelation reln, ForkNumber forknum,
 extern void mdimmedsync(SMgrRelation reln, ForkNumber forknum);
 
 extern void ForgetDatabaseSyncRequests(Oid dbid);
-<<<<<<< HEAD
 extern void DropRelationFiles(RelFileNodePendingDelete *delrels, int ndelrels, bool isRedo);
-=======
-extern void DropRelationFiles(RelFileLocator *delrels, int ndelrels, bool isRedo);
->>>>>>> REL_16_9
 
 /* md sync callbacks */
 extern int	mdsyncfiletag(const FileTag *ftag, char *path);

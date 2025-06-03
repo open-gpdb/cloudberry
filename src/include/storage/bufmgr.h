@@ -17,12 +17,9 @@
 #include "storage/block.h"
 #include "storage/buf.h"
 #include "storage/bufpage.h"
-<<<<<<< HEAD
 #include "storage/relfilenode.h"
 #include "storage/smgr.h"
-=======
 #include "storage/relfilelocator.h"
->>>>>>> REL_16_9
 #include "utils/relcache.h"
 #include "utils/snapmgr.h"
 
@@ -356,8 +353,6 @@ BufferGetPageSize(Buffer buffer)
  * When this is called as part of a scan, there may be a need for a nearby
  * call to TestForOldSnapshot().  See the definition of that for details.
  */
-<<<<<<< HEAD
-#define BufferGetPage(buffer) ((Page)BufferGetBlock(buffer))
 
 typedef Buffer (*ReadBuffer_hook_type)(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
                                           BlockNumber blockNum, ReadBufferMode mode,
@@ -469,13 +464,11 @@ extern void FreeAccessStrategy(BufferAccessStrategy strategy);
  */
 
 #ifndef FRONTEND
-=======
 static inline Page
 BufferGetPage(Buffer buffer)
 {
 	return (Page) BufferGetBlock(buffer);
 }
->>>>>>> REL_16_9
 
 /*
  * Check whether the given snapshot is too old to have safely read the given

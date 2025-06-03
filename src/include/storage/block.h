@@ -99,18 +99,10 @@ BlockIdEquals(const BlockIdData *blockId1, const BlockIdData *blockId2)
  * BlockIdGetBlockNumber
  *		Retrieve the block number from a block identifier.
  */
-<<<<<<< HEAD
-#define BlockIdGetBlockNumber(blockId) \
-( \
-	AssertMacro(BlockIdIsValid(blockId)), \
-	((((BlockNumber) (blockId)->bi_hi) << 16) | ((BlockNumber) (blockId)->bi_lo)) \
-)
-=======
 static inline BlockNumber
 BlockIdGetBlockNumber(const BlockIdData *blockId)
 {
 	return (((BlockNumber) blockId->bi_hi) << 16) | ((BlockNumber) blockId->bi_lo);
 }
->>>>>>> REL_16_9
 
 #endif							/* BLOCK_H */

@@ -4,13 +4,9 @@
  *	  per-process shared memory data structures
  *
  *
-<<<<<<< HEAD
  * Portions Copyright (c) 2006-2008, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
-=======
  * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
->>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/storage/proc.h
@@ -108,10 +104,6 @@ struct XidCache
 #define INVALID_PGPROCNO		PG_INT32_MAX
 
 /*
-<<<<<<< HEAD
- * Flags used only for type of internal functions
- * GetVirtualXIDsDelayingChkptGuts and HaveVirtualXIDsDelayingChkptGuts.
-=======
  * Flags for PGPROC.delayChkptFlags
  *
  * These flags can be used to delay the start or completion of a checkpoint
@@ -142,7 +134,6 @@ struct XidCache
  * the checkpoint are actually destroyed on disk. Replay can cope with a file
  * or block that doesn't exist, but not with a block that has the wrong
  * contents.
->>>>>>> REL_16_9
  */
 #define DELAY_CHKPT_START		(1<<0)
 #define DELAY_CHKPT_COMPLETE	(1<<1)
@@ -474,13 +465,9 @@ typedef struct PROC_HDR
 	/* Head of list of free PGPROC structures */
 	dlist_head	freeProcs;
 	/* Head of list of autovacuum's free PGPROC structures */
-<<<<<<< HEAD
-	PGPROC	   *autovacFreeProcs;
+	dlist_head	autovacFreeProcs;
 	/* Head of list of login monitor free PGPROC structures */
 	PGPROC     *lmFreeProcs;
-=======
-	dlist_head	autovacFreeProcs;
->>>>>>> REL_16_9
 	/* Head of list of bgworker free PGPROC structures */
 	dlist_head	bgworkerFreeProcs;
 	/* Head of list of walsender free PGPROC structures */

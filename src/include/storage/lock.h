@@ -163,18 +163,12 @@ typedef enum LockTagType
 	LOCKTAG_DISTRIB_TRANSACTION,/* CDB: distributed transaction (for waiting for distributed xact done) */
 	LOCKTAG_USERLOCK,			/* reserved for old contrib/userlock code */
 	LOCKTAG_ADVISORY,			/* advisory user locks */
-<<<<<<< HEAD
+	LOCKTAG_APPLY_TRANSACTION,	/* transaction being applied on a logical
+								 * replication subscriber */
 	LOCKTAG_WAREHOUSE			/* warehouse locks */
 } LockTagType;
 
 #define LOCKTAG_LAST_TYPE	LOCKTAG_WAREHOUSE
-=======
-	LOCKTAG_APPLY_TRANSACTION	/* transaction being applied on a logical
-								 * replication subscriber */
-} LockTagType;
-
-#define LOCKTAG_LAST_TYPE	LOCKTAG_APPLY_TRANSACTION
->>>>>>> REL_16_9
 
 extern PGDLLIMPORT const char *const LockTagTypeNames[];
 
@@ -312,7 +306,6 @@ typedef struct LOCKTAG
 	 (locktag).locktag_type = LOCKTAG_ADVISORY, \
 	 (locktag).locktag_lockmethodid = USER_LOCKMETHOD)
 
-<<<<<<< HEAD
 #define SET_LOCKTAG_RESOURCE_QUEUE(locktag, queueid) \
 	((locktag).locktag_field1 = (queueid), \
 	 (locktag).locktag_field2 = 0, \
@@ -326,8 +319,9 @@ typedef struct LOCKTAG
 	 (locktag).locktag_field2 = 0, \
 	 (locktag).locktag_field3 = 0, \
 	 (locktag).locktag_field4 = 0, \
-	 (locktag).locktag_type = LOCKTAG_WAREHOUSE, \
-=======
+	 (locktag).locktag_type = LOCKTAG_WAREHOUSE,      \
+	 (locktag).locktag_lockmethodid = DEFAULT_LOCKMETHOD)                                                   \
+
 /*
  * ID info for a remote transaction on a logical replication subscriber is: DB
  * OID + SUBSCRIPTION OID + TRANSACTION ID + OBJID
@@ -338,7 +332,6 @@ typedef struct LOCKTAG
 	 (locktag).locktag_field3 = (xid), \
 	 (locktag).locktag_field4 = (objid), \
 	 (locktag).locktag_type = LOCKTAG_APPLY_TRANSACTION, \
->>>>>>> REL_16_9
 	 (locktag).locktag_lockmethodid = DEFAULT_LOCKMETHOD)
 
 /*
@@ -431,17 +424,12 @@ typedef struct PROCLOCK
 	PGPROC	   *groupLeader;	/* proc's lock group leader, or proc itself */
 	LOCKMASK	holdMask;		/* bitmask for lock types currently held */
 	LOCKMASK	releaseMask;	/* bitmask for lock types to be released */
-<<<<<<< HEAD
-	SHM_QUEUE	lockLink;		/* list link in LOCK's list of proclocks */
-	SHM_QUEUE	procLink;		/* list link in PGPROC's list of proclocks */
-	int			nLocks;			/* total number of times lock is held by 
-								   this process, used by resource scheduler */
-	SHM_QUEUE	portalLinks;	/* list of ResPortalIncrements for this 
-								   proclock, used by resource scheduler */
-=======
 	dlist_node	lockLink;		/* list link in LOCK's list of proclocks */
 	dlist_node	procLink;		/* list link in PGPROC's list of proclocks */
->>>>>>> REL_16_9
+	int			nLocks;			/* total number of times lock is held by
+								   this process, used by resource scheduler */
+	SHM_QUEUE	portalLinks;	/* list of ResPortalIncrements for this
+								   proclock, used by resource scheduler */
 } PROCLOCK;
 
 #define PROCLOCK_LOCKMETHOD(proclock) \

@@ -250,7 +250,6 @@ spin_delay(void)
 #endif	 /* __x86_64__ */
 
 
-<<<<<<< HEAD
 #if defined(__ia64__) || defined(__ia64)
 /*
  * Intel Itanium, gcc or Intel's compiler.
@@ -316,8 +315,6 @@ tas(volatile slock_t *lock)
 #endif	 /* __ia64__ || __ia64 */
 
 
-=======
->>>>>>> REL_16_9
 /*
  * On ARM and ARM64, we use __sync_lock_test_and_set(int *, int) if available.
  *
@@ -550,7 +547,6 @@ do \
 #endif /* powerpc */
 
 
-<<<<<<< HEAD
 /* Linux Motorola 68k */
 #if (defined(__mc68000__) || defined(__m68k__)) && defined(__linux__)
 #define HAS_TEST_AND_SET
@@ -649,8 +645,7 @@ tas(volatile slock_t *lock)
 #endif	 /* HAVE_GCC__SYNC_INT32_TAS */
 #endif /* __loongarch__ */
 
-=======
->>>>>>> REL_16_9
+
 #if defined(__mips__) && !defined(__sgi)	/* non-SGI MIPS */
 #define HAS_TEST_AND_SET
 
@@ -858,7 +853,6 @@ tas(volatile slock_t *lock)
 
 #if !defined(HAS_TEST_AND_SET)	/* We didn't trigger above, let's try here */
 
-<<<<<<< HEAD
 
 #if defined(__hppa) || defined(__hppa__)	/* HP PA-RISC, GCC and HP compilers */
 /*
@@ -954,8 +948,6 @@ typedef unsigned int slock_t;
 
 #endif	/* HPUX on IA64, non gcc/icc */
 
-=======
->>>>>>> REL_16_9
 #if defined(_AIX)	/* AIX */
 /*
  * AIX (POWER)

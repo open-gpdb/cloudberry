@@ -395,7 +395,6 @@ PageGetMaxOffsetNumber(Page page)
 }
 
 /*
-<<<<<<< HEAD
  * Retrieving LSN of a shared buffer is safe only if: (1) exclusive lock on the
  * buffer's contents is held OR (2) shared lock on the buffer's contents and
  * the buffer header spinlock is held.  The Assert() validates that a shared
@@ -419,22 +418,11 @@ PageGetLSN(Page page)
  * Additional macros for access to page headers. (Beware multiple evaluation
  * of the arguments!)
  */
-#define PageSetLSN(page, lsn) \
-	PageXLogRecPtrSet(((PageHeader) (page))->pd_lsn, lsn)
-=======
- * Additional functions for access to page headers.
- */
-static inline XLogRecPtr
-PageGetLSN(Page page)
-{
-	return PageXLogRecPtrGet(((PageHeader) page)->pd_lsn);
-}
 static inline void
 PageSetLSN(Page page, XLogRecPtr lsn)
 {
 	PageXLogRecPtrSet(((PageHeader) page)->pd_lsn, lsn);
 }
->>>>>>> REL_16_9
 
 static inline bool
 PageHasFreeLinePointers(Page page)

@@ -4,13 +4,9 @@
  *	  storage manager switch public interface declarations.
  *
  *
-<<<<<<< HEAD
  * Portions Copyright (c) 2006-2008, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
-=======
  * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
->>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/storage/smgr.h
@@ -22,7 +18,7 @@
 
 #include "lib/ilist.h"
 #include "storage/block.h"
-<<<<<<< HEAD
+#include "storage/relfilelocator.h"
 #include "storage/relfilenode.h"
 #include "storage/dbdirnode.h"
 #include "storage/fd.h"
@@ -60,9 +56,6 @@ typedef enum SMgrImplementation
 } SMgrImpl;
 
 struct f_smgr;
-=======
-#include "storage/relfilelocator.h"
->>>>>>> REL_16_9
 
 /*
  * smgr.c maintains a table of SMgrRelation objects, which are essentially
@@ -192,12 +185,8 @@ extern const f_smgr *smgr_get(SMgrImpl smgr_impl);
 extern SMgrImpl smgr_get_impl(const Relation rel);
 
 extern void smgrinit(void);
-<<<<<<< HEAD
-extern SMgrRelation smgropen(RelFileNode rnode, BackendId backend,
-                             SMgrImpl smgr_which, Relation rel);
-=======
-extern SMgrRelation smgropen(RelFileLocator rlocator, BackendId backend);
->>>>>>> REL_16_9
+extern SMgrRelation smgropen(RelFileLocator rlocator, BackendId backend,
+							 SMgrImpl smgr_which, Relation rel);
 extern bool smgrexists(SMgrRelation reln, ForkNumber forknum);
 extern void smgrsetowner(SMgrRelation *owner, SMgrRelation reln);
 extern void smgrclearowner(SMgrRelation *owner, SMgrRelation reln);
