@@ -68,7 +68,8 @@ extern Expr *transform_array_Const_to_ArrayExpr(Const *c);
 extern Query *inline_set_returning_function(PlannerInfo *root,
 											RangeTblEntry *rte);
 
-<<<<<<< HEAD
+extern Bitmapset *pull_paramids(Expr *expr);
+
 
 extern Expr *evaluate_expr(Expr *expr, Oid result_type, int32 result_typmod,
 			  Oid result_collation);
@@ -83,8 +84,4 @@ extern Bitmapset *pull_paramids(Expr *expr);
 extern GroupedVarInfo *translate_expr_to_rel_vars(PlannerInfo *root,
 												  GroupedVarInfo *gvi, Index relid);
 
-=======
-extern Bitmapset *pull_paramids(Expr *expr);
-
->>>>>>> REL_16_9
 #endif							/* CLAUSES_H */

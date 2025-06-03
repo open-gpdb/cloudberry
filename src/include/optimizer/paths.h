@@ -4,13 +4,9 @@
  *	  prototypes for various files in optimizer/path
  *
  *
-<<<<<<< HEAD
  * Portions Copyright (c) 2005-2008, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
-=======
  * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
->>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/optimizer/paths.h
@@ -131,14 +127,11 @@ extern void add_paths_to_join_relation(PlannerInfo *root, RelOptInfo *joinrel,
 extern void join_search_one_level(PlannerInfo *root, int level);
 extern RelOptInfo *make_join_rel(PlannerInfo *root,
 								 RelOptInfo *rel1, RelOptInfo *rel2);
-<<<<<<< HEAD
-extern RelOptInfo *make_join_relation(PlannerInfo *root, 
+extern RelOptInfo *make_join_relation(PlannerInfo *root,
 										  RelOptInfo *rel1, RelOptInfo *rel2);
-=======
 extern Relids add_outer_joins_to_relids(PlannerInfo *root, Relids input_relids,
 										SpecialJoinInfo *sjinfo,
 										List **pushed_down_joins);
->>>>>>> REL_16_9
 extern bool have_join_order_restriction(PlannerInfo *root,
 										RelOptInfo *rel1, RelOptInfo *rel2);
 extern bool have_dangerous_phv(PlannerInfo *root,
@@ -297,20 +290,17 @@ cdb_pull_up_eclass(PlannerInfo    *root,
 extern List *make_pathkeys_for_sortclauses(PlannerInfo *root,
 										   List *sortclauses,
 										   List *tlist);
-<<<<<<< HEAD
 extern void make_distribution_exprs_for_groupclause(PlannerInfo *root,
 													List *groupclause, List *tlist,
 													List **partition_dist_pathkeys,
 													List **partition_dist_exprs,
 													List **partition_dist_opfamilies,
 													List **partition_dist_sortrefs);
-=======
 extern List *make_pathkeys_for_sortclauses_extended(PlannerInfo *root,
 													List **sortclauses,
 													List *tlist,
 													bool remove_redundant,
 													bool *sortable);
->>>>>>> REL_16_9
 extern void initialize_mergeclause_eclasses(PlannerInfo *root,
 											RestrictInfo *restrictinfo);
 extern void update_mergeclause_eclasses(PlannerInfo *root,

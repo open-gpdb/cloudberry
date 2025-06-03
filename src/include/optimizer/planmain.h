@@ -4,13 +4,9 @@
  *	  prototypes for various files in optimizer/plan
  *
  *
-<<<<<<< HEAD
  * Portions Copyright (c) 2005-2009, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
-=======
  * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
->>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/optimizer/planmain.h
@@ -24,13 +20,8 @@
 #include "nodes/plannodes.h"
 
 /* GUC parameters */
-<<<<<<< HEAD
 #define DEFAULT_CURSOR_TUPLE_FRACTION 1.0 /* assume all rows will be fetched */
 extern double cursor_tuple_fraction;
-=======
-#define DEFAULT_CURSOR_TUPLE_FRACTION 0.1
-extern PGDLLIMPORT double cursor_tuple_fraction;
->>>>>>> REL_16_9
 
 /* query_planner callback to compute query_pathkeys */
 typedef void (*query_pathkeys_callback) (PlannerInfo *root, void *extra);
@@ -121,15 +112,11 @@ extern void add_base_rels_to_query(PlannerInfo *root, Node *jtnode);
 extern void add_other_rels_to_query(PlannerInfo *root);
 extern void build_base_rel_tlists(PlannerInfo *root, List *final_tlist);
 extern void add_vars_to_targetlist(PlannerInfo *root, List *vars,
-<<<<<<< HEAD
 								   Relids where_needed, bool create_new_ph);
 extern void add_vars_to_targetlist_x(PlannerInfo *root, List *vars,
 									 Relids where_needed, bool create_new_ph,
 									 bool force);
 extern void setup_aggregate_pushdown(PlannerInfo *root);
-=======
-								   Relids where_needed);
->>>>>>> REL_16_9
 extern void find_lateral_references(PlannerInfo *root);
 extern void create_lateral_join_info(PlannerInfo *root);
 extern List *deconstruct_jointree(PlannerInfo *root);

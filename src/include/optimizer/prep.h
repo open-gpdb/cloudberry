@@ -4,13 +4,9 @@
  *	  prototypes for files in optimizer/prep/
  *
  *
-<<<<<<< HEAD
  * Portions Copyright (c) 2006-2008, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
-=======
  * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
->>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/optimizer/prep.h
@@ -54,14 +50,10 @@ extern PlanRowMark *get_plan_rowmark(List *rowmarks, Index rtindex);
  * prototypes for prepagg.c
  */
 extern void get_agg_clause_costs(PlannerInfo *root, AggSplit aggsplit,
-<<<<<<< HEAD
-								 AggClauseCosts *agg_costs);
+								 AggClauseCosts *costs);
 extern void get_agg_clause_costs_multi_stage(PlannerInfo *root, PathTarget* partially_grouped_target, AggSplit aggsplit, AggClauseCosts *costs);
 extern void compute_agg_clause_costs(PlannerInfo *root, AggSplit aggsplit,
 								 AggClauseCosts *agg_costs);
-=======
-								 AggClauseCosts *costs);
->>>>>>> REL_16_9
 extern void preprocess_aggrefs(PlannerInfo *root, Node *clause);
 
 /*

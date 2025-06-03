@@ -4,13 +4,9 @@
  *	  prototypes for pathnode.c, relnode.c.
  *
  *
-<<<<<<< HEAD
  * Portions Copyright (c) 2005-2008, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
-=======
  * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
->>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/optimizer/pathnode.h
@@ -105,10 +101,6 @@ extern MemoizePath *create_memoize_path(PlannerInfo *root,
 										bool singlerow,
 										bool binary_mode,
 										double calls);
-<<<<<<< HEAD
-
-=======
->>>>>>> REL_16_9
 extern UniquePath *create_unique_path(PlannerInfo *root, RelOptInfo *rel,
 									  Path *subpath, SpecialJoinInfo *sjinfo);
 extern UniquePath *create_unique_rowid_path(PlannerInfo *root,
@@ -127,15 +119,11 @@ extern GatherMergePath *create_gather_merge_path(PlannerInfo *root,
 												 Relids required_outer,
 												 double *rows);
 extern SubqueryScanPath *create_subqueryscan_path(PlannerInfo *root,
-<<<<<<< HEAD
-												  RelOptInfo *rel, Path *subpath,
-												  List *pathkeys, CdbPathLocus locus,
-=======
 												  RelOptInfo *rel,
 												  Path *subpath,
 												  bool trivial_pathtarget,
 												  List *pathkeys,
->>>>>>> REL_16_9
+												  CdbPathLocus locus
 												  Relids required_outer);
 extern Path *create_functionscan_path(PlannerInfo *root, RelOptInfo *rel,
 									  RangeTblEntry *rte,
@@ -348,13 +336,8 @@ extern ModifyTablePath *create_modifytable_path(PlannerInfo *root,
 												List *updateColnosLists,
 												List *withCheckOptionLists, List *returningLists,
 												List *rowMarks, OnConflictExpr *onconflict,
-<<<<<<< HEAD
-												int epqParam);
-extern Path *create_limit_path(PlannerInfo *root, RelOptInfo *rel,
-=======
 												List *mergeActionLists, int epqParam);
-extern LimitPath *create_limit_path(PlannerInfo *root, RelOptInfo *rel,
->>>>>>> REL_16_9
+extern Path *create_limit_path(PlannerInfo *root, RelOptInfo *rel,
 									Path *subpath,
 									Node *limitOffset, Node *limitCount,
 									LimitOption limitOption,
@@ -384,7 +367,7 @@ extern RelOptInfo *build_join_rel(PlannerInfo *root,
 								  RelOptInfo *outer_rel,
 								  RelOptInfo *inner_rel,
 								  SpecialJoinInfo *sjinfo,
-<<<<<<< HEAD
+								  List *pushed_down_joins,
 								  List **restrictlist_ptr,
 								  RelAggInfo *agg_info);
 extern RelOptInfo *build_base_grouped_rel(PlannerInfo *root, RelOptInfo *rel,
@@ -396,10 +379,6 @@ extern RelAggInfo *get_grouped_rel_agg_info(PlannerInfo *root,
 											RelOptInfo *joinrel_plain);
 extern RelOptInfo *find_grouped_rel(PlannerInfo *root, Relids relids);
 extern RelOptInfo *get_grouped_rel(PlannerInfo *root, RelOptInfo *rel);
-=======
-								  List *pushed_down_joins,
-								  List **restrictlist_ptr);
->>>>>>> REL_16_9
 extern Relids min_join_parameterization(PlannerInfo *root,
 										Relids joinrelids,
 										RelOptInfo *outer_rel,
