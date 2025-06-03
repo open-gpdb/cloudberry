@@ -13,7 +13,6 @@
 #ifndef SPCCACHE_H
 #define SPCCACHE_H
 
-<<<<<<< HEAD
 #include "commands/tablespace.h"
 
 typedef struct
@@ -22,10 +21,7 @@ typedef struct
 	TableSpaceOpts *opts;		/* options, or NULL if none */
 } TableSpaceCacheEntry;
 
-void		get_tablespace_page_costs(Oid spcid, float8 *spc_random_page_cost,
-=======
 extern void get_tablespace_page_costs(Oid spcid, float8 *spc_random_page_cost,
->>>>>>> REL_16_9
 									  float8 *spc_seq_page_cost);
 extern int	get_tablespace_io_concurrency(Oid spcid);
 extern int	get_tablespace_maintenance_io_concurrency(Oid spcid);

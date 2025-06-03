@@ -38,11 +38,8 @@ typedef enum TimeoutId
 	IDLE_SESSION_TIMEOUT,
 	IDLE_STATS_UPDATE_TIMEOUT,
 	CLIENT_CONNECTION_CHECK_TIMEOUT,
-<<<<<<< HEAD
 	GP_PARALLEL_RETRIEVE_CURSOR_CHECK_TIMEOUT,
-=======
 	STARTUP_PROGRESS_TIMEOUT,
->>>>>>> REL_16_9
 	/* First user-definable timeout reason */
 	USER_TIMEOUT,
 	/* Maximum number of timeout reasons */

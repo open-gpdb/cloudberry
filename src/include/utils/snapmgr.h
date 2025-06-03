@@ -97,11 +97,7 @@ extern PGDLLIMPORT SnapshotData CatalogSnapshotData;
 	((snapshot)->snapshot_type == SNAPSHOT_MVCC || \
 	 (snapshot)->snapshot_type == SNAPSHOT_HISTORIC_MVCC)
 
-<<<<<<< HEAD
-
-=======
 #ifndef FRONTEND
->>>>>>> REL_16_9
 static inline bool
 OldSnapshotThresholdActive(void)
 {

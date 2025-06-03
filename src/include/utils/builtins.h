@@ -4,13 +4,9 @@
  *	  Declarations for operations on built-in types.
  *
  *
-<<<<<<< HEAD
  * Portions Copyright (c) 2005-2010, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
-=======
  * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
->>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/utils/builtins.h
@@ -40,11 +36,8 @@ extern int	errdomainconstraint(Oid datatypeOid, const char *conname);
 /* encode.c */
 extern uint64 hex_encode(const char *src, size_t len, char *dst);
 extern uint64 hex_decode(const char *src, size_t len, char *dst);
-<<<<<<< HEAD
-=======
 extern uint64 hex_decode_safe(const char *src, size_t len, char *dst,
 							  Node *escontext);
->>>>>>> REL_16_9
 
 /* int.c */
 extern int2vector *buildint2vector(const int16 *int2s, int n);
@@ -87,13 +80,9 @@ extern char *regexp_fixed_prefix(text *text_re, bool case_insensitive,
 								 Oid collation, bool *exact);
 
 /* ruleutils.c */
-<<<<<<< HEAD
-extern bool quote_all_identifiers;
+extern PGDLLIMPORT bool quote_all_identifiers;
 extern char *pg_get_constraintexpr_string(Oid constraintId);
 
-=======
-extern PGDLLIMPORT bool quote_all_identifiers;
->>>>>>> REL_16_9
 extern const char *quote_identifier(const char *ident);
 extern char *quote_qualified_identifier(const char *qualifier,
 										const char *ident);

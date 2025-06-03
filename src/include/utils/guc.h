@@ -3,13 +3,9 @@
  *
  * External declarations pertaining to Grand Unified Configuration.
  *
-<<<<<<< HEAD
  * Portions Copyright (c) 2007-2010, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
- * Copyright (c) 2000-2021, PostgreSQL Global Development Group
-=======
  * Copyright (c) 2000-2023, PostgreSQL Global Development Group
->>>>>>> REL_16_9
  * Written by Peter Eisentraut <peter_e@gmx.net>.
  *
  * src/include/utils/guc.h
@@ -265,7 +261,6 @@ extern List    *gp_guc_list_for_no_plan;
 extern List *gp_guc_restore_list;
 extern bool gp_guc_need_restore;
 
-<<<<<<< HEAD
 /* GUC vars that are actually declared in guc.c, rather than elsewhere */
 extern bool Debug_print_plan;
 extern bool Debug_print_parse;
@@ -368,19 +363,6 @@ extern bool log_executor_stats;
 extern bool log_statement_stats;
 extern bool log_dispatch_stats;
 extern bool log_btree_build_stats;
-=======
-/* GUC vars that are actually defined in guc_tables.c, rather than elsewhere */
-extern PGDLLIMPORT bool Debug_print_plan;
-extern PGDLLIMPORT bool Debug_print_parse;
-extern PGDLLIMPORT bool Debug_print_rewritten;
-extern PGDLLIMPORT bool Debug_pretty_print;
-
-extern PGDLLIMPORT bool log_parser_stats;
-extern PGDLLIMPORT bool log_planner_stats;
-extern PGDLLIMPORT bool log_executor_stats;
-extern PGDLLIMPORT bool log_statement_stats;
-extern PGDLLIMPORT bool log_btree_build_stats;
->>>>>>> REL_16_9
 
 extern PGDLLIMPORT bool check_function_bodies;
 extern PGDLLIMPORT bool session_auth_is_superuser;
@@ -796,7 +778,6 @@ extern int	set_config_option_ext(const char *name, const char *value,
 extern void AlterSystemSetConfigFile(AlterSystemStmt *altersysstmt);
 extern char *GetConfigOptionByName(const char *name, const char **varname,
 								   bool missing_ok);
-<<<<<<< HEAD
 extern void GetConfigOptionByNum(int varnum, const char **values, bool *noshow);
 extern int	GetNumConfigOptions(void);
 
@@ -807,8 +788,6 @@ extern TupleDesc GetPGVariableResultDesc(const char *name);
 
 extern void ExecSetVariableStmt(VariableSetStmt *stmt, bool isTopLevel);
 extern char *ExtractSetVariableArgs(VariableSetStmt *stmt);
-=======
->>>>>>> REL_16_9
 
 extern void ProcessGUCArray(ArrayType *array,
 							GucContext context, GucSource source, GucAction action);
@@ -816,7 +795,6 @@ extern ArrayType *GUCArrayAdd(ArrayType *array, const char *name, const char *va
 extern ArrayType *GUCArrayDelete(ArrayType *array, const char *name);
 extern ArrayType *GUCArrayReset(ArrayType *array);
 
-<<<<<<< HEAD
 extern void pg_timezone_abbrev_initialize(void);
 
 extern List *gp_guc_list_show(GucSource excluding, List *guclist);
@@ -825,12 +803,10 @@ extern struct config_generic *find_option(const char *name,
 				bool create_placeholders, bool skip_errors, int elevel);
 
 extern void set_gp_replication_config(const char *name, const char *value);
-=======
 extern void *guc_malloc(int elevel, size_t size);
 extern pg_nodiscard void *guc_realloc(int elevel, void *old, size_t size);
 extern char *guc_strdup(int elevel, const char *src);
 extern void guc_free(void *ptr);
->>>>>>> REL_16_9
 
 #ifdef EXEC_BACKEND
 extern void write_nondefault_variables(GucContext context);
@@ -869,7 +845,6 @@ extern void GUC_check_errcode(int sqlerrcode);
 	pre_format_elog_string(errno, TEXTDOMAIN), \
 	GUC_check_errhint_string = format_elog_string
 
-<<<<<<< HEAD
 
 /*
  * The following functions are not in guc.c, but are declared here to avoid
@@ -905,6 +880,4 @@ extern bool gpvars_check_rg_query_fixed_mem(int *newval, void **extra, GucSource
 extern int guc_name_compare(const char *namea, const char *nameb);
 extern void DispatchSyncPGVariable(struct config_generic * gconfig);
 
-=======
->>>>>>> REL_16_9
 #endif							/* GUC_H */

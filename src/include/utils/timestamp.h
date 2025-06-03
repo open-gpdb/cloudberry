@@ -19,7 +19,6 @@
 
 
 /*
-<<<<<<< HEAD
  * We allow numeric timezone offsets up to 15:59:59 either way from Greenwich.
  * Currently, the record holders for wackiest offsets in actual use are zones
  * Asia/Manila, at -15:56:00 until 1844, and America/Metlakatla, at +15:13:42
@@ -30,10 +29,7 @@
 #define TZDISP_LIMIT		((MAX_TZDISP_HOUR + 1) * SECS_PER_HOUR)
 
 /*
- * Macros for fmgr-callable functions.
-=======
  * Functions for fmgr-callable functions.
->>>>>>> REL_16_9
  *
  * For Timestamp, we make use of the same support routines as for int64.
  * Therefore Timestamp is pass-by-reference if and only if int64 is!

@@ -242,7 +242,6 @@ extern void RemoveRoleFromObjectACL(Oid roleid, Oid classid, Oid objid);
 
 extern AclMode pg_class_aclmask(Oid table_oid, Oid roleid,
 								AclMode mask, AclMaskHow how);
-<<<<<<< HEAD
 extern AclMode pg_class_aclmask_ext(Oid table_oid, Oid roleid,
 									AclMode mask, AclMaskHow how,
 									bool *is_missing);
@@ -268,8 +267,6 @@ extern AclMode pg_extprotocol_aclmask(Oid ptc_oid, Oid roleid,
 									  AclMode mask, AclMaskHow how);
 extern AclMode pg_type_aclmask(Oid type_oid, Oid roleid,
 							   AclMode mask, AclMaskHow how);
-=======
->>>>>>> REL_16_9
 
 /* generic function */
 extern AclResult object_aclcheck(Oid classid, Oid objectid, Oid roleid, AclMode mode);
@@ -289,7 +286,6 @@ extern AclResult pg_parameter_aclcheck(const char *name, Oid roleid,
 									   AclMode mode);
 extern AclResult pg_largeobject_aclcheck_snapshot(Oid lobj_oid, Oid roleid,
 												  AclMode mode, Snapshot snapshot);
-<<<<<<< HEAD
 extern AclResult pg_namespace_aclcheck(Oid nsp_oid, Oid roleid, AclMode mode);
 extern AclResult pg_tablespace_aclcheck(Oid spc_oid, Oid roleid, AclMode mode);
 extern AclResult pg_foreign_data_wrapper_aclcheck(Oid fdw_oid, Oid roleid, AclMode mode);
@@ -297,8 +293,6 @@ extern AclResult pg_foreign_server_aclcheck(Oid srv_oid, Oid roleid, AclMode mod
 extern AclResult gp_storage_server_aclcheck(Oid srv_oid, Oid roleid, AclMode mode);
 extern AclResult pg_extprotocol_aclcheck(Oid ptc_oid, Oid roleid, AclMode mode);
 extern AclResult pg_type_aclcheck(Oid type_oid, Oid roleid, AclMode mode);
-=======
->>>>>>> REL_16_9
 
 extern void aclcheck_error(AclResult aclerr, ObjectType objtype,
 						   const char *objectname);
@@ -313,7 +307,6 @@ extern void removeExtObjInitPriv(Oid objoid, Oid classoid);
 
 
 /* ownercheck routines just return true (owner) or false (not) */
-<<<<<<< HEAD
 extern bool pg_extension_ownercheck(Oid ext_oid, Oid roleid);
 extern bool pg_class_ownercheck(Oid class_oid, Oid roleid);
 extern bool pg_type_ownercheck(Oid type_oid, Oid roleid);
@@ -339,9 +332,7 @@ extern bool pg_extension_ownercheck(Oid ext_oid, Oid roleid);
 extern bool pg_publication_ownercheck(Oid pub_oid, Oid roleid);
 extern bool pg_subscription_ownercheck(Oid sub_oid, Oid roleid);
 extern bool pg_statistics_object_ownercheck(Oid stat_oid, Oid roleid);
-=======
 extern bool object_ownercheck(Oid classid, Oid objectid, Oid roleid);
->>>>>>> REL_16_9
 extern bool has_createrole_privilege(Oid roleid);
 extern bool pg_extprotocol_ownercheck(Oid ptc_oid, Oid roleid);
 extern bool has_bypassrls_privilege(Oid roleid);

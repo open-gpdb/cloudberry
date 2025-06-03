@@ -4,13 +4,9 @@
  *	  POSTGRES relation descriptor (a/k/a relcache entry) definitions.
  *
  *
-<<<<<<< HEAD
  * Portions Copyright (c) 2005-2009, Greenplum inc.
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
-=======
  * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
->>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/utils/rel.h
@@ -23,12 +19,9 @@
 #include "fmgr.h"
 #include "access/tupdesc.h"
 #include "access/xlog.h"
-<<<<<<< HEAD
+#include "catalog/catalog.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_appendonly.h"
-=======
-#include "catalog/catalog.h"
->>>>>>> REL_16_9
 #include "catalog/pg_class.h"
 #include "catalog/pg_index.h"
 #include "catalog/pg_publication.h"
@@ -36,13 +29,10 @@
 #include "partitioning/partdefs.h"
 #include "rewrite/prs2lock.h"
 #include "storage/block.h"
-<<<<<<< HEAD
 #include "storage/relfilenode.h"
-#include "utils/fmgroids.h"
-=======
 #include "storage/relfilelocator.h"
 #include "storage/smgr.h"
->>>>>>> REL_16_9
+#include "utils/fmgroids.h"
 #include "utils/relcache.h"
 #include "utils/reltrigger.h"
 
@@ -703,16 +693,6 @@ typedef struct ViewOptions
  * each time you need to access the SMgrRelation.  It's quite cheap in
  * comparison to whatever an smgr function is going to do.
  */
-<<<<<<< HEAD
-#define RelationOpenSmgr(relation) \
-	do { \
-		if ((relation)->rd_smgr == NULL) \
-			smgrsetowner(&((relation)->rd_smgr), \
-						 smgropen((relation)->rd_node, \
-								  (relation)->rd_backend, \
-								  RelationStorageIsAO(relation)?SMGR_AO:SMGR_MD, relation)); \
-	} while (0)
-=======
 static inline SMgrRelation
 RelationGetSmgr(Relation rel)
 {
@@ -720,7 +700,6 @@ RelationGetSmgr(Relation rel)
 		smgrsetowner(&(rel->rd_smgr), smgropen(rel->rd_locator, rel->rd_backend));
 	return rel->rd_smgr;
 }
->>>>>>> REL_16_9
 
 /*
  * RelationCloseSmgr

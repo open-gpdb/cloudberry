@@ -5,13 +5,9 @@
  *
  * See src/backend/utils/misc/README for design notes.
  *
-<<<<<<< HEAD
  * Portions Copyright (c) 2006-2008, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
-=======
  * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
->>>>>>> REL_16_9
  *
  *	  src/include/utils/guc_tables.h
  *
@@ -102,12 +98,9 @@ enum config_group
 
 	STATS_ANALYZE,                      /*CDB*/
 	STATS_MONITORING,
-<<<<<<< HEAD
 	STATS_COLLECTOR,
 	ENCRYPTION,
-=======
 	STATS_CUMULATIVE,
->>>>>>> REL_16_9
 	AUTOVACUUM,
 
 	CLIENT_CONN_STATEMENT,
@@ -367,12 +360,8 @@ extern char *ShowGUCOption(struct config_generic *record, bool use_units);
 extern bool ConfigOptionIsVisible(struct config_generic *conf);
 
 /* get the current set of variables */
-<<<<<<< HEAD
-extern struct config_generic **get_guc_variables(void);
-extern int get_num_guc_variables(void);
-=======
 extern struct config_generic **get_guc_variables(int *num_vars);
->>>>>>> REL_16_9
+extern int get_num_guc_variables(void);
 
 extern void build_guc_variables(void);
 
@@ -380,7 +369,6 @@ extern void build_guc_variables(void);
 extern const char *config_enum_lookup_by_value(struct config_enum *record, int val);
 extern bool config_enum_lookup_by_name(struct config_enum *record,
 									   const char *value, int *retval);
-<<<<<<< HEAD
 extern struct config_generic **get_explain_guc_options(int *num, bool verbose, bool settings);
 
 extern bool parse_int(const char *value, int *result, int flags, const char **hintmsg);
@@ -396,11 +384,9 @@ extern struct config_string ConfigureNamesString_gp[];
 extern struct config_enum ConfigureNamesEnum_gp[];
 
 extern void gpdb_assign_sync_flag(struct config_generic **guc_variables, int size, bool predefine);
-=======
 extern char *config_enum_get_options(struct config_enum *record,
 									 const char *prefix,
 									 const char *suffix,
 									 const char *separator);
->>>>>>> REL_16_9
 
 #endif							/* GUC_TABLES_H */

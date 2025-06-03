@@ -420,18 +420,11 @@ extern void deconstruct_array_builtin(ArrayType *array,
 									  Datum **elemsp, bool **nullsp, int *nelemsp);
 extern bool array_contains_nulls(ArrayType *array);
 
-<<<<<<< HEAD
-extern ArrayBuildState *
-initArrayResult(Oid element_type, MemoryContext rcontext, bool subcontext);
-extern ArrayBuildState *
-initArrayResultWithSize(Oid element_type, MemoryContext rcontext, bool subcontext, int initsize);
-=======
 extern ArrayBuildState *initArrayResult(Oid element_type,
 										MemoryContext rcontext, bool subcontext);
 extern ArrayBuildState *initArrayResultWithSize(Oid element_type,
 												MemoryContext rcontext,
 												bool subcontext, int initsize);
->>>>>>> REL_16_9
 extern ArrayBuildState *accumArrayResult(ArrayBuildState *astate,
 										 Datum dvalue, bool disnull,
 										 Oid element_type,

@@ -7,13 +7,9 @@
  *	  of the API of the memory management subsystem.
  *
  *
-<<<<<<< HEAD
  * Portions Copyright (c) 2007-2008, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
-=======
  * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
->>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/utils/memutils.h
@@ -142,7 +138,6 @@ extern void MemoryContextAllowInCriticalSection(MemoryContext context,
 #ifdef MEMORY_CONTEXT_CHECKING
 extern void MemoryContextCheck(MemoryContext context);
 #endif
-<<<<<<< HEAD
 extern bool MemoryContextContains(MemoryContext context, void *pointer);
 extern bool MemoryContextContainsGenericAllocation(MemoryContext context, void *pointer);
 
@@ -151,8 +146,6 @@ extern void MemoryContextError(int errorcode, MemoryContext context,
                                const char *fmt, ...)
                               pg_attribute_noreturn()
                               pg_attribute_printf(5, 6);
-=======
->>>>>>> REL_16_9
 
 /* Handy macro for copying and assigning context ID ... but note double eval */
 #define MemoryContextCopyAndSetIdentifier(cxt, id) \

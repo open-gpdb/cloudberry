@@ -4,13 +4,9 @@
  *	  POSTGRES error reporting/logging definitions.
  *
  *
-<<<<<<< HEAD
  * Portions Copyright (c) 2006-2009, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
-=======
  * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
->>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/utils/elog.h
@@ -442,20 +438,12 @@ extern PGDLLIMPORT ErrorContextCallback *error_context_stack;
  */
 #define PG_TRY(...)  \
 	do { \
-<<<<<<< HEAD
-		sigjmp_buf *_save_exception_stack = PG_exception_stack; \
-		ErrorContextCallback *_save_context_stack = error_context_stack; \
-		sigjmp_buf _local_sigjmp_buf; \
-		bool _do_rethrow = false; \
-		int _saved_dispatch_nest_level pg_attribute_unused() = dispatch_nest_level; \
-		if (sigsetjmp(_local_sigjmp_buf, 0) == 0) \
-=======
 		sigjmp_buf *_save_exception_stack##__VA_ARGS__ = PG_exception_stack; \
 		ErrorContextCallback *_save_context_stack##__VA_ARGS__ = error_context_stack; \
 		sigjmp_buf _local_sigjmp_buf##__VA_ARGS__; \
 		bool _do_rethrow##__VA_ARGS__ = false; \
+		int _saved_dispatch_nest_level pg_attribute_unused() = dispatch_nest_level; \
 		if (sigsetjmp(_local_sigjmp_buf##__VA_ARGS__, 0) == 0) \
->>>>>>> REL_16_9
 		{ \
 			PG_exception_stack = &_local_sigjmp_buf##__VA_ARGS__
 
@@ -463,14 +451,9 @@ extern PGDLLIMPORT ErrorContextCallback *error_context_stack;
 		} \
 		else \
 		{ \
-<<<<<<< HEAD
-            dispatch_nest_level = _saved_dispatch_nest_level; \
-			PG_exception_stack = _save_exception_stack; \
-			error_context_stack = _save_context_stack
-=======
+			dispatch_nest_level = _saved_dispatch_nest_level; \
 			PG_exception_stack = _save_exception_stack##__VA_ARGS__; \
 			error_context_stack = _save_context_stack##__VA_ARGS__
->>>>>>> REL_16_9
 
 #define PG_FINALLY(...) \
 		} \
@@ -677,7 +660,6 @@ extern void write_jsonlog(ErrorData *edata);
  */
 extern void write_stderr(const char *fmt,...) pg_attribute_printf(1, 2);
 
-<<<<<<< HEAD
 extern void write_message_to_server_log(int elevel,
 										int sqlerrcode,
 										const char *message,
@@ -709,12 +691,11 @@ extern bool gp_log_stack_trace_lines;   /* session GUC, controls line info in st
 
 extern const char *SegvBusIllName(int signal);
 extern void StandardHandlerForSigillSigsegvSigbus_OnMainThread(char * processName, SIGNAL_ARGS);
-=======
+
 /*
  * Write a message to STDERR using only async-signal-safe functions.  This can
  * be used to safely emit a message from a signal handler.
  */
 extern void write_stderr_signal_safe(const char *fmt);
->>>>>>> REL_16_9
 
 #endif							/* ELOG_H */
