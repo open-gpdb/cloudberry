@@ -426,12 +426,7 @@ tuple_lock_retry:
 							 errmsg("tuple to be locked was already moved to another partition or segment due to concurrent update")));
 
 				tuple->t_self = *tid;
-<<<<<<< HEAD
-				if (heap_fetch_extended(relation, &SnapshotDirty, tuple,
-										&buffer, true))
-=======
 				if (heap_fetch(relation, &SnapshotDirty, tuple, &buffer, true))
->>>>>>> REL_16_9
 				{
 					/*
 					 * If xmin isn't what we're expecting, the slot must have
@@ -621,11 +616,7 @@ heapam_relation_set_new_filelocator(Relation rel,
 	 */
 	*minmulti = GetOldestMultiXactId();
 
-<<<<<<< HEAD
-	srel = RelationCreateStorage(*newrnode, persistence, SMGR_MD, rel);
-=======
-	srel = RelationCreateStorage(*newrlocator, persistence, true);
->>>>>>> REL_16_9
+	srel = RelationCreateStorage(*newrlocator, persistence, true, SMGR_MD, rel);
 
 	/*
 	 * If required, set up an init fork for an unlogged table so that it can
@@ -646,11 +637,7 @@ heapam_relation_set_new_filelocator(Relation rel,
 			   rel->rd_rel->relkind == RELKIND_AOVISIMAP ||
 			   rel->rd_rel->relkind == RELKIND_AOBLOCKDIR);
 		smgrcreate(srel, INIT_FORKNUM, false);
-<<<<<<< HEAD
-		log_smgrcreate(newrnode, INIT_FORKNUM, SMGR_MD);
-=======
-		log_smgrcreate(newrlocator, INIT_FORKNUM);
->>>>>>> REL_16_9
+		log_smgrcreate(newrlocator, INIT_FORKNUM, SMGR_MD);
 		smgrimmedsync(srel, INIT_FORKNUM);
 	}
 
@@ -668,13 +655,7 @@ heapam_relation_copy_data(Relation rel, const RelFileLocator *newrlocator)
 {
 	SMgrRelation dstrel;
 
-<<<<<<< HEAD
-	dstrel = smgropen(*newrnode, rel->rd_backend, SMGR_MD, rel);
-
-	RelationOpenSmgr(rel);
-=======
-	dstrel = smgropen(*newrlocator, rel->rd_backend);
->>>>>>> REL_16_9
+	dstrel = smgropen(*newrlocator, rel->rd_backend, SMGR_MD, rel);
 
 	/*
 	 * Since we copy the file directly without looking at the shared buffers,
@@ -691,11 +672,7 @@ heapam_relation_copy_data(Relation rel, const RelFileLocator *newrlocator)
 	 * NOTE: any conflict in relfilenumber value will be caught in
 	 * RelationCreateStorage().
 	 */
-<<<<<<< HEAD
-	RelationCreateStorage(*newrnode, rel->rd_rel->relpersistence, SMGR_MD, rel);
-=======
-	RelationCreateStorage(*newrlocator, rel->rd_rel->relpersistence, true);
->>>>>>> REL_16_9
+	RelationCreateStorage(*newrlocator, rel->rd_rel->relpersistence, true, SMGR_MD, rel);
 
 	/* copy main fork */
 	RelationCopyStorage(RelationGetSmgr(rel), dstrel, MAIN_FORKNUM,
@@ -716,13 +693,8 @@ heapam_relation_copy_data(Relation rel, const RelFileLocator *newrlocator)
 			if (RelationIsPermanent(rel) ||
 				(rel->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED &&
 				 forkNum == INIT_FORKNUM))
-<<<<<<< HEAD
-				log_smgrcreate(newrnode, forkNum, SMGR_MD);
-			RelationCopyStorage(rel->rd_smgr, dstrel, forkNum,
-=======
-				log_smgrcreate(newrlocator, forkNum);
+				log_smgrcreate(newrlocator, forkNum, SMGR_MD);
 			RelationCopyStorage(RelationGetSmgr(rel), dstrel, forkNum,
->>>>>>> REL_16_9
 								rel->rd_rel->relpersistence);
 		}
 	}
@@ -2296,13 +2268,8 @@ heapam_scan_bitmap_next_block(TableScanDesc scan,
 			loctup.t_data = (HeapTupleHeader) PageGetItem(page, lp);
 			loctup.t_len = ItemIdGetLength(lp);
 			loctup.t_tableOid = scan->rs_rd->rd_id;
-<<<<<<< HEAD
-			ItemPointerSet(&loctup.t_self, page, offnum);
-			valid = HeapTupleSatisfiesVisibility(scan->rs_rd, &loctup, snapshot, buffer);
-=======
 			ItemPointerSet(&loctup.t_self, block, offnum);
-			valid = HeapTupleSatisfiesVisibility(&loctup, snapshot, buffer);
->>>>>>> REL_16_9
+			valid = HeapTupleSatisfiesVisibility(scan->rs_rd, &loctup, snapshot, buffer);
 			if (valid)
 			{
 				hscan->rs_vistuples[ntup++] = offnum;

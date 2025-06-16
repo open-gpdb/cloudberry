@@ -797,17 +797,9 @@ revmap_physical_extend(BrinRevmap *revmap, LogicalPageNum targetLogicalPageNum)
 	}
 	else
 	{
-<<<<<<< HEAD
-		if (needLock)
-			LockRelationForExtension(irel, ExclusiveLock);
-
-		buf = ReadBuffer(irel, P_NEW);
-		if (!isAO && BufferGetBlockNumber(buf) != mapBlk)
-=======
 		buf = ExtendBufferedRel(BMR_REL(irel), MAIN_FORKNUM, NULL,
 								EB_LOCK_FIRST);
-		if (BufferGetBlockNumber(buf) != mapBlk)
->>>>>>> REL_16_9
+		if (!isAO && BufferGetBlockNumber(buf) != mapBlk)
 		{
 			/*
 			 * Very rare corner case: somebody extended the relation
@@ -820,10 +812,6 @@ revmap_physical_extend(BrinRevmap *revmap, LogicalPageNum targetLogicalPageNum)
 			return;
 		}
 		page = BufferGetPage(buf);
-<<<<<<< HEAD
-
-		if (needLock)
-			UnlockRelationForExtension(irel, ExclusiveLock);
 
 		if (isAO)
 		{
@@ -854,8 +842,6 @@ revmap_physical_extend(BrinRevmap *revmap, LogicalPageNum targetLogicalPageNum)
 				Assert(revmap->rm_aoChainInfo[currSeq].lastLogicalPageNum == InvalidLogicalPageNum);
 			}
 		}
-=======
->>>>>>> REL_16_9
 	}
 
 	AssertImply(isAO, PageIsNew(page));

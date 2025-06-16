@@ -40,11 +40,8 @@
 #include "access/heapam_xlog.h"
 #include "access/htup_details.h"
 #include "access/multixact.h"
-<<<<<<< HEAD
 #include "access/nbtree.h"
 #include "access/parallel.h"
-=======
->>>>>>> REL_16_9
 #include "access/transam.h"
 #include "access/aosegfiles.h"
 #include "access/aocssegfiles.h"
@@ -296,7 +293,6 @@ static void dead_items_alloc(LVRelState *vacrel, int nworkers);
 static void dead_items_cleanup(LVRelState *vacrel);
 static bool heap_page_is_all_visible(LVRelState *vacrel, Buffer buf,
 									 TransactionId *visibility_cutoff_xid, bool *all_frozen);
-<<<<<<< HEAD
 #if 0
 static int	compute_parallel_vacuum_workers(LVRelState *vacrel,
 											int nrequested,
@@ -311,9 +307,7 @@ static LVParallelState *begin_parallel_vacuum(LVRelState *vacrel,
 static void end_parallel_vacuum(LVRelState *vacrel);
 static LVSharedIndStats *parallel_stats_for_idx(LVShared *lvshared, int getidx);
 static bool parallel_processing_is_safe(Relation indrel, LVShared *lvshared);
-=======
 static void update_relstats_all_indexes(LVRelState *vacrel);
->>>>>>> REL_16_9
 static void vacuum_error_callback(void *arg);
 static void update_vacuum_error_info(LVRelState *vacrel,
 									 LVSavedErrInfo *saved_vacrel,
@@ -369,7 +363,6 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 		}
 	}
 
-<<<<<<< HEAD
 	if (params->options & VACOPT_VERBOSE)
 		elevel = INFO;
 	else
@@ -395,11 +388,6 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 						  &OldestXmin, &FreezeLimit, &xidFullScanLimit,
 						  &MultiXactCutoff, &mxactFullScanLimit);
 
-=======
-	pgstat_progress_start_command(PROGRESS_COMMAND_VACUUM,
-								  RelationGetRelid(rel));
-
->>>>>>> REL_16_9
 	/*
 	 * Setup error traceback support for ereport() first.  The idea is to set
 	 * up an error context callback to display additional information on any
@@ -631,20 +619,6 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 	if (new_rel_allvisible > new_rel_pages)
 		new_rel_allvisible = new_rel_pages;
 
-<<<<<<< HEAD
-	new_frozen_xid = scanned_all_unfrozen ? FreezeLimit : InvalidTransactionId;
-	new_min_multi = scanned_all_unfrozen ? MultiXactCutoff : InvalidMultiXactId;
-
-	vac_update_relstats(rel,
-						new_rel_pages,
-						new_live_tuples,
-						new_rel_allvisible,
-						vacrel->nindexes > 0,
-						new_frozen_xid,
-						new_min_multi,
-						false,
-						true /* isvacuum */);
-=======
 	/*
 	 * Now actually update rel's pg_class entry.
 	 *
@@ -656,7 +630,6 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 						new_rel_allvisible, vacrel->nindexes > 0,
 						vacrel->NewRelfrozenXid, vacrel->NewRelminMxid,
 						&frozenxid_updated, &minmulti_updated, false);
->>>>>>> REL_16_9
 
 	/*
 	 * Report results to the cumulative stats system, too.

@@ -45,13 +45,9 @@
  * and we'd like to still refer to them via C struct offsets.
  *
  *
-<<<<<<< HEAD
  * Portions Copyright (c) 2006-2009, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
-=======
  * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
->>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -68,11 +64,8 @@
 #include "access/tupdesc_details.h"
 #include "common/hashfn.h"
 #include "executor/tuptable.h"
-<<<<<<< HEAD
 #include "foreign/foreign.h"
-=======
 #include "utils/datum.h"
->>>>>>> REL_16_9
 #include "utils/expandeddatum.h"
 #include "utils/hsearch.h"
 #include "utils/memutils.h"

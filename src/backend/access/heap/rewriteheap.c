@@ -691,13 +691,8 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
 			 * need for smgr to schedule an fsync for this write; we'll do it
 			 * ourselves in end_heap_rewrite.
 			 */
-<<<<<<< HEAD
-			RelationOpenSmgr(state->rs_new_rel);
-
 			PageEncryptInplace(page, MAIN_FORKNUM,
 							   state->rs_blockno);
-=======
->>>>>>> REL_16_9
 			PageSetChecksumInplace(page, state->rs_blockno);
 
 			smgrextend(RelationGetSmgr(state->rs_new_rel), MAIN_FORKNUM,

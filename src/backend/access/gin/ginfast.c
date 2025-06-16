@@ -286,10 +286,6 @@ ginHeapTupleFastInsert(GinState *ginstate, GinTupleCollector *collector)
 		memset(&sublist, 0, sizeof(GinMetaPageData));
 		makeSublist(index, collector->tuples, collector->ntuples, &sublist);
 
-<<<<<<< HEAD
-
-=======
->>>>>>> REL_16_9
 		/*
 		 * metapage was unlocked, see above
 		 */

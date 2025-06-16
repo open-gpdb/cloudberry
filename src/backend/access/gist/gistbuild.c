@@ -460,31 +460,18 @@ gist_indexsortbuild(GISTBuildState *state)
 	gist_indexsortbuild_flush_ready_pages(state);
 
 	/* Write out the root */
-<<<<<<< HEAD
-	RelationOpenSmgr(state->indexrel);
-	PageSetLSN(pagestate->page, GistBuildLSN);
-	PageEncryptInplace(pagestate->page, MAIN_FORKNUM,
-					   GIST_ROOT_BLKNO);
-	PageSetChecksumInplace(pagestate->page, GIST_ROOT_BLKNO);
-	smgrwrite(state->indexrel->rd_smgr, MAIN_FORKNUM, GIST_ROOT_BLKNO,
-			  pagestate->page, true);
-=======
 	PageSetLSN(levelstate->pages[0], GistBuildLSN);
+	PageEncryptInplace(levelstate->pages[0], MAIN_FORKNUM,
+					   GIST_ROOT_BLKNO);
 	PageSetChecksumInplace(levelstate->pages[0], GIST_ROOT_BLKNO);
 	smgrwrite(RelationGetSmgr(state->indexrel), MAIN_FORKNUM, GIST_ROOT_BLKNO,
 			  levelstate->pages[0], true);
->>>>>>> REL_16_9
 	if (RelationNeedsWAL(state->indexrel))
 		log_newpage(&state->indexrel->rd_locator, MAIN_FORKNUM, GIST_ROOT_BLKNO,
 					levelstate->pages[0], true);
 
-<<<<<<< HEAD
-	pfree(pagestate->page);
-	pfree(pagestate);
-=======
 	pfree(levelstate->pages[0]);
 	pfree(levelstate);
->>>>>>> REL_16_9
 
 	/*
 	 * When we WAL-logged index pages, we must nonetheless fsync index files.
@@ -496,14 +483,7 @@ gist_indexsortbuild(GISTBuildState *state)
 	 * still not be on disk when the crash occurs.
 	 */
 	if (RelationNeedsWAL(state->indexrel))
-<<<<<<< HEAD
-	{
-		RelationOpenSmgr(state->indexrel);
-		smgrimmedsync(state->indexrel->rd_smgr, MAIN_FORKNUM);
-	}
-=======
 		smgrimmedsync(RelationGetSmgr(state->indexrel), MAIN_FORKNUM);
->>>>>>> REL_16_9
 }
 
 /*
