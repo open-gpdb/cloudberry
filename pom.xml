@@ -1243,6 +1243,7 @@ code or new licensing patterns.
             <exclude>aclocal.m4</exclude>
             <exclude>python-dependencies.txt</exclude>
 
+            
             <!-- Finally we exclude a few file types (based on
                  extension) for which comments are tough to
                  maintain. Note that this is a combination of files
