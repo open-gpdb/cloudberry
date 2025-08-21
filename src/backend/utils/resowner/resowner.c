@@ -515,12 +515,8 @@ ResourceOwnerReleaseInternal(ResourceOwner owner,
 {
 	ResourceOwner child;
 	ResourceOwner save;
-<<<<<<< HEAD
-	ResourceReleaseCallbackItem *item, *next;
-=======
 	ResourceReleaseCallbackItem *item;
 	ResourceReleaseCallbackItem *next;
->>>>>>> REL_16_9
 	Datum		foundres;
 
 	/* Recurse to handle descendants */
@@ -744,10 +740,7 @@ ResourceOwnerReleaseInternal(ResourceOwner owner,
 	/* Let add-on modules get a chance too */
 	for (item = ResourceRelease_callbacks; item; item = next)
 	{
-<<<<<<< HEAD
-=======
 		/* allow callbacks to unregister themselves when called */
->>>>>>> REL_16_9
 		next = item->next;
 		item->callback(phase, isCommit, isTopLevel, item->arg);
 	}

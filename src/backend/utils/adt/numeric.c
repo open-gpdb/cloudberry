@@ -53,278 +53,6 @@
 #define NUMERIC_DEBUG
  */
 
-<<<<<<< HEAD
-=======
-
-/* ----------
- * Local data types
- *
- * Numeric values are represented in a base-NBASE floating point format.
- * Each "digit" ranges from 0 to NBASE-1.  The type NumericDigit is signed
- * and wide enough to store a digit.  We assume that NBASE*NBASE can fit in
- * an int.  Although the purely calculational routines could handle any even
- * NBASE that's less than sqrt(INT_MAX), in practice we are only interested
- * in NBASE a power of ten, so that I/O conversions and decimal rounding
- * are easy.  Also, it's actually more efficient if NBASE is rather less than
- * sqrt(INT_MAX), so that there is "headroom" for mul_var and div_var_fast to
- * postpone processing carries.
- *
- * Values of NBASE other than 10000 are considered of historical interest only
- * and are no longer supported in any sense; no mechanism exists for the client
- * to discover the base, so every client supporting binary mode expects the
- * base-10000 format.  If you plan to change this, also note the numeric
- * abbreviation code, which assumes NBASE=10000.
- * ----------
- */
-
-#if 0
-#define NBASE		10
-#define HALF_NBASE	5
-#define DEC_DIGITS	1			/* decimal digits per NBASE digit */
-#define MUL_GUARD_DIGITS	4	/* these are measured in NBASE digits */
-#define DIV_GUARD_DIGITS	8
-
-typedef signed char NumericDigit;
-#endif
-
-#if 0
-#define NBASE		100
-#define HALF_NBASE	50
-#define DEC_DIGITS	2			/* decimal digits per NBASE digit */
-#define MUL_GUARD_DIGITS	3	/* these are measured in NBASE digits */
-#define DIV_GUARD_DIGITS	6
-
-typedef signed char NumericDigit;
-#endif
-
-#if 1
-#define NBASE		10000
-#define HALF_NBASE	5000
-#define DEC_DIGITS	4			/* decimal digits per NBASE digit */
-#define MUL_GUARD_DIGITS	2	/* these are measured in NBASE digits */
-#define DIV_GUARD_DIGITS	4
-
-typedef int16 NumericDigit;
-#endif
-
-/*
- * The Numeric type as stored on disk.
- *
- * If the high bits of the first word of a NumericChoice (n_header, or
- * n_short.n_header, or n_long.n_sign_dscale) are NUMERIC_SHORT, then the
- * numeric follows the NumericShort format; if they are NUMERIC_POS or
- * NUMERIC_NEG, it follows the NumericLong format. If they are NUMERIC_SPECIAL,
- * the value is a NaN or Infinity.  We currently always store SPECIAL values
- * using just two bytes (i.e. only n_header), but previous releases used only
- * the NumericLong format, so we might find 4-byte NaNs (though not infinities)
- * on disk if a database has been migrated using pg_upgrade.  In either case,
- * the low-order bits of a special value's header are reserved and currently
- * should always be set to zero.
- *
- * In the NumericShort format, the remaining 14 bits of the header word
- * (n_short.n_header) are allocated as follows: 1 for sign (positive or
- * negative), 6 for dynamic scale, and 7 for weight.  In practice, most
- * commonly-encountered values can be represented this way.
- *
- * In the NumericLong format, the remaining 14 bits of the header word
- * (n_long.n_sign_dscale) represent the display scale; and the weight is
- * stored separately in n_weight.
- *
- * NOTE: by convention, values in the packed form have been stripped of
- * all leading and trailing zero digits (where a "digit" is of base NBASE).
- * In particular, if the value is zero, there will be no digits at all!
- * The weight is arbitrary in that case, but we normally set it to zero.
- */
-
-struct NumericShort
-{
-	uint16		n_header;		/* Sign + display scale + weight */
-	NumericDigit n_data[FLEXIBLE_ARRAY_MEMBER]; /* Digits */
-};
-
-struct NumericLong
-{
-	uint16		n_sign_dscale;	/* Sign + display scale */
-	int16		n_weight;		/* Weight of 1st digit	*/
-	NumericDigit n_data[FLEXIBLE_ARRAY_MEMBER]; /* Digits */
-};
-
-union NumericChoice
-{
-	uint16		n_header;		/* Header word */
-	struct NumericLong n_long;	/* Long form (4-byte header) */
-	struct NumericShort n_short;	/* Short form (2-byte header) */
-};
-
-struct NumericData
-{
-	int32		vl_len_;		/* varlena header (do not touch directly!) */
-	union NumericChoice choice; /* choice of format */
-};
-
-
-/*
- * Interpretation of high bits.
- */
-
-#define NUMERIC_SIGN_MASK	0xC000
-#define NUMERIC_POS			0x0000
-#define NUMERIC_NEG			0x4000
-#define NUMERIC_SHORT		0x8000
-#define NUMERIC_SPECIAL		0xC000
-
-#define NUMERIC_FLAGBITS(n) ((n)->choice.n_header & NUMERIC_SIGN_MASK)
-#define NUMERIC_IS_SHORT(n)		(NUMERIC_FLAGBITS(n) == NUMERIC_SHORT)
-#define NUMERIC_IS_SPECIAL(n)	(NUMERIC_FLAGBITS(n) == NUMERIC_SPECIAL)
-
-#define NUMERIC_HDRSZ	(VARHDRSZ + sizeof(uint16) + sizeof(int16))
-#define NUMERIC_HDRSZ_SHORT (VARHDRSZ + sizeof(uint16))
-
-/*
- * If the flag bits are NUMERIC_SHORT or NUMERIC_SPECIAL, we want the short
- * header; otherwise, we want the long one.  Instead of testing against each
- * value, we can just look at the high bit, for a slight efficiency gain.
- */
-#define NUMERIC_HEADER_IS_SHORT(n)	(((n)->choice.n_header & 0x8000) != 0)
-#define NUMERIC_HEADER_SIZE(n) \
-	(VARHDRSZ + sizeof(uint16) + \
-	 (NUMERIC_HEADER_IS_SHORT(n) ? 0 : sizeof(int16)))
-
-/*
- * Definitions for special values (NaN, positive infinity, negative infinity).
- *
- * The two bits after the NUMERIC_SPECIAL bits are 00 for NaN, 01 for positive
- * infinity, 11 for negative infinity.  (This makes the sign bit match where
- * it is in a short-format value, though we make no use of that at present.)
- * We could mask off the remaining bits before testing the active bits, but
- * currently those bits must be zeroes, so masking would just add cycles.
- */
-#define NUMERIC_EXT_SIGN_MASK	0xF000	/* high bits plus NaN/Inf flag bits */
-#define NUMERIC_NAN				0xC000
-#define NUMERIC_PINF			0xD000
-#define NUMERIC_NINF			0xF000
-#define NUMERIC_INF_SIGN_MASK	0x2000
-
-#define NUMERIC_EXT_FLAGBITS(n)	((n)->choice.n_header & NUMERIC_EXT_SIGN_MASK)
-#define NUMERIC_IS_NAN(n)		((n)->choice.n_header == NUMERIC_NAN)
-#define NUMERIC_IS_PINF(n)		((n)->choice.n_header == NUMERIC_PINF)
-#define NUMERIC_IS_NINF(n)		((n)->choice.n_header == NUMERIC_NINF)
-#define NUMERIC_IS_INF(n) \
-	(((n)->choice.n_header & ~NUMERIC_INF_SIGN_MASK) == NUMERIC_PINF)
-
-/*
- * Short format definitions.
- */
-
-#define NUMERIC_SHORT_SIGN_MASK			0x2000
-#define NUMERIC_SHORT_DSCALE_MASK		0x1F80
-#define NUMERIC_SHORT_DSCALE_SHIFT		7
-#define NUMERIC_SHORT_DSCALE_MAX		\
-	(NUMERIC_SHORT_DSCALE_MASK >> NUMERIC_SHORT_DSCALE_SHIFT)
-#define NUMERIC_SHORT_WEIGHT_SIGN_MASK	0x0040
-#define NUMERIC_SHORT_WEIGHT_MASK		0x003F
-#define NUMERIC_SHORT_WEIGHT_MAX		NUMERIC_SHORT_WEIGHT_MASK
-#define NUMERIC_SHORT_WEIGHT_MIN		(-(NUMERIC_SHORT_WEIGHT_MASK+1))
-
-/*
- * Extract sign, display scale, weight.  These macros extract field values
- * suitable for the NumericVar format from the Numeric (on-disk) format.
- *
- * Note that we don't trouble to ensure that dscale and weight read as zero
- * for an infinity; however, that doesn't matter since we never convert
- * "special" numerics to NumericVar form.  Only the constants defined below
- * (const_nan, etc) ever represent a non-finite value as a NumericVar.
- */
-
-#define NUMERIC_DSCALE_MASK			0x3FFF
-#define NUMERIC_DSCALE_MAX			NUMERIC_DSCALE_MASK
-
-#define NUMERIC_SIGN(n) \
-	(NUMERIC_IS_SHORT(n) ? \
-		(((n)->choice.n_short.n_header & NUMERIC_SHORT_SIGN_MASK) ? \
-		 NUMERIC_NEG : NUMERIC_POS) : \
-		(NUMERIC_IS_SPECIAL(n) ? \
-		 NUMERIC_EXT_FLAGBITS(n) : NUMERIC_FLAGBITS(n)))
-#define NUMERIC_DSCALE(n)	(NUMERIC_HEADER_IS_SHORT((n)) ? \
-	((n)->choice.n_short.n_header & NUMERIC_SHORT_DSCALE_MASK) \
-		>> NUMERIC_SHORT_DSCALE_SHIFT \
-	: ((n)->choice.n_long.n_sign_dscale & NUMERIC_DSCALE_MASK))
-#define NUMERIC_WEIGHT(n)	(NUMERIC_HEADER_IS_SHORT((n)) ? \
-	(((n)->choice.n_short.n_header & NUMERIC_SHORT_WEIGHT_SIGN_MASK ? \
-		~NUMERIC_SHORT_WEIGHT_MASK : 0) \
-	 | ((n)->choice.n_short.n_header & NUMERIC_SHORT_WEIGHT_MASK)) \
-	: ((n)->choice.n_long.n_weight))
-
-/*
- * Maximum weight of a stored Numeric value (based on the use of int16 for the
- * weight in NumericLong).  Note that intermediate values held in NumericVar
- * and NumericSumAccum variables may have much larger weights.
- */
-#define NUMERIC_WEIGHT_MAX			PG_INT16_MAX
-
-/* ----------
- * NumericVar is the format we use for arithmetic.  The digit-array part
- * is the same as the NumericData storage format, but the header is more
- * complex.
- *
- * The value represented by a NumericVar is determined by the sign, weight,
- * ndigits, and digits[] array.  If it is a "special" value (NaN or Inf)
- * then only the sign field matters; ndigits should be zero, and the weight
- * and dscale fields are ignored.
- *
- * Note: the first digit of a NumericVar's value is assumed to be multiplied
- * by NBASE ** weight.  Another way to say it is that there are weight+1
- * digits before the decimal point.  It is possible to have weight < 0.
- *
- * buf points at the physical start of the palloc'd digit buffer for the
- * NumericVar.  digits points at the first digit in actual use (the one
- * with the specified weight).  We normally leave an unused digit or two
- * (preset to zeroes) between buf and digits, so that there is room to store
- * a carry out of the top digit without reallocating space.  We just need to
- * decrement digits (and increment weight) to make room for the carry digit.
- * (There is no such extra space in a numeric value stored in the database,
- * only in a NumericVar in memory.)
- *
- * If buf is NULL then the digit buffer isn't actually palloc'd and should
- * not be freed --- see the constants below for an example.
- *
- * dscale, or display scale, is the nominal precision expressed as number
- * of digits after the decimal point (it must always be >= 0 at present).
- * dscale may be more than the number of physically stored fractional digits,
- * implying that we have suppressed storage of significant trailing zeroes.
- * It should never be less than the number of stored digits, since that would
- * imply hiding digits that are present.  NOTE that dscale is always expressed
- * in *decimal* digits, and so it may correspond to a fractional number of
- * base-NBASE digits --- divide by DEC_DIGITS to convert to NBASE digits.
- *
- * rscale, or result scale, is the target precision for a computation.
- * Like dscale it is expressed as number of *decimal* digits after the decimal
- * point, and is always >= 0 at present.
- * Note that rscale is not stored in variables --- it's figured on-the-fly
- * from the dscales of the inputs.
- *
- * While we consistently use "weight" to refer to the base-NBASE weight of
- * a numeric value, it is convenient in some scale-related calculations to
- * make use of the base-10 weight (ie, the approximate log10 of the value).
- * To avoid confusion, such a decimal-units weight is called a "dweight".
- *
- * NB: All the variable-level functions are written in a style that makes it
- * possible to give one and the same variable as argument and destination.
- * This is feasible because the digit buffer is separate from the variable.
- * ----------
- */
-typedef struct NumericVar
-{
-	int			ndigits;		/* # of digits in digits[] - can be 0! */
-	int			weight;			/* weight of first digit */
-	int			sign;			/* NUMERIC_POS, _NEG, _NAN, _PINF, or _NINF */
-	int			dscale;			/* display scale */
-	NumericDigit *buf;			/* start of palloc'd space for digits[] */
-	NumericDigit *digits;		/* base-NBASE digits */
-} NumericVar;
-
-
->>>>>>> REL_16_9
 /* ----------
  * Data for generate_series
  * ----------
@@ -544,12 +272,6 @@ static void dump_var(const char *str, NumericVar *var);
 	(weight) <= NUMERIC_SHORT_WEIGHT_MAX && \
 	(weight) >= NUMERIC_SHORT_WEIGHT_MIN)
 
-<<<<<<< HEAD
-=======
-static void alloc_var(NumericVar *var, int ndigits);
-static void free_var(NumericVar *var);
-static void zero_var(NumericVar *var);
-
 static bool set_var_from_str(const char *str, const char *cp,
 							 NumericVar *dest, const char **endptr,
 							 Node *escontext);
@@ -558,23 +280,13 @@ static bool set_var_from_non_decimal_integer_str(const char *str,
 												 int base, NumericVar *dest,
 												 const char **endptr,
 												 Node *escontext);
-static void set_var_from_num(Numeric num, NumericVar *dest);
-static void init_var_from_num(Numeric num, NumericVar *dest);
-static void set_var_from_var(const NumericVar *value, NumericVar *dest);
-static char *get_str_from_var(const NumericVar *var);
-static char *get_str_from_var_sci(const NumericVar *var, int rscale);
->>>>>>> REL_16_9
 
 static void numericvar_serialize(StringInfo buf, const NumericVar *var);
 static void numericvar_deserialize(StringInfo buf, NumericVar *var);
 
 static Numeric duplicate_numeric(Numeric num);
-<<<<<<< HEAD
-static Numeric make_result_opt_error(const NumericVar *var, bool *error);
-=======
 static Numeric make_result(const NumericVar *var);
 static Numeric make_result_opt_error(const NumericVar *var, bool *have_error);
->>>>>>> REL_16_9
 
 static bool apply_typmod(NumericVar *var, int32 typmod, Node *escontext);
 static bool apply_typmod_special(Numeric num, int32 typmod, Node *escontext);
@@ -638,13 +350,8 @@ static void log_var(const NumericVar *base, const NumericVar *num,
 					NumericVar *result);
 static void power_var(const NumericVar *base, const NumericVar *exp,
 					  NumericVar *result);
-<<<<<<< HEAD
-static void power_var_int(const NumericVar *base, int exp, NumericVar *result,
-						  int rscale);
-=======
 static void power_var_int(const NumericVar *base, int exp, int exp_dscale,
 						  NumericVar *result);
->>>>>>> REL_16_9
 static void power_ten_int(int exp, NumericVar *result);
 
 static int	cmp_abs(const NumericVar *var1, const NumericVar *var2);
@@ -731,52 +438,6 @@ numeric_in(PG_FUNCTION_ARGS)
 	 * Since all other legal inputs have a digit or a decimal point after the
 	 * sign, we need only check for NaN/infinity if that's not the case.
 	 */
-<<<<<<< HEAD
-	if (pg_strncasecmp(cp, "NaN", 3) == 0)
-	{
-		res = make_numeric_result(&const_nan);
-		cp += 3;
-	}
-	else if (pg_strncasecmp(cp, "Infinity", 8) == 0)
-	{
-		res = make_numeric_result(&const_pinf);
-		cp += 8;
-	}
-	else if (pg_strncasecmp(cp, "+Infinity", 9) == 0)
-	{
-		res = make_numeric_result(&const_pinf);
-		cp += 9;
-	}
-	else if (pg_strncasecmp(cp, "-Infinity", 9) == 0)
-	{
-		res = make_numeric_result(&const_ninf);
-		cp += 9;
-	}
-	else if (pg_strncasecmp(cp, "inf", 3) == 0)
-	{
-		res = make_numeric_result(&const_pinf);
-		cp += 3;
-	}
-	else if (pg_strncasecmp(cp, "+inf", 4) == 0)
-	{
-		res = make_numeric_result(&const_pinf);
-		cp += 4;
-	}
-	else if (pg_strncasecmp(cp, "-inf", 4) == 0)
-	{
-		res = make_numeric_result(&const_ninf);
-		cp += 4;
-	}
-	else
-	{
-		/*
-		 * Use init_var_from_str() to parse the input string and return it in the
-		 * packed DB storage format
-		 */
-		NumericVar	value;
-
-		cp = init_var_from_str(str, cp, &value);
-=======
 	if (!isdigit((unsigned char) *cp) && *cp != '.')
 	{
 		/*
@@ -785,22 +446,21 @@ numeric_in(PG_FUNCTION_ARGS)
 		 */
 		if (pg_strncasecmp(numstart, "NaN", 3) == 0)
 		{
-			res = make_result(&const_nan);
+			res = make_numeric_result(&const_nan);
 			cp = numstart + 3;
 		}
 		else if (pg_strncasecmp(cp, "Infinity", 8) == 0)
 		{
-			res = make_result(sign == NUMERIC_POS ? &const_pinf : &const_ninf);
+			res = make_numeric_result(sign == NUMERIC_POS ? &const_pinf : &const_ninf);
 			cp += 8;
 		}
 		else if (pg_strncasecmp(cp, "inf", 3) == 0)
 		{
-			res = make_result(sign == NUMERIC_POS ? &const_pinf : &const_ninf);
+			res = make_numeric_result(sign == NUMERIC_POS ? &const_pinf : &const_ninf);
 			cp += 3;
 		}
 		else
 			goto invalid_syntax;
->>>>>>> REL_16_9
 
 		/*
 		 * Check for trailing junk; there should be nothing left but spaces.
@@ -816,17 +476,8 @@ numeric_in(PG_FUNCTION_ARGS)
 			cp++;
 		}
 
-<<<<<<< HEAD
-		apply_typmod(&value, typmod);
-
-		res = make_numeric_result(&value);
-		free_var(&value);
-
-		PG_RETURN_NUMERIC(res);
-=======
 		if (!apply_typmod_special(res, typmod, escontext))
 			PG_RETURN_NULL();
->>>>>>> REL_16_9
 	}
 	else
 	{
@@ -1442,13 +1093,8 @@ numeric		(PG_FUNCTION_ARGS)
 	init_var(&var);
 
 	set_var_from_num(num, &var);
-<<<<<<< HEAD
-	apply_typmod(&var, typmod);
-	new = make_numeric_result(&var);
-=======
 	(void) apply_typmod(&var, typmod, NULL);
-	new = make_result(&var);
->>>>>>> REL_16_9
+	new = make_numeric_result(&var);
 
 	free_var(&var);
 
@@ -4752,15 +4398,10 @@ int64_div_fast_to_numeric(int64 val1, int log10val2)
 
 		w++;
 	}
-<<<<<<< HEAD
 
 	quick_init_var(&result);
 
 	int64_to_numericvar(val1, &result);
-=======
-	else
-		int64_to_numericvar(val1, &result);
->>>>>>> REL_16_9
 
 	result.weight -= w;
 	result.dscale = rscale;
@@ -4972,11 +4613,7 @@ float8_numeric(PG_FUNCTION_ARGS)
 	snprintf(buf, sizeof(buf), "%.*g", DBL_DIG, val);
 
 	/* Assume we need not worry about leading/trailing spaces */
-<<<<<<< HEAD
 	(void) init_var_from_str(buf, buf, &result);
-=======
-	(void) set_var_from_str(buf, buf, &result, &endptr, NULL);
->>>>>>> REL_16_9
 
 	res = make_numeric_result(&result);
 
@@ -5081,11 +4718,7 @@ float4_numeric(PG_FUNCTION_ARGS)
 	snprintf(buf, sizeof(buf), "%.*g", FLT_DIG, val);
 
 	/* Assume we need not worry about leading/trailing spaces */
-<<<<<<< HEAD
 	(void) init_var_from_str(buf, buf, &result);
-=======
-	(void) set_var_from_str(buf, buf, &result, &endptr, NULL);
->>>>>>> REL_16_9
 
 	res = make_numeric_result(&result);
 
@@ -5605,15 +5238,6 @@ numeric_avg_serialize(PG_FUNCTION_ARGS)
 	state = (NumericAggState *) PG_GETARG_POINTER(0);
 
 	init_var(&tmp_var);
-<<<<<<< HEAD
-	accum_sum_final(&state->sumX, &tmp_var);
-
-	temp = DirectFunctionCall1(numeric_send,
-							   NumericGetDatum(make_numeric_result(&tmp_var)));
-	sumX = DatumGetByteaPP(temp);
-	free_var(&tmp_var);
-=======
->>>>>>> REL_16_9
 
 	pq_begintypsend(&buf);
 
@@ -5736,21 +5360,6 @@ numeric_serialize(PG_FUNCTION_ARGS)
 
 	init_var(&tmp_var);
 
-<<<<<<< HEAD
-	accum_sum_final(&state->sumX, &tmp_var);
-	temp = DirectFunctionCall1(numeric_send,
-							   NumericGetDatum(make_numeric_result(&tmp_var)));
-	sumX = DatumGetByteaPP(temp);
-
-	accum_sum_final(&state->sumX2, &tmp_var);
-	temp = DirectFunctionCall1(numeric_send,
-							   NumericGetDatum(make_numeric_result(&tmp_var)));
-	sumX2 = DatumGetByteaPP(temp);
-
-	free_var(&tmp_var);
-
-=======
->>>>>>> REL_16_9
 	pq_begintypsend(&buf);
 
 	/* N */
@@ -6138,32 +5747,7 @@ numeric_poly_serialize(PG_FUNCTION_ARGS)
 	 * processing and we want a standard format to work with.
 	 */
 
-<<<<<<< HEAD
-		init_var(&num);
-
-#ifdef HAVE_INT128
-		int128_to_numericvar(state->sumX, &num);
-#else
-		accum_sum_final(&state->sumX, &num);
-#endif
-		temp = DirectFunctionCall1(numeric_send,
-								   NumericGetDatum(make_numeric_result(&num)));
-		sumX = DatumGetByteaPP(temp);
-
-#ifdef HAVE_INT128
-		int128_to_numericvar(state->sumX2, &num);
-#else
-		accum_sum_final(&state->sumX2, &num);
-#endif
-		temp = DirectFunctionCall1(numeric_send,
-								   NumericGetDatum(make_numeric_result(&num)));
-		sumX2 = DatumGetByteaPP(temp);
-
-		free_var(&num);
-	}
-=======
 	init_var(&tmp_var);
->>>>>>> REL_16_9
 
 	pq_begintypsend(&buf);
 
@@ -6373,23 +5957,7 @@ int8_avg_serialize(PG_FUNCTION_ARGS)
 	 * want a standard format to work with.
 	 */
 
-<<<<<<< HEAD
-		init_var(&num);
-
-#ifdef HAVE_INT128
-		int128_to_numericvar(state->sumX, &num);
-#else
-		accum_sum_final(&state->sumX, &num);
-#endif
-		temp = DirectFunctionCall1(numeric_send,
-								   NumericGetDatum(make_numeric_result(&num)));
-		sumX = DatumGetByteaPP(temp);
-
-		free_var(&num);
-	}
-=======
 	init_var(&tmp_var);
->>>>>>> REL_16_9
 
 	pq_begintypsend(&buf);
 
@@ -7495,15 +7063,9 @@ zero_numeric_var(NumericVar *var)
  * Returns true on success, false on failure (if escontext points to an
  * ErrorSaveContext; otherwise errors are thrown).
  */
-<<<<<<< HEAD
 const char *
-init_var_from_str(const char *str, const char *cp, NumericVar *dest)
-=======
-static bool
-set_var_from_str(const char *str, const char *cp,
-				 NumericVar *dest, const char **endptr,
-				 Node *escontext)
->>>>>>> REL_16_9
+init_var_from_str(const char *str, const char *cp, NumericVar *dest, const char **endptr,
+				  Node *escontext)
 {
 	bool		have_dp = false;
 	int			i;
@@ -11161,21 +10723,13 @@ exp_var(const NumericVar *arg, NumericVar *result, int rscale)
 
 	/* Guard against overflow/underflow */
 	/* If you change this limit, see also power_var()'s limit */
-<<<<<<< HEAD
-	if (Abs(val) >= NUMERIC_MAX_RESULT_SCALE * 3)
-=======
 	if (fabs(val) >= NUMERIC_MAX_RESULT_SCALE * 3)
->>>>>>> REL_16_9
 	{
 		if (val > 0)
 			ereport(ERROR,
 					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
 					 errmsg("value overflows numeric format")));
-<<<<<<< HEAD
 		zero_numeric_var(result);
-=======
-		zero_var(result);
->>>>>>> REL_16_9
 		result->dscale = rscale;
 		return;
 	}
@@ -11556,18 +11110,8 @@ power_var(const NumericVar *base, const NumericVar *exp, NumericVar *result)
 		{
 			if (expval64 >= PG_INT32_MIN && expval64 <= PG_INT32_MAX)
 			{
-<<<<<<< HEAD
-				/* Okay, select rscale */
-				rscale = NUMERIC_MIN_SIG_DIGITS;
-				rscale = Max(rscale, base->dscale);
-				rscale = Max(rscale, NUMERIC_MIN_DISPLAY_SCALE);
-				rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
-
-				power_var_int(base, (int) expval64, result, rscale);
-=======
 				/* Okay, use power_var_int */
 				power_var_int(base, (int) expval64, exp->dscale, result);
->>>>>>> REL_16_9
 				return;
 			}
 		}
@@ -11584,7 +11128,6 @@ power_var(const NumericVar *base, const NumericVar *exp, NumericVar *result)
 		return;
 	}
 
-<<<<<<< HEAD
 	quick_init_var(&abs_base);
 	quick_init_var(&ln_base);
 	quick_init_var(&ln_num);
@@ -11618,11 +11161,6 @@ power_var(const NumericVar *base, const NumericVar *exp, NumericVar *result)
 	}
 	else
 		res_sign = NUMERIC_POS;
-=======
-	init_var(&abs_base);
-	init_var(&ln_base);
-	init_var(&ln_num);
->>>>>>> REL_16_9
 
 	/*
 	 * If base is negative, insist that exp be an integer.  The result is then
@@ -11677,12 +11215,7 @@ power_var(const NumericVar *base, const NumericVar *exp, NumericVar *result)
 	/*
 	 * Set the scale for the low-precision calculation, computing ln(base) to
 	 * around 8 significant digits.  Note that ln_dweight may be as small as
-<<<<<<< HEAD
 	 * -SHRT_MAX, so the scale may exceed NUMERIC_MAX_DISPLAY_SCALE here.
-=======
-	 * -NUMERIC_DSCALE_MAX, so the scale may exceed NUMERIC_MAX_DISPLAY_SCALE
-	 * here.
->>>>>>> REL_16_9
 	 */
 	local_rscale = 8 - ln_dweight;
 	local_rscale = Max(local_rscale, NUMERIC_MIN_DISPLAY_SCALE);
@@ -11694,21 +11227,13 @@ power_var(const NumericVar *base, const NumericVar *exp, NumericVar *result)
 	val = numericvar_to_double_no_overflow(&ln_num);
 
 	/* initial overflow/underflow test with fuzz factor */
-<<<<<<< HEAD
-	if (Abs(val) > NUMERIC_MAX_RESULT_SCALE * 3.01)
-=======
 	if (fabs(val) > NUMERIC_MAX_RESULT_SCALE * 3.01)
->>>>>>> REL_16_9
 	{
 		if (val > 0)
 			ereport(ERROR,
 					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
 					 errmsg("value overflows numeric format")));
-<<<<<<< HEAD
 		zero_numeric_var(result);
-=======
-		zero_var(result);
->>>>>>> REL_16_9
 		result->dscale = NUMERIC_MAX_DISPLAY_SCALE;
 		return;
 	}
@@ -11868,39 +11393,6 @@ power_var_int(const NumericVar *base, int exp, int exp_dscale,
 	 * number of significant digits, sufficient to give the required result
 	 * scale.
 	 */
-<<<<<<< HEAD
-	f = base->digits[0];
-	p = base->weight * DEC_DIGITS;
-
-	for (i = 1; i < base->ndigits && i * DEC_DIGITS < 16; i++)
-	{
-		f = f * NBASE + base->digits[i];
-		p -= DEC_DIGITS;
-	}
-
-	/*----------
-	 * We have base ~= f * 10^p
-	 * so log10(result) = log10(base^exp) ~= exp * (log10(f) + p)
-	 *----------
-	 */
-	f = exp * (log10(f) + p);
-
-	/*
-	 * Apply crude overflow/underflow tests so we can exit early if the result
-	 * certainly will overflow/underflow.
-	 */
-	if (f > 3 * SHRT_MAX * DEC_DIGITS)
-		ereport(ERROR,
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				 errmsg("value overflows numeric format")));
-	if (f + 1 < -rscale || f + 1 < -NUMERIC_MAX_DISPLAY_SCALE)
-	{
-		zero_numeric_var(result);
-		result->dscale = rscale;
-		return;
-	}
-=======
->>>>>>> REL_16_9
 
 	/*
 	 * Approximate number of significant digits in the result.  Note that the

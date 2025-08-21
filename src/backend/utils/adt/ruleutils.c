@@ -55,11 +55,8 @@
 #include "parser/parse_agg.h"
 #include "parser/parse_func.h"
 #include "parser/parse_oper.h"
-<<<<<<< HEAD
 #include "parser/parse_cte.h"
-=======
 #include "parser/parse_relation.h"
->>>>>>> REL_16_9
 #include "parser/parser.h"
 #include "parser/parsetree.h"
 #include "rewrite/rewriteHandler.h"
@@ -129,11 +126,7 @@ typedef struct
 	TupleDesc	resultDesc;		/* if top level of a view, the view's tupdesc */
 	List	   *targetList;		/* Current query level's SELECT targetlist */
 	List	   *windowClause;	/* Current query level's WINDOW clause */
-<<<<<<< HEAD
-	List	   *windowTList;	/* targetlist for resolving WINDOW clause */
 	List	   *groupClause;	/* Current query level's GROUP BY clause */
-=======
->>>>>>> REL_16_9
 	int			prettyFlags;	/* enabling of pretty-print functions */
 	int			wrapColumn;		/* max line length, or -1 for no limit */
 	int			indentLevel;	/* current indent level for pretty-print */
@@ -417,27 +410,6 @@ static void get_query_def(Query *query, StringInfo buf, List *parentnamespace,
 						  int prettyFlags, int wrapColumn, int startIndent);
 static void get_values_def(List *values_lists, deparse_context *context);
 static void get_with_clause(Query *query, deparse_context *context);
-<<<<<<< HEAD
-static void get_select_query_def(Query *query, deparse_context *context,
-								 TupleDesc resultDesc, bool colNamesVisible);
-static void get_insert_query_def(Query *query, deparse_context *context,
-								 bool colNamesVisible);
-static void get_update_query_def(Query *query, deparse_context *context,
-								 bool colNamesVisible);
-static void get_update_query_targetlist_def(Query *query, List *targetList,
-											deparse_context *context,
-											RangeTblEntry *rte);
-static void get_delete_query_def(Query *query, deparse_context *context,
-								 bool colNamesVisible);
-static void get_utility_query_def(Query *query, deparse_context *context);
-static void get_basic_select_query(Query *query, deparse_context *context,
-								   TupleDesc resultDesc, bool colNamesVisible);
-static void get_target_list(List *targetList, deparse_context *context,
-							TupleDesc resultDesc, bool colNamesVisible);
-static void get_setop_query(Node *setOp, Query *query,
-							deparse_context *context,
-							TupleDesc resultDesc, bool colNamesVisible);
-=======
 static void get_select_query_def(Query *query, deparse_context *context);
 static void get_insert_query_def(Query *query, deparse_context *context);
 static void get_update_query_def(Query *query, deparse_context *context);
@@ -451,7 +423,6 @@ static void get_basic_select_query(Query *query, deparse_context *context);
 static void get_target_list(List *targetList, deparse_context *context);
 static void get_setop_query(Node *setOp, Query *query,
 							deparse_context *context);
->>>>>>> REL_16_9
 static Node *get_rule_sortgroupclause(Index ref, List *tlist,
 									  bool force_colno,
 									  deparse_context *context);
@@ -3660,12 +3631,9 @@ deparse_expression_pretty(Node *expr, List *dpcontext,
 	initStringInfo(&buf);
 	context.buf = &buf;
 	context.namespaces = dpcontext;
-<<<<<<< HEAD
 	context.groupClause = NIL;
-=======
 	context.resultDesc = NULL;
 	context.targetList = NIL;
->>>>>>> REL_16_9
 	context.windowClause = NIL;
 	context.varprefix = forceprefix;
 	context.prettyFlags = prettyFlags;
@@ -5036,14 +5004,11 @@ set_deparse_plan(deparse_namespace *dpns, Plan *plan)
 	 * For a WorkTableScan, locate the parent RecursiveUnion plan node and use
 	 * that as INNER referent.
 	 *
-<<<<<<< HEAD
-=======
 	 * For MERGE, pretend the ModifyTable's source plan (its outer plan) is
 	 * INNER referent.  This is the join from the target relation to the data
 	 * source, and all INNER_VAR Vars in other parts of the query refer to its
 	 * targetlist.
 	 *
->>>>>>> REL_16_9
 	 * For ON CONFLICT .. UPDATE we just need the inner tlist to point to the
 	 * excluded expression's tlist. (Similar to the SubqueryScan we don't want
 	 * to reuse OUTER, it's used for RETURNING in some modify table cases,
@@ -5054,7 +5019,6 @@ set_deparse_plan(deparse_namespace *dpns, Plan *plan)
 	else if (IsA(plan, CteScan))
 		dpns->inner_plan = list_nth(dpns->subplans,
 									((CteScan *) plan)->ctePlanId - 1);
-<<<<<<< HEAD
 	else if (IsA(plan, Sequence))
 		/*
 		 * Set the inner_plan to a sequences first child only if it is a
@@ -5062,25 +5026,18 @@ set_deparse_plan(deparse_namespace *dpns, Plan *plan)
 		 * query plans that have a Partition Selector
 		 */
 		dpns->inner_plan = linitial(((Sequence *) plan)->subplans);
-=======
->>>>>>> REL_16_9
 	else if (IsA(plan, WorkTableScan))
 		dpns->inner_plan = find_recursive_union(dpns,
 												(WorkTableScan *) plan);
 	else if (IsA(plan, ModifyTable))
-<<<<<<< HEAD
-		dpns->inner_plan = plan;
-	/* Pretend subplan is INNER referent. See logics in function replace_shareinput_targetlists */
-	else if (IsA(plan, ShareInputScan))
-		dpns->inner_plan = outerPlan(plan);
-=======
 	{
 		if (((ModifyTable *) plan)->operation == CMD_MERGE)
 			dpns->inner_plan = outerPlan(plan);
 		else
 			dpns->inner_plan = plan;
-	}
->>>>>>> REL_16_9
+	}	/* Pretend subplan is INNER referent. See logics in function replace_shareinput_targetlists */
+	else if (IsA(plan, ShareInputScan))
+		dpns->inner_plan = outerPlan(plan);
 	else
 		dpns->inner_plan = innerPlan(plan);
 
@@ -5354,12 +5311,9 @@ make_ruledef(StringInfo buf, HeapTuple ruletup, TupleDesc rulettc,
 
 		context.buf = buf;
 		context.namespaces = list_make1(&dpns);
-<<<<<<< HEAD
 		context.groupClause = NIL;
-=======
 		context.resultDesc = NULL;
 		context.targetList = NIL;
->>>>>>> REL_16_9
 		context.windowClause = NIL;
 		context.varprefix = (list_length(query->rtable) != 1);
 		context.prettyFlags = prettyFlags;
@@ -5538,12 +5492,9 @@ get_query_def(Query *query, StringInfo buf, List *parentnamespace,
 
 	context.buf = buf;
 	context.namespaces = lcons(&dpns, list_copy(parentnamespace));
-<<<<<<< HEAD
 	context.groupClause = NIL;
-=======
 	context.resultDesc = NULL;
 	context.targetList = NIL;
->>>>>>> REL_16_9
 	context.windowClause = NIL;
 	context.varprefix = (parentnamespace != NIL ||
 						 list_length(query->rtable) != 1);
@@ -5560,13 +5511,9 @@ get_query_def(Query *query, StringInfo buf, List *parentnamespace,
 	switch (query->commandType)
 	{
 		case CMD_SELECT:
-<<<<<<< HEAD
-			get_select_query_def(query, &context, resultDesc, colNamesVisible);
-=======
 			/* We set context.resultDesc only if it's a SELECT */
 			context.resultDesc = resultDesc;
 			get_select_query_def(query, &context);
->>>>>>> REL_16_9
 			break;
 
 		case CMD_UPDATE:
@@ -5787,19 +5734,10 @@ get_with_clause(Query *query, deparse_context *context)
  * ----------
  */
 static void
-<<<<<<< HEAD
-get_select_query_def(Query *query, deparse_context *context,
-					 TupleDesc resultDesc, bool colNamesVisible)
-{
-	StringInfo	buf = context->buf;
-	List	   *save_windowclause;
-	List	   *save_windowtlist;
-	List	   *save_groupclause;
-=======
 get_select_query_def(Query *query, deparse_context *context)
 {
 	StringInfo	buf = context->buf;
->>>>>>> REL_16_9
+	List	   *save_groupclause;
 	bool		force_colno;
 	ListCell   *l;
 
@@ -5809,13 +5747,8 @@ get_select_query_def(Query *query, deparse_context *context)
 	/* Subroutines may need to consult the SELECT targetlist and windowClause */
 	context->targetList = query->targetList;
 	context->windowClause = query->windowClause;
-<<<<<<< HEAD
-	save_windowtlist = context->windowTList;
-	context->windowTList = query->targetList;
 	save_groupclause = context->groupClause;
 	context->groupClause = query->groupClause;
-=======
->>>>>>> REL_16_9
 
 	/*
 	 * If the Query node has a setOperations tree, then it's the top level of
@@ -5824,22 +5757,13 @@ get_select_query_def(Query *query, deparse_context *context)
 	 */
 	if (query->setOperations)
 	{
-<<<<<<< HEAD
-		get_setop_query(query->setOperations, query, context, resultDesc,
-						colNamesVisible);
-=======
 		get_setop_query(query->setOperations, query, context);
->>>>>>> REL_16_9
 		/* ORDER BY clauses must be simple in this case */
 		force_colno = true;
 	}
 	else
 	{
-<<<<<<< HEAD
-		get_basic_select_query(query, context, resultDesc, colNamesVisible);
-=======
 		get_basic_select_query(query, context);
->>>>>>> REL_16_9
 		force_colno = false;
 	}
 
@@ -5956,13 +5880,7 @@ get_select_query_def(Query *query, deparse_context *context)
 				appendStringInfoString(buf, " SKIP LOCKED");
 		}
 	}
-<<<<<<< HEAD
-
-	context->windowClause = save_windowclause;
-	context->windowTList = save_windowtlist;
 	context->groupClause = save_groupclause;
-=======
->>>>>>> REL_16_9
 }
 
 /*
@@ -6040,12 +5958,7 @@ get_simple_values_rte(Query *query, TupleDesc resultDesc)
 }
 
 static void
-<<<<<<< HEAD
-get_basic_select_query(Query *query, deparse_context *context,
-					   TupleDesc resultDesc, bool colNamesVisible)
-=======
 get_basic_select_query(Query *query, deparse_context *context)
->>>>>>> REL_16_9
 {
 	StringInfo	buf = context->buf;
 	RangeTblEntry *values_rte;
@@ -6101,11 +6014,7 @@ get_basic_select_query(Query *query, deparse_context *context)
 	}
 
 	/* Then we tell what to select (the targetlist) */
-<<<<<<< HEAD
-	get_target_list(query->targetList, context, resultDesc, colNamesVisible);
-=======
 	get_target_list(query->targetList, context);
->>>>>>> REL_16_9
 
 	/* Add the FROM clause if needed */
 	get_from_clause(query, " FROM ", context);
@@ -6204,12 +6113,7 @@ get_basic_select_query(Query *query, deparse_context *context)
  * ----------
  */
 static void
-<<<<<<< HEAD
-get_target_list(List *targetList, deparse_context *context,
-				TupleDesc resultDesc, bool colNamesVisible)
-=======
 get_target_list(List *targetList, deparse_context *context)
->>>>>>> REL_16_9
 {
 	StringInfo	buf = context->buf;
 	StringInfoData targetbuf;
@@ -6266,11 +6170,7 @@ get_target_list(List *targetList, deparse_context *context)
 			 * assigned column name explicitly.  Otherwise, show it only if
 			 * it's not FigureColname's fallback.
 			 */
-<<<<<<< HEAD
-			attname = colNamesVisible ? NULL : "?column?";
-=======
 			attname = context->colNamesVisible ? NULL : "?column?";
->>>>>>> REL_16_9
 		}
 
 		/*
@@ -6349,12 +6249,7 @@ get_target_list(List *targetList, deparse_context *context)
 }
 
 static void
-<<<<<<< HEAD
-get_setop_query(Node *setOp, Query *query, deparse_context *context,
-				TupleDesc resultDesc, bool colNamesVisible)
-=======
 get_setop_query(Node *setOp, Query *query, deparse_context *context)
->>>>>>> REL_16_9
 {
 	StringInfo	buf = context->buf;
 	bool		need_paren;
@@ -6385,13 +6280,8 @@ get_setop_query(Node *setOp, Query *query, deparse_context *context)
 					  subquery->setOperations);
 		if (need_paren)
 			appendStringInfoChar(buf, '(');
-<<<<<<< HEAD
-		get_query_def(subquery, buf, context->namespaces, resultDesc,
-					  colNamesVisible,
-=======
 		get_query_def(subquery, buf, context->namespaces,
 					  context->resultDesc, context->colNamesVisible,
->>>>>>> REL_16_9
 					  context->prettyFlags, context->wrapColumn,
 					  context->indentLevel);
 		if (need_paren)
@@ -6435,11 +6325,7 @@ get_setop_query(Node *setOp, Query *query, deparse_context *context)
 		else
 			subindent = 0;
 
-<<<<<<< HEAD
-		get_setop_query(op->larg, query, context, resultDesc, colNamesVisible);
-=======
 		get_setop_query(op->larg, query, context);
->>>>>>> REL_16_9
 
 		if (need_paren)
 			appendContextKeyword(context, ") ", -subindent, 0, 0);
@@ -6483,9 +6369,6 @@ get_setop_query(Node *setOp, Query *query, deparse_context *context)
 			subindent = 0;
 		appendContextKeyword(context, "", subindent, 0, 0);
 
-<<<<<<< HEAD
-		get_setop_query(op->rarg, query, context, resultDesc, false);
-=======
 		/*
 		 * The output column names of the RHS sub-select don't matter.
 		 */
@@ -6495,7 +6378,6 @@ get_setop_query(Node *setOp, Query *query, deparse_context *context)
 		get_setop_query(op->rarg, query, context);
 
 		context->colNamesVisible = save_colnamesvisible;
->>>>>>> REL_16_9
 
 		if (PRETTY_INDENT(context))
 			context->indentLevel -= subindent;
@@ -6546,9 +6428,15 @@ get_rule_sortgroupclause(Index ref, List *tlist, bool force_colno,
 		 /* do nothing, probably can't happen */ ;
 	else if (IsA(expr, Const))
 		get_const_expr((Const *) expr, context, 1);
-<<<<<<< HEAD
-	else if (!expr || IsA(expr, Var))
-		get_rule_expr(expr, context, true);
+	else if (IsA(expr, Var))
+	{
+		/* Tell get_variable to check for name conflict */
+		bool save_varinorderby = context->varInOrderBy;
+
+		context->varInOrderBy = true;
+		(void) get_variable((Var *) expr, 0, false, context);
+		context->varInOrderBy = save_varinorderby;
+	}
 	else if (expr && IsA(expr, OpExpr))
 	{
 		OpExpr		*opexpr = (OpExpr *)expr;
@@ -6577,16 +6465,6 @@ get_rule_sortgroupclause(Index ref, List *tlist, bool force_colno,
 		get_rule_expr(expr, context, true);
 		if (need_paren)
 			appendStringInfoChar(context->buf, ')');
-=======
-	else if (IsA(expr, Var))
-	{
-		/* Tell get_variable to check for name conflict */
-		bool		save_varinorderby = context->varInOrderBy;
-
-		context->varInOrderBy = true;
-		(void) get_variable((Var *) expr, 0, false, context);
-		context->varInOrderBy = save_varinorderby;
->>>>>>> REL_16_9
 	}
 	else
 	{
@@ -7048,11 +6926,7 @@ get_insert_query_def(Query *query, deparse_context *context,
 	{
 		appendContextKeyword(context, " RETURNING",
 							 -PRETTYINDENT_STD, PRETTYINDENT_STD, 1);
-<<<<<<< HEAD
-		get_target_list(query->returningList, context, NULL, colNamesVisible);
-=======
 		get_target_list(query->returningList, context);
->>>>>>> REL_16_9
 	}
 }
 
@@ -7109,11 +6983,7 @@ get_update_query_def(Query *query, deparse_context *context,
 	{
 		appendContextKeyword(context, " RETURNING",
 							 -PRETTYINDENT_STD, PRETTYINDENT_STD, 1);
-<<<<<<< HEAD
-		get_target_list(query->returningList, context, NULL, colNamesVisible);
-=======
 		get_target_list(query->returningList, context);
->>>>>>> REL_16_9
 	}
 }
 
@@ -7317,11 +7187,7 @@ get_delete_query_def(Query *query, deparse_context *context,
 	{
 		appendContextKeyword(context, " RETURNING",
 							 -PRETTYINDENT_STD, PRETTYINDENT_STD, 1);
-<<<<<<< HEAD
-		get_target_list(query->returningList, context, NULL, colNamesVisible);
-=======
 		get_target_list(query->returningList, context);
->>>>>>> REL_16_9
 	}
 }
 
@@ -8280,23 +8146,12 @@ get_name_for_var_field(Var *var, int fieldno,
 				{
 					/*
 					 * We're deparsing a Plan tree so we don't have a CTE
-<<<<<<< HEAD
 					 * list.  But the only places we'd see a Var directly
 					 * referencing a CTE RTE are in CteScan or WorkTableScan
 					 * plan nodes.  For those cases, set_deparse_plan arranged
 					 * for dpns->inner_plan to be the plan node that emits the
 					 * CTE or RecursiveUnion result, and we can look at its
 					 * tlist instead.
-=======
-					 * list.  But the only places we'd normally see a Var
-					 * directly referencing a CTE RTE are in CteScan or
-					 * WorkTableScan plan nodes.  For those cases,
-					 * set_deparse_plan arranged for dpns->inner_plan to be
-					 * the plan node that emits the CTE or RecursiveUnion
-					 * result, and we can look at its tlist instead.  As
-					 * above, this can fail if the CTE has been proven empty,
-					 * in which case fall back to "fN".
->>>>>>> REL_16_9
 					 */
 					TargetEntry *tle;
 					deparse_namespace save_dpns;
@@ -10741,22 +10596,13 @@ get_windowfunc_expr_helper(WindowFunc *wfunc, deparse_context *context,
 		nargs++;
 	}
 
-<<<<<<< HEAD
-	appendStringInfo(buf, "%s(%s",
-					 generate_function_name(wfunc->winfnoid, nargs,
-											argnames, argtypes,
-											false, NULL,
-											context->special_exprkind),
-					 wfunc->windistinct ? "DISTINCT " : "");
-=======
 	if (!funcname)
 		funcname = generate_function_name(wfunc->winfnoid, nargs, argnames,
 										  argtypes, false, NULL,
 										  context->inGroupBy);
 
-	appendStringInfo(buf, "%s(", funcname);
+	appendStringInfo(buf, "%s(%s", funcname, wfunc->windistinct ? "DISTINCT " : "");
 
->>>>>>> REL_16_9
 	/* winstar can be set only in zero-argument aggregates */
 	if (wfunc->winstar)
 		appendStringInfoChar(buf, '*');
@@ -11935,7 +11781,6 @@ get_from_clause_item(Node *jtnode, Query *query, deparse_context *context)
 		}
 
 		/* Print the relation alias, if needed */
-<<<<<<< HEAD
 		printalias = false;
 		if (rte->alias != NULL)
 		{
@@ -11984,9 +11829,6 @@ get_from_clause_item(Node *jtnode, Query *query, deparse_context *context)
 		}
 		if (printalias)
 			appendStringInfo(buf, " %s", quote_identifier(refname));
-=======
-		get_rte_alias(rte, varno, false, context);
->>>>>>> REL_16_9
 
 		/* Print the column definitions or aliases, if needed */
 		if (rtfunc1 && rtfunc1->funccolnames != NIL)

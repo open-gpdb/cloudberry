@@ -837,11 +837,7 @@ PushActiveSnapshotWithLevel(Snapshot snap, int snap_level)
 {
 	ActiveSnapshotElt *newactive;
 
-<<<<<<< HEAD
-	Assert(snap != InvalidSnapshot);
-=======
-	Assert(snapshot != InvalidSnapshot);
->>>>>>> REL_16_9
+	Assert(snap != InvalidSnapshot)
 	Assert(ActiveSnapshot == NULL || snap_level >= ActiveSnapshot->as_level);
 
 	newactive = MemoryContextAlloc(TopTransactionContext, sizeof(ActiveSnapshotElt));
@@ -2347,13 +2343,8 @@ EstimateSnapshotSpace(Snapshot snapshot)
 {
 	Size		size;
 
-<<<<<<< HEAD
-	Assert(snap != InvalidSnapshot);
-	Assert(snap->snapshot_type == SNAPSHOT_MVCC || gp_select_invisible);
-=======
 	Assert(snapshot != InvalidSnapshot);
-	Assert(snapshot->snapshot_type == SNAPSHOT_MVCC);
->>>>>>> REL_16_9
+	Assert(snapshot->snapshot_type == SNAPSHOT_MVCC || gp_select_invisible);
 
 	/* We allocate any XID arrays needed in the same palloc block. */
 	size = add_size(sizeof(SerializedSnapshotData),
@@ -2448,12 +2439,6 @@ SerializeSnapshot(Snapshot snapshot, char *start_address)
 	 */
 	if (serialized_snapshot.subxcnt > 0)
 	{
-<<<<<<< HEAD
-=======
-		Size		subxipoff = sizeof(SerializedSnapshotData) +
-			snapshot->xcnt * sizeof(TransactionId);
-
->>>>>>> REL_16_9
 		memcpy((TransactionId *) (start_address + subxipoff),
 			   snapshot->subxip, snapshot->subxcnt * sizeof(TransactionId));
 	}

@@ -550,12 +550,9 @@ pgstat_get_wait_timeout(WaitEventTimeout w)
 		case WAIT_EVENT_REGISTER_SYNC_REQUEST:
 			event_name = "RegisterSyncRequest";
 			break;
-<<<<<<< HEAD
-=======
 		case WAIT_EVENT_SPIN_DELAY:
 			event_name = "SpinDelay";
 			break;
->>>>>>> REL_16_9
 		case WAIT_EVENT_VACUUM_DELAY:
 			event_name = "VacuumDelay";
 			break;
