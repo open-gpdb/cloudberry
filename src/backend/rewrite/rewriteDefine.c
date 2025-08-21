@@ -3,9 +3,13 @@
  * rewriteDefine.c
  *	  routines for defining a rewrite rule
  *
+<<<<<<< HEAD
  * Portions Copyright (c) 2006-2009, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+=======
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
+>>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -72,8 +76,7 @@ InsertRule(const char *rulname,
 	char	   *evqual = nodeToString(event_qual);
 	char	   *actiontree = nodeToString((Node *) action);
 	Datum		values[Natts_pg_rewrite];
-	bool		nulls[Natts_pg_rewrite];
-	bool		replaces[Natts_pg_rewrite];
+	bool		nulls[Natts_pg_rewrite] = {0};
 	NameData	rname;
 	Relation	pg_rewrite_desc;
 	HeapTuple	tup,
@@ -86,8 +89,6 @@ InsertRule(const char *rulname,
 	/*
 	 * Set up *nulls and *values arrays
 	 */
-	MemSet(nulls, false, sizeof(nulls));
-
 	namestrcpy(&rname, rulname);
 	values[Anum_pg_rewrite_rulename - 1] = NameGetDatum(&rname);
 	values[Anum_pg_rewrite_ev_class - 1] = ObjectIdGetDatum(eventrel_oid);
@@ -111,6 +112,8 @@ InsertRule(const char *rulname,
 
 	if (HeapTupleIsValid(oldtup))
 	{
+		bool		replaces[Natts_pg_rewrite] = {0};
+
 		if (!replace)
 			ereport(ERROR,
 					(errcode(ERRCODE_DUPLICATE_OBJECT),
@@ -120,7 +123,6 @@ InsertRule(const char *rulname,
 		/*
 		 * When replacing, we don't need to replace every attribute
 		 */
-		MemSet(replaces, false, sizeof(replaces));
 		replaces[Anum_pg_rewrite_ev_type - 1] = true;
 		replaces[Anum_pg_rewrite_is_instead - 1] = true;
 		replaces[Anum_pg_rewrite_ev_qual - 1] = true;
@@ -273,7 +275,6 @@ DefineQueryRewrite(const char *rulename,
 	Relation	event_relation;
 	ListCell   *l;
 	Query	   *query;
-	bool		RelisBecomingView = false;
 	Oid			ruleId = InvalidOid;
 	ObjectAddress address;
 
@@ -301,8 +302,14 @@ DefineQueryRewrite(const char *rulename,
 		event_relation->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+<<<<<<< HEAD
 				 errmsg("\"%s\" is not a table, directory table or view",
 						RelationGetRelationName(event_relation))));
+=======
+				 errmsg("relation \"%s\" cannot have rules",
+						RelationGetRelationName(event_relation)),
+				 errdetail_relkind_not_supported(event_relation->rd_rel->relkind)));
+>>>>>>> REL_16_9
 
 	if (!allowSystemTableMods && IsSystemRelation(event_relation))
 		ereport(ERROR,
@@ -313,7 +320,7 @@ DefineQueryRewrite(const char *rulename,
 	/*
 	 * Check user has permission to apply rules to this relation.
 	 */
-	if (!pg_class_ownercheck(event_relid, GetUserId()))
+	if (!object_ownercheck(RelationRelationId, event_relid, GetUserId()))
 		aclcheck_error(ACLCHECK_NOT_OWNER, get_relkind_objtype(event_relation->rd_rel->relkind),
 					   RelationGetRelationName(event_relation));
 
@@ -345,9 +352,20 @@ DefineQueryRewrite(const char *rulename,
 		/*
 		 * Rules ON SELECT are restricted to view definitions
 		 *
-		 * So there cannot be INSTEAD NOTHING, ...
+		 * So this had better be a view, ...
 		 */
-		if (list_length(action) == 0)
+		if (event_relation->rd_rel->relkind != RELKIND_VIEW &&
+			event_relation->rd_rel->relkind != RELKIND_MATVIEW)
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("relation \"%s\" cannot have ON SELECT rules",
+							RelationGetRelationName(event_relation)),
+					 errdetail_relkind_not_supported(event_relation->rd_rel->relkind)));
+
+		/*
+		 * ... there cannot be INSTEAD NOTHING, ...
+		 */
+		if (action == NIL)
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("INSTEAD NOTHING rules on SELECT are not implemented"),
@@ -441,6 +459,7 @@ DefineQueryRewrite(const char *rulename,
 								ViewSelectRuleName)));
 			rulename = pstrdup(ViewSelectRuleName);
 		}
+<<<<<<< HEAD
 
 		/*
 		 * Are we converting a relation to a view?
@@ -542,6 +561,8 @@ DefineQueryRewrite(const char *rulename,
 
 			RelisBecomingView = true;
 		}
+=======
+>>>>>>> REL_16_9
 	}
 	else
 	{
@@ -578,6 +599,18 @@ DefineQueryRewrite(const char *rulename,
 								RelationGetDescr(event_relation),
 								false, false);
 		}
+
+		/*
+		 * And finally, if it's not an ON SELECT rule then it must *not* be
+		 * named _RETURN.  This prevents accidentally or maliciously replacing
+		 * a view's ON SELECT rule with some other kind of rule.
+		 */
+		if (strcmp(rulename, ViewSelectRuleName) == 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+					 errmsg("non-view rule for \"%s\" must not be named \"%s\"",
+							RelationGetRelationName(event_relation),
+							ViewSelectRuleName)));
 	}
 
 	/*
@@ -605,6 +638,7 @@ DefineQueryRewrite(const char *rulename,
 		SetRelationRuleStatus(event_relid, true);
 	}
 
+<<<<<<< HEAD
 	/* ---------------------------------------------------------------------
 	 * If the relation is becoming a view:
 	 * - delete the associated storage files
@@ -695,6 +729,8 @@ DefineQueryRewrite(const char *rulename,
 		table_close(relationRelation, RowExclusiveLock);
 	}
 
+=======
+>>>>>>> REL_16_9
 	ObjectAddressSet(address, RewriteRelationId, ruleId);
 
 	/* Close rel, but keep lock till commit... */
@@ -836,14 +872,7 @@ checkRuleResultList(List *targetList, TupleDesc resultDesc, bool isSelect,
 /*
  * setRuleCheckAsUser
  *		Recursively scan a query or expression tree and set the checkAsUser
- *		field to the given userid in all rtable entries.
- *
- * Note: for a view (ON SELECT rule), the checkAsUser field of the OLD
- * RTE entry will be overridden when the view rule is expanded, and the
- * checkAsUser field of the NEW entry is irrelevant because that entry's
- * requiredPerms bits will always be zero.  However, for other types of rules
- * it's important to set these fields to match the rule owner.  So we just set
- * them always.
+ *		field to the given userid in all RTEPermissionInfos of the query.
  */
 void
 setRuleCheckAsUser(Node *node, Oid userid)
@@ -870,18 +899,21 @@ setRuleCheckAsUser_Query(Query *qry, Oid userid)
 {
 	ListCell   *l;
 
-	/* Set all the RTEs in this query node */
+	/* Set in all RTEPermissionInfos for this query. */
+	foreach(l, qry->rteperminfos)
+	{
+		RTEPermissionInfo *perminfo = lfirst_node(RTEPermissionInfo, l);
+
+		perminfo->checkAsUser = userid;
+	}
+
+	/* Now recurse to any subquery RTEs */
 	foreach(l, qry->rtable)
 	{
 		RangeTblEntry *rte = (RangeTblEntry *) lfirst(l);
 
 		if (rte->rtekind == RTE_SUBQUERY)
-		{
-			/* Recurse into subquery in FROM */
 			setRuleCheckAsUser_Query(rte->subquery, userid);
-		}
-		else
-			rte->checkAsUser = userid;
 	}
 
 	/* Recurse into subquery-in-WITH */
@@ -933,7 +965,7 @@ EnableDisableRule(Relation rel, const char *rulename,
 	 */
 	eventRelationOid = ruleform->ev_class;
 	Assert(eventRelationOid == owningRel);
-	if (!pg_class_ownercheck(eventRelationOid, GetUserId()))
+	if (!object_ownercheck(RelationRelationId, eventRelationOid, GetUserId()))
 		aclcheck_error(ACLCHECK_NOT_OWNER, get_relkind_objtype(get_rel_relkind(eventRelationOid)),
 					   get_rel_name(eventRelationOid));
 
@@ -985,7 +1017,8 @@ RangeVarCallbackForRenameRule(const RangeVar *rv, Oid relid, Oid oldrelid,
 		form->relkind != RELKIND_PARTITIONED_TABLE)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("\"%s\" is not a table or view", rv->relname)));
+				 errmsg("relation \"%s\" cannot have rules", rv->relname),
+				 errdetail_relkind_not_supported(form->relkind)));
 
 	if (!allowSystemTableMods && IsSystemClass(relid, form))
 		ereport(ERROR,
@@ -994,7 +1027,7 @@ RangeVarCallbackForRenameRule(const RangeVar *rv, Oid relid, Oid oldrelid,
 						rv->relname)));
 
 	/* you must own the table to rename one of its rules */
-	if (!pg_class_ownercheck(relid, GetUserId()))
+	if (!object_ownercheck(RelationRelationId, relid, GetUserId()))
 		aclcheck_error(ACLCHECK_NOT_OWNER, get_relkind_objtype(get_rel_relkind(relid)), rv->relname);
 
 	ReleaseSysCache(tuple);

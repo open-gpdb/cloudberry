@@ -3,7 +3,7 @@
  * lockfuncs.c
  *		Functions for SQL access to various lock-manager capabilities.
  *
- * Copyright (c) 2002-2021, PostgreSQL Global Development Group
+ * Copyright (c) 2002-2023, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *		src/backend/utils/adt/lockfuncs.c
@@ -44,10 +44,17 @@ const char *const LockTagTypeNames[] = {
 	"distributed xid",
 	"userlock",
 	"advisory",
+<<<<<<< HEAD
 	"warehouse"
 };
 
 StaticAssertDecl(lengthof(LockTagTypeNames) == (LOCKTAG_WAREHOUSE + 1),
+=======
+	"applytransaction"
+};
+
+StaticAssertDecl(lengthof(LockTagTypeNames) == (LOCKTAG_LAST_TYPE + 1),
+>>>>>>> REL_16_9
 				 "array length mismatch");
 
 /* This must match enum PredicateLockTargetType (predicate_internals.h) */
@@ -304,8 +311,8 @@ pg_lock_status(PG_FUNCTION_ARGS)
 		LOCKMODE	mode = 0;
 		const char *locktypename;
 		char		tnbuf[32];
-		Datum		values[NUM_LOCK_STATUS_COLUMNS];
-		bool		nulls[NUM_LOCK_STATUS_COLUMNS];
+		Datum		values[NUM_LOCK_STATUS_COLUMNS] = {0};
+		bool		nulls[NUM_LOCK_STATUS_COLUMNS] = {0};
 		HeapTuple	tuple;
 		Datum		result;
 		LockInstanceData *instance;
@@ -362,8 +369,6 @@ pg_lock_status(PG_FUNCTION_ARGS)
 		/*
 		 * Form tuple with appropriate data.
 		 */
-		MemSet(values, 0, sizeof(values));
-		MemSet(nulls, false, sizeof(nulls));
 
 		if (instance->locktag.locktag_type <= LOCKTAG_LAST_TYPE)
 			locktypename = LockTagTypeNames[instance->locktag.locktag_type];
@@ -458,6 +463,7 @@ pg_lock_status(PG_FUNCTION_ARGS)
 				nulls[8] = true;
 				nulls[9] = true;
 				break;
+<<<<<<< HEAD
 			case LOCKTAG_RESOURCE_QUEUE:
 			case LOCKTAG_WAREHOUSE:
 #if 0
@@ -465,14 +471,38 @@ pg_lock_status(PG_FUNCTION_ARGS)
 #endif
 				nulls[1] = true;
 				values[8] = ObjectIdGetDatum(instance->locktag.locktag_field1);
+=======
+			case LOCKTAG_SPECULATIVE_TOKEN:
+				values[6] =
+					TransactionIdGetDatum(instance->locktag.locktag_field1);
+				values[8] = ObjectIdGetDatum(instance->locktag.locktag_field2);
+				nulls[1] = true;
+>>>>>>> REL_16_9
 				nulls[2] = true;
 				nulls[3] = true;
 				nulls[4] = true;
 				nulls[5] = true;
+<<<<<<< HEAD
 				nulls[6] = true;
 				nulls[7] = true;
 				nulls[9] = true;
 				break;
+=======
+				nulls[7] = true;
+				nulls[9] = true;
+				break;
+			case LOCKTAG_APPLY_TRANSACTION:
+				values[1] = ObjectIdGetDatum(instance->locktag.locktag_field1);
+				values[8] = ObjectIdGetDatum(instance->locktag.locktag_field2);
+				values[6] = ObjectIdGetDatum(instance->locktag.locktag_field3);
+				values[9] = Int16GetDatum(instance->locktag.locktag_field4);
+				nulls[2] = true;
+				nulls[3] = true;
+				nulls[4] = true;
+				nulls[5] = true;
+				nulls[7] = true;
+				break;
+>>>>>>> REL_16_9
 			case LOCKTAG_OBJECT:
 			case LOCKTAG_USERLOCK:
 			case LOCKTAG_ADVISORY:
@@ -621,8 +651,8 @@ pg_lock_status(PG_FUNCTION_ARGS)
 
 		PREDICATELOCKTARGETTAG *predTag = &(predLockData->locktags[mystatus->predLockIdx]);
 		SERIALIZABLEXACT *xact = &(predLockData->xacts[mystatus->predLockIdx]);
-		Datum		values[NUM_LOCK_STATUS_COLUMNS];
-		bool		nulls[NUM_LOCK_STATUS_COLUMNS];
+		Datum		values[NUM_LOCK_STATUS_COLUMNS] = {0};
+		bool		nulls[NUM_LOCK_STATUS_COLUMNS] = {0};
 		HeapTuple	tuple;
 		Datum		result;
 
@@ -631,8 +661,6 @@ pg_lock_status(PG_FUNCTION_ARGS)
 		/*
 		 * Form tuple with appropriate data.
 		 */
-		MemSet(values, 0, sizeof(values));
-		MemSet(nulls, false, sizeof(nulls));
 
 		/* lock type */
 		lockType = GET_PREDICATELOCKTARGETTAG_TYPE(*predTag);
@@ -823,10 +851,7 @@ pg_blocking_pids(PG_FUNCTION_ARGS)
 	/* Assert we didn't overrun arrayelems[] */
 	Assert(narrayelems <= lockData->nlocks);
 
-	/* Construct array, using hardwired knowledge about int4 type */
-	PG_RETURN_ARRAYTYPE_P(construct_array(arrayelems, narrayelems,
-										  INT4OID,
-										  sizeof(int32), true, TYPALIGN_INT));
+	PG_RETURN_ARRAYTYPE_P(construct_array_builtin(arrayelems, narrayelems, INT4OID));
 }
 
 
@@ -864,10 +889,7 @@ pg_safe_snapshot_blocking_pids(PG_FUNCTION_ARGS)
 	else
 		blocker_datums = NULL;
 
-	/* Construct array, using hardwired knowledge about int4 type */
-	PG_RETURN_ARRAYTYPE_P(construct_array(blocker_datums, num_blockers,
-										  INT4OID,
-										  sizeof(int32), true, TYPALIGN_INT));
+	PG_RETURN_ARRAYTYPE_P(construct_array_builtin(blocker_datums, num_blockers, INT4OID));
 }
 
 

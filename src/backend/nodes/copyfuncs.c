@@ -3,16 +3,14 @@
  * copyfuncs.c
  *	  Copy functions for Postgres tree nodes.
  *
- * NOTE: we currently support copying all node types found in parse and
- * plan trees.  We do not support copying executor state trees; there
- * is no need for that, and no point in maintaining all the code that
- * would be needed.  We also do not support copying Path trees, mainly
- * because the circular linkages between RelOptInfo and Path nodes can't
- * be handled easily in a simple depth-first traversal.
  *
+<<<<<<< HEAD
  *
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+=======
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
+>>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -26,6 +24,7 @@
 #include "catalog/gp_distribution_policy.h"
 #include "catalog/heap.h"
 #include "miscadmin.h"
+<<<<<<< HEAD
 #include "nodes/altertablenodes.h"
 #include "nodes/extensible.h"
 #include "nodes/pathnodes.h"
@@ -33,6 +32,9 @@
 #include "utils/datum.h"
 #include "cdb/cdbgang.h"
 #include "utils/rel.h"
+=======
+#include "utils/datum.h"
+>>>>>>> REL_16_9
 
 /*
  * Macros to simplify copying of different kinds of fields.  Use these
@@ -56,6 +58,10 @@
 #define COPY_STRING_FIELD(fldname) \
 	(newnode->fldname = from->fldname ? pstrdup(from->fldname) : (char *) NULL)
 
+/* Copy a field that is an inline array */
+#define COPY_ARRAY_FIELD(fldname) \
+	memcpy(newnode->fldname, from->fldname, sizeof(newnode->fldname))
+
 /* Copy a field that is a pointer to a simple palloc'd object of size sz */
 #define COPY_POINTER_FIELD(fldname, sz) \
 	do { \
@@ -65,6 +71,7 @@
 			newnode->fldname = palloc(_size); \
 			memcpy(newnode->fldname, from->fldname, _size); \
 		} \
+<<<<<<< HEAD
 	} while (0)
 
 #define COPY_BINARY_FIELD(fldname, sz) \
@@ -81,6 +88,8 @@
 			newnode->fldname = (bytea *) DatumGetPointer( \
 					datumCopy(PointerGetDatum(from->fldname), false, len)); \
 		} \
+=======
+>>>>>>> REL_16_9
 	} while (0)
 
 /* Copy a parse location field (for Copy, this is same as scalar case) */
@@ -88,6 +97,7 @@
 	(newnode->fldname = from->fldname)
 
 
+<<<<<<< HEAD
 /* ****************************************************************
  *					 plannodes.h copy functions
  * ****************************************************************
@@ -1976,6 +1986,15 @@ _copyVar(const Var *from)
 /*
  * _copyConst
  */
+=======
+#include "copyfuncs.funcs.c"
+
+
+/*
+ * Support functions for nodes with custom_copy_equal attribute
+ */
+
+>>>>>>> REL_16_9
 static Const *
 _copyConst(const Const *from)
 {
@@ -2011,6 +2030,7 @@ _copyConst(const Const *from)
 	return newnode;
 }
 
+<<<<<<< HEAD
 /*
  * _copyParam
  */
@@ -3353,30 +3373,40 @@ _copyParamRef(const ParamRef *from)
 	return newnode;
 }
 
+=======
+>>>>>>> REL_16_9
 static A_Const *
-_copyAConst(const A_Const *from)
+_copyA_Const(const A_Const *from)
 {
 	A_Const    *newnode = makeNode(A_Const);
 
-	/* This part must duplicate _copyValue */
-	COPY_SCALAR_FIELD(val.type);
-	switch (from->val.type)
+	COPY_SCALAR_FIELD(isnull);
+	if (!from->isnull)
 	{
-		case T_Integer:
-			COPY_SCALAR_FIELD(val.val.ival);
-			break;
-		case T_Float:
-		case T_String:
-		case T_BitString:
-			COPY_STRING_FIELD(val.val.str);
-			break;
-		case T_Null:
-			/* nothing to do */
-			break;
-		default:
-			elog(ERROR, "unrecognized node type: %d",
-				 (int) from->val.type);
-			break;
+		/* This part must duplicate other _copy*() functions. */
+		COPY_SCALAR_FIELD(val.node.type);
+		switch (nodeTag(&from->val))
+		{
+			case T_Integer:
+				COPY_SCALAR_FIELD(val.ival.ival);
+				break;
+			case T_Float:
+				COPY_STRING_FIELD(val.fval.fval);
+				break;
+			case T_Boolean:
+				COPY_SCALAR_FIELD(val.boolval.boolval);
+				break;
+			case T_String:
+				COPY_STRING_FIELD(val.sval.sval);
+				break;
+			case T_BitString:
+				COPY_STRING_FIELD(val.bsval.bsval);
+				break;
+			default:
+				elog(ERROR, "unrecognized node type: %d",
+					 (int) nodeTag(&from->val));
+				break;
+		}
 	}
 
 	COPY_LOCATION_FIELD(location);
@@ -3384,6 +3414,7 @@ _copyAConst(const A_Const *from)
 	return newnode;
 }
 
+<<<<<<< HEAD
 static FuncCall *
 _copyFuncCall(const FuncCall *from)
 {
@@ -6203,6 +6234,8 @@ _copyDropSubscriptionStmt(const DropSubscriptionStmt *from)
  *					extensible.h copy functions
  * ****************************************************************
  */
+=======
+>>>>>>> REL_16_9
 static ExtensibleNode *
 _copyExtensibleNode(const ExtensibleNode *from)
 {
@@ -6220,55 +6253,10 @@ _copyExtensibleNode(const ExtensibleNode *from)
 	return newnode;
 }
 
-/* ****************************************************************
- *					value.h copy functions
- * ****************************************************************
- */
-static Value *
-_copyValue(const Value *from)
+static Bitmapset *
+_copyBitmapset(const Bitmapset *from)
 {
-	Value	   *newnode = makeNode(Value);
-
-	/* See also _copyAConst when changing this code! */
-
-	COPY_SCALAR_FIELD(type);
-	switch (from->type)
-	{
-		case T_Integer:
-			COPY_SCALAR_FIELD(val.ival);
-			break;
-		case T_Float:
-		case T_String:
-		case T_BitString:
-			COPY_STRING_FIELD(val.str);
-			break;
-		case T_Null:
-			/* nothing to do */
-			break;
-		default:
-			elog(ERROR, "unrecognized node type: %d",
-				 (int) from->type);
-			break;
-	}
-	return newnode;
-}
-
-
-static ForeignKeyCacheInfo *
-_copyForeignKeyCacheInfo(const ForeignKeyCacheInfo *from)
-{
-	ForeignKeyCacheInfo *newnode = makeNode(ForeignKeyCacheInfo);
-
-	COPY_SCALAR_FIELD(conoid);
-	COPY_SCALAR_FIELD(conrelid);
-	COPY_SCALAR_FIELD(confrelid);
-	COPY_SCALAR_FIELD(nkeys);
-	/* COPY_SCALAR_FIELD might work for these, but let's not assume that */
-	memcpy(newnode->conkey, from->conkey, sizeof(newnode->conkey));
-	memcpy(newnode->confkey, from->confkey, sizeof(newnode->confkey));
-	memcpy(newnode->conpfeqop, from->conpfeqop, sizeof(newnode->conpfeqop));
-
-	return newnode;
+	return bms_copy(from);
 }
 
 static AggExprId*
@@ -6397,6 +6385,7 @@ copyObjectImpl(const void *from)
 
 	switch (nodeTag(from))
 	{
+<<<<<<< HEAD
 			/*
 			 * PLAN NODES
 			 */
@@ -6834,19 +6823,25 @@ copyObjectImpl(const void *from)
 			/*
 			 * LIST NODES
 			 */
+=======
+#include "copyfuncs.switch.c"
+
+>>>>>>> REL_16_9
 		case T_List:
 			retval = list_copy_deep(from);
 			break;
 
 			/*
-			 * Lists of integers and OIDs don't need to be deep-copied, so we
-			 * perform a shallow copy via list_copy()
+			 * Lists of integers, OIDs and XIDs don't need to be deep-copied,
+			 * so we perform a shallow copy via list_copy()
 			 */
 		case T_IntList:
 		case T_OidList:
+		case T_XidList:
 			retval = list_copy(from);
 			break;
 
+<<<<<<< HEAD
 			/*
 			 * EXTENSIBLE NODES
 			 */
@@ -7558,6 +7553,8 @@ copyObjectImpl(const void *from)
 		case T_EphemeralNamedRelationInfo:
 			retval = _copyEphemeralNamedRelationInfo(from);
 			break;
+=======
+>>>>>>> REL_16_9
 		default:
 			elog(ERROR, "unrecognized node type: %d", (int) nodeTag(from));
 			retval = 0;			/* keep compiler quiet */

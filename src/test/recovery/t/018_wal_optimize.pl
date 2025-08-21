@@ -1,17 +1,18 @@
 
-# Copyright (c) 2021, PostgreSQL Global Development Group
+# Copyright (c) 2021-2023, PostgreSQL Global Development Group
 
 # Test WAL replay when some operation has skipped WAL.
 #
 # These tests exercise code that once violated the mandate described in
 # src/backend/access/transam/README section "Skipping WAL for New
-# RelFileNode".  The tests work by committing some transactions, initiating an
+# RelFileLocator".  The tests work by committing some transactions, initiating an
 # immediate shutdown, and confirming that the expected data survives recovery.
 # For many years, individual commands made the decision to skip WAL, hence the
 # frequent appearance of COPY in these tests.
 use strict;
 use warnings;
 
+<<<<<<< HEAD
 use PostgresNode;
 use TestLib;
 
@@ -19,6 +20,11 @@ use TestLib;
 # PREPARE TRANSACTION in utility-mode.
 # use Test::More tests => 38;
 use Test::More tests => 36;
+=======
+use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Utils;
+use Test::More;
+>>>>>>> REL_16_9
 
 sub check_orphan_relfilenodes
 {
@@ -28,7 +34,7 @@ sub check_orphan_relfilenodes
 
 	my $db_oid = $node->safe_psql('postgres',
 		"SELECT oid FROM pg_database WHERE datname = 'postgres'");
-	my $prefix               = "base/$db_oid/";
+	my $prefix = "base/$db_oid/";
 	my $filepaths_referenced = $node->safe_psql(
 		'postgres', "
 	   SELECT pg_relation_filepath(oid) FROM pg_class
@@ -49,7 +55,7 @@ sub run_wal_optimize
 {
 	my $wal_level = shift;
 
-	my $node = get_new_node("node_$wal_level");
+	my $node = PostgreSQL::Test::Cluster->new("node_$wal_level");
 	$node->init;
 	$node->append_conf(
 		'postgresql.conf', qq(
@@ -150,9 +156,9 @@ wal_skip_threshold = 0
 	is($result, qq(20000), "wal_level = $wal_level, end-of-xact WAL");
 
 	# Data file for COPY query in subsequent tests
-	my $basedir   = $node->basedir;
+	my $basedir = $node->basedir;
 	my $copy_file = "$basedir/copy_data.txt";
-	TestLib::append_to_file(
+	PostgreSQL::Test::Utils::append_to_file(
 		$copy_file, qq(20000,30000
 20001,30001
 20002,30002));
@@ -405,3 +411,5 @@ wal_skip_threshold = 0
 # Run same test suite for multiple wal_level values.
 run_wal_optimize("minimal");
 run_wal_optimize("replica");
+
+done_testing();

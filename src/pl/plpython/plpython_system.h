@@ -28,6 +28,7 @@
 #endif
 
 /*
+<<<<<<< HEAD
  * Undefine some things that get (re)defined in the Python headers. They aren't
  * used by the PL/Python code, and all PostgreSQL headers should be included
  * earlier, so this should be pretty safe.
@@ -47,6 +48,12 @@
 #undef fprintf
 #undef vprintf
 #undef printf
+=======
+ * Python versions <= 3.8 otherwise define a replacement, causing macro
+ * redefinition warnings.
+ */
+#define HAVE_SNPRINTF 1
+>>>>>>> REL_16_9
 
 #if defined(_MSC_VER) && defined(_DEBUG)
 /* Python uses #pragma to bring in a non-default libpython on VC++ if
@@ -65,6 +72,7 @@
 #include <Python.h>
 #endif
 
+<<<<<<< HEAD
 /*
  * Python 2/3 strings/unicode/bytes handling.  Python 2 has strings
  * and unicode, Python 3 has strings, which are unicode on the C
@@ -131,4 +139,6 @@
 #define vprintf			pg_vprintf
 #define printf(...)		pg_printf(__VA_ARGS__)
 
+=======
+>>>>>>> REL_16_9
 #endif							/* PLPYTHON_SYSTEM_H */

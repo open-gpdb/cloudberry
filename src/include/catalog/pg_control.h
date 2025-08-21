@@ -5,7 +5,7 @@
  *	  However, we define it here so that the format is documented.
  *
  *
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/catalog/pg_control.h
@@ -85,12 +85,17 @@ typedef struct CheckPoint
 #define XLOG_END_OF_RECOVERY			0x90
 #define XLOG_FPI_FOR_HINT				0xA0
 #define XLOG_FPI						0xB0
+<<<<<<< HEAD
 #define XLOG_NEXTRELFILENODE			0xC0
 #define XLOG_NEXTGXID					0xD0
 /* GPDB_14_MERGE_FIXME: Compatible, Figure out whether 0xC0 already used? */
 /* 0xC0 is used in Postgres 9.5-11 */
 #define XLOG_OVERWRITE_CONTRECORD		0xE0
 #define XLOG_ENCRYPTION_LSN				0xF0
+=======
+/* 0xC0 is used in Postgres 9.5-11 */
+#define XLOG_OVERWRITE_CONTRECORD		0xD0
+>>>>>>> REL_16_9
 
 
 /*
@@ -173,9 +178,7 @@ typedef struct ControlFileData
 	 *
 	 * If backupEndRequired is true, we know for sure that we're restoring
 	 * from a backup, and must see a backup-end record before we can safely
-	 * start up. If it's false, but backupStartPoint is set, a backup_label
-	 * file was found at startup but it may have been a leftover from a stray
-	 * pg_start_backup() call, not accompanied by pg_stop_backup().
+	 * start up.
 	 */
 	XLogRecPtr	minRecoveryPoint;
 	TimeLineID	minRecoveryPointTLI;
@@ -263,5 +266,13 @@ typedef struct ControlFileData
  * message instead of a read error if it's looking at an incompatible file.
  */
 #define PG_CONTROL_FILE_SIZE		8192
+
+/*
+ * Ensure that the size of the pg_control data structure is sane.
+ */
+StaticAssertDecl(sizeof(ControlFileData) <= PG_CONTROL_MAX_SAFE_SIZE,
+				 "pg_control is too large for atomic disk writes");
+StaticAssertDecl(sizeof(ControlFileData) <= PG_CONTROL_FILE_SIZE,
+				 "sizeof(ControlFileData) exceeds PG_CONTROL_FILE_SIZE");
 
 #endif							/* PG_CONTROL_H */

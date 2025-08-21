@@ -7,9 +7,13 @@
  *	 ExecProcNode, or ExecEndNode on its subnodes and do the appropriate
  *	 processing.
  *
+<<<<<<< HEAD
  * Portions Copyright (c) 2005-2008, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+=======
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
+>>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -107,7 +111,10 @@
 #include "executor/nodeProjectSet.h"
 #include "executor/nodeRecursiveunion.h"
 #include "executor/nodeResult.h"
+<<<<<<< HEAD
 #include "executor/nodeRuntimeFilter.h"
+=======
+>>>>>>> REL_16_9
 #include "executor/nodeSamplescan.h"
 #include "executor/nodeSeqscan.h"
 #include "executor/nodeSetOp.h"
@@ -168,8 +175,12 @@ static CdbVisitOpt planstate_walk_kids(PlanState *planstate,
 static TupleTableSlot *ExecProcNodeFirst(PlanState *node);
 #if 0
 static TupleTableSlot *ExecProcNodeInstr(PlanState *node);
+<<<<<<< HEAD
 #endif
 static TupleTableSlot *ExecProcNodeGPDB(PlanState *node);
+=======
+static bool ExecShutdownNode_walker(PlanState *node, void *context);
+>>>>>>> REL_16_9
 
 
 /* ------------------------------------------------------------------------
@@ -1346,8 +1357,14 @@ planstate_walk_kids(PlanState *planstate,
  * Give execution nodes a chance to stop asynchronous resource consumption
  * and release any resources still held.
  */
-bool
+void
 ExecShutdownNode(PlanState *node)
+{
+	(void) ExecShutdownNode_walker(node, NULL);
+}
+
+static bool
+ExecShutdownNode_walker(PlanState *node, void *context)
 {
 	if (node == NULL)
 		return false;
@@ -1367,7 +1384,7 @@ ExecShutdownNode(PlanState *node)
 	if (node->instrument && node->instrument->running)
 		InstrStartNode(node->instrument);
 
-	planstate_tree_walker(node, ExecShutdownNode, NULL);
+	planstate_tree_walker(node, ExecShutdownNode_walker, context);
 
 	switch (nodeTag(node))
 	{

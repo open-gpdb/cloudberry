@@ -1,23 +1,25 @@
-/* -*-pgsql-c-*- */
+%top{
 /*
  * Scanner for the configuration file
  *
- * Copyright (c) 2000-2021, PostgreSQL Global Development Group
+ * Copyright (c) 2000-2023, PostgreSQL Global Development Group
  *
  * src/backend/utils/misc/guc-file.l
  */
-
-%{
 
 #include "postgres.h"
 
 #include <ctype.h>
 #include <unistd.h>
 
+#include "common/file_utils.h"
+#include "guc_internal.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "storage/fd.h"
-#include "utils/guc.h"
+#include "utils/conffiles.h"
+#include "utils/memutils.h"
+}
 
 #define unify_version(a,b,c) ((a<<16)+(b<<8)+c)
 #if unify_version(YY_FLEX_MAJOR_VERSION,YY_FLEX_MINOR_VERSION,YY_FLEX_SUBMINOR_VERSION) < unify_version(2,5,35)
@@ -35,6 +37,7 @@ void GUC_yyset_debug (int  bdebug );
 int GUC_yylex_destroy  (void);
 #endif
 
+%{
 /*
  * flex emits a yy_fatal_error() function that it calls in response to
  * critical errors like malloc failure, file I/O errors, and detection of
@@ -62,12 +65,6 @@ static const char *GUC_flex_fatal_errmsg;
 static sigjmp_buf *GUC_flex_fatal_jmp;
 
 static void FreeConfigVariable(ConfigVariable *item);
-
-static void record_config_file_error(const char *errmsg,
-						 const char *config_file,
-						 int lineno,
-						 ConfigVariable **head_p,
-						 ConfigVariable **tail_p);
 
 static int	GUC_flex_fatal(const char *msg);
 
@@ -175,6 +172,7 @@ ProcessConfigFile(GucContext context)
 }
 
 /*
+<<<<<<< HEAD
  * This function handles both actual config file (re)loads and execution of
  * show_all_file_settings() (i.e., the pg_file_settings view).  In the latter
  * case we don't apply any of the settings, but we make all the usual validity
@@ -563,6 +561,8 @@ AbsoluteConfigLocation(const char *location, const char *calling_file)
 }
 
 /*
+=======
+>>>>>>> REL_16_9
  * Read and parse a single configuration file.  This function recurses
  * to handle "include" directives.
  *
@@ -608,7 +608,7 @@ ParseConfigFile(const char *config_file, bool strict,
 	 * avoid dumping core due to stack overflow if an include file loops back
 	 * to itself.  The maximum nesting depth is pretty arbitrary.
 	 */
-	if (depth > 10)
+	if (depth > CONF_FILE_MAX_DEPTH)
 	{
 		ereport(elevel,
 				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
@@ -679,7 +679,7 @@ cleanup:
  * Capture an error message in the ConfigVariable list returned by
  * config file parsing.
  */
-static void
+void
 record_config_file_error(const char *errmsg,
 						 const char *config_file,
 						 int lineno,
@@ -707,8 +707,8 @@ record_config_file_error(const char *errmsg,
 /*
  * Flex fatal errors bring us here.  Stash the error message and jump back to
  * ParseConfigFp().  Assume all msg arguments point to string constants; this
- * holds for flex 2.5.31 (earliest we support) and flex 2.5.35 (latest as of
- * this writing).  Otherwise, we would need to copy the message.
+ * holds for flex 2.5.35 (earliest we support). Otherwise, we would need to
+ * copy the message.
  *
  * We return "int" since this takes the place of calls to fprintf().
 */
@@ -727,7 +727,8 @@ GUC_flex_fatal(const char *msg)
  * Input parameters:
  *	fp: file pointer from AllocateFile for the configuration file to parse
  *	config_file: absolute or relative path name of the configuration file
- *	depth: recursion depth (should be 0 in the outermost call)
+ *	depth: recursion depth (should be CONF_FILE_START_DEPTH in the outermost
+ *	call)
  *	elevel: error logging level to use
  * Input/Output parameters:
  *	head_p, tail_p: head and tail of linked list of name/value pairs
@@ -981,138 +982,30 @@ ParseConfigDirectory(const char *includedir,
 					 ConfigVariable **head_p,
 					 ConfigVariable **tail_p)
 {
-	char	   *directory;
-	DIR		   *d;
-	struct dirent *de;
+	char	   *err_msg;
 	char	  **filenames;
 	int			num_filenames;
-	int			size_filenames;
-	bool		status;
 
-	/*
-	 * Reject directory name that is all-blank (including empty), as that
-	 * leads to confusion --- we'd read the containing directory, typically
-	 * resulting in recursive inclusion of the same file(s).
-	 */
-	if (strspn(includedir, " \t\r\n") == strlen(includedir))
+	filenames = GetConfFilesInDir(includedir, calling_file, elevel,
+							   &num_filenames, &err_msg);
+
+	if (!filenames)
 	{
-		ereport(elevel,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("empty configuration directory name: \"%s\"",
-						includedir)));
-		record_config_file_error("empty configuration directory name",
-								 calling_file, calling_lineno,
-								 head_p, tail_p);
+		record_config_file_error(err_msg, calling_file, calling_lineno, head_p,
+								 tail_p);
 		return false;
 	}
 
-	/*
-	 * We don't check for recursion or too-deep nesting depth here; the
-	 * subsequent calls to ParseConfigFile will take care of that.
-	 */
-
-	directory = AbsoluteConfigLocation(includedir, calling_file);
-	d = AllocateDir(directory);
-	if (d == NULL)
+	for (int i = 0; i < num_filenames; i++)
 	{
-		ereport(elevel,
-				(errcode_for_file_access(),
-				 errmsg("could not open configuration directory \"%s\": %m",
-						directory)));
-		record_config_file_error(psprintf("could not open directory \"%s\"",
-										  directory),
-								 calling_file, calling_lineno,
-								 head_p, tail_p);
-		status = false;
-		goto cleanup;
+		if (!ParseConfigFile(filenames[i], true,
+							 calling_file, calling_lineno,
+							 depth, elevel,
+							 head_p, tail_p))
+			return false;
 	}
 
-	/*
-	 * Read the directory and put the filenames in an array, so we can sort
-	 * them prior to processing the contents.
-	 */
-	size_filenames = 32;
-	filenames = (char **) palloc(size_filenames * sizeof(char *));
-	num_filenames = 0;
-
-	while ((de = ReadDir(d, directory)) != NULL)
-	{
-		struct stat st;
-		char		filename[MAXPGPATH];
-
-		/*
-		 * Only parse files with names ending in ".conf".  Explicitly reject
-		 * files starting with ".".  This excludes things like "." and "..",
-		 * as well as typical hidden files, backup files, and editor debris.
-		 */
-		if (strlen(de->d_name) < 6)
-			continue;
-		if (de->d_name[0] == '.')
-			continue;
-		if (strcmp(de->d_name + strlen(de->d_name) - 5, ".conf") != 0)
-			continue;
-
-		join_path_components(filename, directory, de->d_name);
-		canonicalize_path(filename);
-		if (stat(filename, &st) == 0)
-		{
-			if (!S_ISDIR(st.st_mode))
-			{
-				/* Add file to array, increasing its size in blocks of 32 */
-				if (num_filenames >= size_filenames)
-				{
-					size_filenames += 32;
-					filenames = (char **) repalloc(filenames,
-											size_filenames * sizeof(char *));
-				}
-				filenames[num_filenames] = pstrdup(filename);
-				num_filenames++;
-			}
-		}
-		else
-		{
-			/*
-			 * stat does not care about permissions, so the most likely reason
-			 * a file can't be accessed now is if it was removed between the
-			 * directory listing and now.
-			 */
-			ereport(elevel,
-					(errcode_for_file_access(),
-					 errmsg("could not stat file \"%s\": %m",
-							filename)));
-			record_config_file_error(psprintf("could not stat file \"%s\"",
-											  filename),
-									 calling_file, calling_lineno,
-									 head_p, tail_p);
-			status = false;
-			goto cleanup;
-		}
-	}
-
-	if (num_filenames > 0)
-	{
-		int			i;
-
-		qsort(filenames, num_filenames, sizeof(char *), pg_qsort_strcmp);
-		for (i = 0; i < num_filenames; i++)
-		{
-			if (!ParseConfigFile(filenames[i], true,
-								 calling_file, calling_lineno,
-								 depth, elevel,
-								 head_p, tail_p))
-			{
-				status = false;
-				goto cleanup;
-			}
-		}
-	}
-	status = true;
-
-cleanup:
-	if (d)
-		FreeDir(d);
-	pfree(directory);
-	return status;
+	return true;
 }
 
 /*

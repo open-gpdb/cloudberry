@@ -3,24 +3,18 @@
  * equalfuncs.c
  *	  Equality functions to compare node trees.
  *
- * NOTE: we currently support comparing all node types found in parse
- * trees.  We do not support comparing executor state trees; there
- * is no need for that, and no point in maintaining all the code that
- * would be needed.  We also do not support comparing Path trees, mainly
- * because the circular linkages between RelOptInfo and Path nodes can't
- * be handled easily in a simple depth-first traversal.
- *
- * Currently, in fact, equal() doesn't know how to compare Plan trees
- * either.  This might need to be fixed someday.
- *
  * NOTE: it is intentional that parse location fields (in nodes that have
  * one) are not compared.  This is because we want, for example, a variable
  * "x" to be considered equal() to another reference to "x" in the query.
  *
  *
+<<<<<<< HEAD
  * Portions Copyright (c) 2005-2010, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+=======
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
+>>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -32,8 +26,6 @@
 #include "postgres.h"
 
 #include "miscadmin.h"
-#include "nodes/extensible.h"
-#include "nodes/pathnodes.h"
 #include "utils/datum.h"
 #include "catalog/gp_distribution_policy.h"
 
@@ -77,6 +69,13 @@
 #define equalstr(a, b)	\
 	(((a) != NULL && (b) != NULL) ? (strcmp(a, b) == 0) : (a) == (b))
 
+/* Compare a field that is an inline array */
+#define COMPARE_ARRAY_FIELD(fldname) \
+	do { \
+		if (memcmp(a->fldname, b->fldname, sizeof(a->fldname)) != 0) \
+			return false; \
+	} while (0)
+
 /* Compare a field that is a pointer to a simple palloc'd object of size sz */
 #define COMPARE_POINTER_FIELD(fldname, sz) \
 	do { \
@@ -110,10 +109,9 @@
 	((void) 0)
 
 
-/*
- *	Stuff from primnodes.h
- */
+#include "equalfuncs.funcs.c"
 
+<<<<<<< HEAD
 static bool
 _equalAlias(const Alias *a, const Alias *b)
 {
@@ -179,33 +177,12 @@ _equalIntoClause(const IntoClause *a, const IntoClause *b)
 	COMPARE_STRING_FIELD(schedule);
 	return true;
 }
+=======
+>>>>>>> REL_16_9
 
 /*
- * We don't need an _equalExpr because Expr is an abstract supertype which
- * should never actually get instantiated.  Also, since it has no common
- * fields except NodeTag, there's no need for a helper routine to factor
- * out comparing the common fields...
+ * Support functions for nodes with custom_copy_equal attribute
  */
-
-static bool
-_equalVar(const Var *a, const Var *b)
-{
-	COMPARE_SCALAR_FIELD(varno);
-	COMPARE_SCALAR_FIELD(varattno);
-	COMPARE_SCALAR_FIELD(vartype);
-	COMPARE_SCALAR_FIELD(vartypmod);
-	COMPARE_SCALAR_FIELD(varcollid);
-	COMPARE_SCALAR_FIELD(varlevelsup);
-
-	/*
-	 * varnosyn/varattnosyn are intentionally ignored here, because Vars with
-	 * different syntactic identifiers are semantically the same as long as
-	 * their varno/varattno match.
-	 */
-	COMPARE_LOCATION_FIELD(location);
-
-	return true;
-}
 
 static bool
 _equalConst(const Const *a, const Const *b)
@@ -229,6 +206,7 @@ _equalConst(const Const *a, const Const *b)
 }
 
 static bool
+<<<<<<< HEAD
 _equalParam(const Param *a, const Param *b)
 {
 	COMPARE_SCALAR_FIELD(paramkind);
@@ -1004,6 +982,8 @@ _equalPlaceHolderInfo(const PlaceHolderInfo *a, const PlaceHolderInfo *b)
  * Stuff from extensible.h
  */
 static bool
+=======
+>>>>>>> REL_16_9
 _equalExtensibleNode(const ExtensibleNode *a, const ExtensibleNode *b)
 {
 	const ExtensibleNodeMethods *methods;
@@ -1020,13 +1000,10 @@ _equalExtensibleNode(const ExtensibleNode *a, const ExtensibleNode *b)
 	return true;
 }
 
-/*
- * Stuff from parsenodes.h
- */
-
 static bool
-_equalQuery(const Query *a, const Query *b)
+_equalA_Const(const A_Const *a, const A_Const *b)
 {
+<<<<<<< HEAD
 	COMPARE_SCALAR_FIELD(commandType);
 	COMPARE_SCALAR_FIELD(querySource);
 	/* we intentionally ignore queryId, since it might not be set */
@@ -2821,6 +2798,12 @@ static bool
 _equalAConst(const A_Const *a, const A_Const *b)
 {
 	if (!equal(&a->val, &b->val))	/* hack for in-line Value field */
+=======
+	COMPARE_SCALAR_FIELD(isnull);
+	/* Hack for in-line val field.  Also val is not valid if isnull is true */
+	if (!a->isnull &&
+		!equal(&a->val, &b->val))
+>>>>>>> REL_16_9
 		return false;
 	COMPARE_LOCATION_FIELD(location);
 
@@ -2828,8 +2811,9 @@ _equalAConst(const A_Const *a, const A_Const *b)
 }
 
 static bool
-_equalFuncCall(const FuncCall *a, const FuncCall *b)
+_equalBitmapset(const Bitmapset *a, const Bitmapset *b)
 {
+<<<<<<< HEAD
 	COMPARE_NODE_FIELD(funcname);
 	COMPARE_NODE_FIELD(args);
 	COMPARE_NODE_FIELD(agg_order);
@@ -3465,6 +3449,9 @@ _equalPartitionCmd(const PartitionCmd *a, const PartitionCmd *b)
 	COMPARE_SCALAR_FIELD(concurrent);
 
 	return true;
+=======
+	return bms_equal(a, b);
+>>>>>>> REL_16_9
 }
 
 static bool
@@ -3532,9 +3519,8 @@ _equalDropTaskStmt(const DropTaskStmt *a, const DropTaskStmt *b)
 }
 
 /*
- * Stuff from pg_list.h
+ * Lists are handled specially
  */
-
 static bool
 _equalList(const List *a, const List *b)
 {
@@ -3575,6 +3561,13 @@ _equalList(const List *a, const List *b)
 					return false;
 			}
 			break;
+		case T_XidList:
+			forboth(item_a, a, item_b, b)
+			{
+				if (lfirst_xid(item_a) != lfirst_xid(item_b))
+					return false;
+			}
+			break;
 		default:
 			elog(ERROR, "unrecognized list node type: %d",
 				 (int) a->type);
@@ -3590,35 +3583,6 @@ _equalList(const List *a, const List *b)
 	return true;
 }
 
-/*
- * Stuff from value.h
- */
-
-static bool
-_equalValue(const Value *a, const Value *b)
-{
-	COMPARE_SCALAR_FIELD(type);
-
-	switch (a->type)
-	{
-		case T_Integer:
-			COMPARE_SCALAR_FIELD(val.ival);
-			break;
-		case T_Float:
-		case T_String:
-		case T_BitString:
-			COMPARE_STRING_FIELD(val.str);
-			break;
-		case T_Null:
-			/* nothing to do */
-			break;
-		default:
-			elog(ERROR, "unrecognized node type: %d", (int) a->type);
-			break;
-	}
-
-	return true;
-}
 
 /*
  * equal
@@ -3649,6 +3613,7 @@ equal(const void *a, const void *b)
 
 	switch (nodeTag(a))
 	{
+<<<<<<< HEAD
 			/*
 			 * PRIMITIVE NODES
 			 */
@@ -3836,13 +3801,18 @@ equal(const void *a, const void *b)
 		case T_PlaceHolderInfo:
 			retval = _equalPlaceHolderInfo(a, b);
 			break;
+=======
+#include "equalfuncs.switch.c"
+>>>>>>> REL_16_9
 
 		case T_List:
 		case T_IntList:
 		case T_OidList:
+		case T_XidList:
 			retval = _equalList(a, b);
 			break;
 
+<<<<<<< HEAD
 		case T_Integer:
 		case T_Float:
 		case T_String:
@@ -4501,6 +4471,8 @@ equal(const void *a, const void *b)
 			retval = _equalDropTaskStmt(a, b);
 			break;
 
+=======
+>>>>>>> REL_16_9
 		default:
 			elog(ERROR, "unrecognized node type: %d",
 				 (int) nodeTag(a));

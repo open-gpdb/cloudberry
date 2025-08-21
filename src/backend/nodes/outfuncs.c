@@ -3,15 +3,20 @@
  * outfuncs.c
  *	  Output functions for Postgres tree nodes.
  *
+<<<<<<< HEAD
  * Portions Copyright (c) 2005-2010, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+=======
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
+>>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
  * IDENTIFICATION
  *	  src/backend/nodes/outfuncs.c
  *
+<<<<<<< HEAD
  * NOTES
  *	  Every node type that can appear in stored rules' parsetrees *must*
  *	  have an output function defined here (as well as an input function
@@ -29,19 +34,22 @@
  *         are supplied in outfast.c for use in Greenplum Database serialization.  The
  *         function in this file are intended to produce legible output.
  *
+=======
+>>>>>>> REL_16_9
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
 
 #include <ctype.h>
 
+#include "access/attnum.h"
+#include "common/shortest_dec.h"
 #include "lib/stringinfo.h"
 #include "miscadmin.h"
-#include "nodes/extensible.h"
-#include "nodes/pathnodes.h"
-#include "nodes/plannodes.h"
+#include "nodes/bitmapset.h"
+#include "nodes/nodes.h"
+#include "nodes/pg_list.h"
 #include "utils/datum.h"
-#include "utils/rel.h"
 
 #include "cdb/cdbgang.h"
 #include "nodes/altertablenodes.h"
@@ -54,6 +62,7 @@
  */
 #ifndef COMPILING_BINARY_FUNCS
 static void outChar(StringInfo str, char c);
+static void outDouble(StringInfo str, double d);
 
 
 /*
@@ -98,9 +107,10 @@ static void outChar(StringInfo str, char c);
 	appendStringInfo(str, " :" CppAsString(fldname) " %d", \
 					 (int) node->fldname)
 
-/* Write a float field --- caller must give format to define precision */
-#define WRITE_FLOAT_FIELD(fldname,format) \
-	appendStringInfo(str, " :" CppAsString(fldname) " " format, node->fldname)
+/* Write a float field (actually, they're double) */
+#define WRITE_FLOAT_FIELD(fldname) \
+	(appendStringInfo(str, " :" CppAsString(fldname) " "), \
+	 outDouble(str, node->fldname))
 
 /* Write a boolean field */
 #define WRITE_BOOL_FIELD(fldname) \
@@ -126,28 +136,34 @@ static void outChar(StringInfo str, char c);
 	(appendStringInfoString(str, " :" CppAsString(fldname) " "), \
 	 outBitmapset(str, node->fldname))
 
+/* Write a variable-length array (not a List) of Node pointers */
+#define WRITE_NODE_ARRAY(fldname, len) \
+	(appendStringInfoString(str, " :" CppAsString(fldname) " "), \
+	 writeNodeArray(str, (const Node * const *) node->fldname, len))
+
+/* Write a variable-length array of AttrNumber */
 #define WRITE_ATTRNUMBER_ARRAY(fldname, len) \
-	do { \
-		appendStringInfoString(str, " :" CppAsString(fldname) " "); \
-		for (int i = 0; i < len; i++) \
-			appendStringInfo(str, " %d", node->fldname[i]); \
-	} while(0)
+	(appendStringInfoString(str, " :" CppAsString(fldname) " "), \
+	 writeAttrNumberCols(str, node->fldname, len))
 
+/* Write a variable-length array of Oid */
 #define WRITE_OID_ARRAY(fldname, len) \
-	do { \
-		appendStringInfoString(str, " :" CppAsString(fldname) " "); \
-		for (int i = 0; i < len; i++) \
-			appendStringInfo(str, " %u", node->fldname[i]); \
-	} while(0)
+	(appendStringInfoString(str, " :" CppAsString(fldname) " "), \
+	 writeOidCols(str, node->fldname, len))
 
+/* Write a variable-length array of Index */
+#define WRITE_INDEX_ARRAY(fldname, len) \
+	(appendStringInfoString(str, " :" CppAsString(fldname) " "), \
+	 writeIndexCols(str, node->fldname, len))
+
+/* Write a variable-length array of int */
 #define WRITE_INT_ARRAY(fldname, len) \
-	do { \
-		appendStringInfoString(str, " :" CppAsString(fldname) " "); \
-		for (int i = 0; i < len; i++) \
-			appendStringInfo(str, " %d", node->fldname[i]); \
-	} while(0)
+	(appendStringInfoString(str, " :" CppAsString(fldname) " "), \
+	 writeIntCols(str, node->fldname, len))
 
+/* Write a variable-length array of bool */
 #define WRITE_BOOL_ARRAY(fldname, len) \
+<<<<<<< HEAD
 	do { \
 		appendStringInfoString(str, " :" CppAsString(fldname) " "); \
 		for (int i = 0; i < len; i++) \
@@ -165,6 +181,10 @@ static void outChar(StringInfo str, char c);
 
 static void _outCdbPathLocus(StringInfo str, const CdbPathLocus *node);
 #endif /* COMPILING_BINARY_FUNCS */
+=======
+	(appendStringInfoString(str, " :" CppAsString(fldname) " "), \
+	 writeBoolCols(str, node->fldname, len))
+>>>>>>> REL_16_9
 
 #define booltostr(x)  ((x) ? "true" : "false")
 
@@ -175,14 +195,21 @@ static void _outCdbPathLocus(StringInfo str, const CdbPathLocus *node);
  *	  Convert an ordinary string (eg, an identifier) into a form that
  *	  will be decoded back to a plain token by read.c's functions.
  *
- *	  If a null or empty string is given, it is encoded as "<>".
+ *	  If a null string pointer is given, it is encoded as '<>'.
+ *	  An empty string is encoded as '""'.  To avoid ambiguity, input
+ *	  strings beginning with '<' or '"' receive a leading backslash.
  */
 void
 outToken(StringInfo str, const char *s)
 {
-	if (s == NULL || *s == '\0')
+	if (s == NULL)
 	{
 		appendStringInfoString(str, "<>");
+		return;
+	}
+	if (*s == '\0')
+	{
+		appendStringInfoString(str, "\"\"");
 		return;
 	}
 
@@ -218,12 +245,86 @@ outChar(StringInfo str, char c)
 {
 	char		in[2];
 
+	/* Traditionally, we've represented \0 as <>, so keep doing that */
+	if (c == '\0')
+	{
+		appendStringInfoString(str, "<>");
+		return;
+	}
+
 	in[0] = c;
 	in[1] = '\0';
 
 	outToken(str, in);
 }
 
+/*
+ * Convert a double value, attempting to ensure the value is preserved exactly.
+ */
+static void
+outDouble(StringInfo str, double d)
+{
+	char		buf[DOUBLE_SHORTEST_DECIMAL_LEN];
+
+	double_to_shortest_decimal_buf(d, buf);
+	appendStringInfoString(str, buf);
+}
+
+/*
+ * common implementation for scalar-array-writing functions
+ *
+ * The data format is either "<>" for a NULL pointer or "(item item item)".
+ * fmtstr must include a leading space, and the rest of it must produce
+ * something that will be seen as a single simple token by pg_strtok().
+ * convfunc can be empty, or the name of a conversion macro or function.
+ */
+#define WRITE_SCALAR_ARRAY(fnname, datatype, fmtstr, convfunc) \
+static void \
+fnname(StringInfo str, const datatype *arr, int len) \
+{ \
+	if (arr != NULL) \
+	{ \
+		appendStringInfoChar(str, '('); \
+		for (int i = 0; i < len; i++) \
+			appendStringInfo(str, fmtstr, convfunc(arr[i])); \
+		appendStringInfoChar(str, ')'); \
+	} \
+	else \
+		appendStringInfoString(str, "<>"); \
+}
+
+WRITE_SCALAR_ARRAY(writeAttrNumberCols, AttrNumber, " %d",)
+WRITE_SCALAR_ARRAY(writeOidCols, Oid, " %u",)
+WRITE_SCALAR_ARRAY(writeIndexCols, Index, " %u",)
+WRITE_SCALAR_ARRAY(writeIntCols, int, " %d",)
+WRITE_SCALAR_ARRAY(writeBoolCols, bool, " %s", booltostr)
+
+/*
+ * Print an array (not a List) of Node pointers.
+ *
+ * The decoration is identical to that of scalar arrays, but we can't
+ * quite use appendStringInfo() in the loop.
+ */
+static void
+writeNodeArray(StringInfo str, const Node *const *arr, int len)
+{
+	if (arr != NULL)
+	{
+		appendStringInfoChar(str, '(');
+		for (int i = 0; i < len; i++)
+		{
+			appendStringInfoChar(str, ' ');
+			outNode(str, arr[i]);
+		}
+		appendStringInfoChar(str, ')');
+	}
+	else
+		appendStringInfoString(str, "<>");
+}
+
+/*
+ * Print a List.
+ */
 static void
 _outList(StringInfo str, const List *node)
 {
@@ -235,6 +336,8 @@ _outList(StringInfo str, const List *node)
 		appendStringInfoChar(str, 'i');
 	else if (IsA(node, OidList))
 		appendStringInfoChar(str, 'o');
+	else if (IsA(node, XidList))
+		appendStringInfoChar(str, 'x');
 
 	foreach(lc, node)
 	{
@@ -253,6 +356,8 @@ _outList(StringInfo str, const List *node)
 			appendStringInfo(str, " %d", lfirst_int(lc));
 		else if (IsA(node, OidList))
 			appendStringInfo(str, " %u", lfirst_oid(lc));
+		else if (IsA(node, XidList))
+			appendStringInfo(str, " %u", lfirst_xid(lc));
 		else
 			elog(ERROR, "unrecognized list node type: %d",
 				 (int) node->type);
@@ -266,6 +371,9 @@ _outList(StringInfo str, const List *node)
  *	   converts a bitmap set of integers
  *
  * Note: the output format is "(b int int ...)", similar to an integer List.
+ *
+ * We export this function for use by extensions that define extensible nodes.
+ * That's somewhat historical, though, because calling outNode() will work.
  */
 void
 outBitmapset(StringInfo str, const Bitmapset *bms)
@@ -317,10 +425,9 @@ outDatum(StringInfo str, Datum value, int typlen, bool typbyval)
 
 #endif /* COMPILING_BINARY_FUNCS */
 
-/*
- *	Stuff from plannodes.h
- */
+#include "outfuncs.funcs.c"
 
+<<<<<<< HEAD
 static void
 _outPlannedStmt(StringInfo str, const PlannedStmt *node)
 {
@@ -387,10 +494,14 @@ _outPlannedStmt(StringInfo str, const PlannedStmt *node)
 	WRITE_NODE_FIELD(extensionContext);
 
 }
+=======
+>>>>>>> REL_16_9
 
 /*
- * print the basic stuff of all nodes that inherit from Plan
+ * Support functions for nodes with custom_read_write attribute or
+ * special_read_write attribute
  */
+<<<<<<< HEAD
 static void
 _outPlanInfo(StringInfo str, const Plan *node)
 {
@@ -1320,6 +1431,8 @@ _outVar(StringInfo str, const Var *node)
 	WRITE_INT_FIELD(varattnosyn);
 	WRITE_LOCATION_FIELD(location);
 }
+=======
+>>>>>>> REL_16_9
 
 #ifndef COMPILING_BINARY_FUNCS
 static void
@@ -1344,6 +1457,7 @@ _outConst(StringInfo str, const Const *node)
 #endif /* COMPILING_BINARY_FUNCS */
 
 static void
+<<<<<<< HEAD
 _outParam(StringInfo str, const Param *node)
 {
 	WRITE_NODE_TYPE("PARAM");
@@ -1518,6 +1632,8 @@ _outScalarArrayOpExpr(StringInfo str, const ScalarArrayOpExpr *node)
 
 #ifndef COMPILING_BINARY_FUNCS
 static void
+=======
+>>>>>>> REL_16_9
 _outBoolExpr(StringInfo str, const BoolExpr *node)
 {
 	char	   *opstr = NULL;
@@ -1546,6 +1662,7 @@ _outBoolExpr(StringInfo str, const BoolExpr *node)
 #endif /* COMPILING_BINARY_FUNCS */
 
 static void
+<<<<<<< HEAD
 _outSubLink(StringInfo str, const SubLink *node)
 {
 	WRITE_NODE_TYPE("SUBLINK");
@@ -2646,6 +2763,8 @@ _outIndexOptInfo(StringInfo str, const IndexOptInfo *node)
 }
 
 static void
+=======
+>>>>>>> REL_16_9
 _outForeignKeyOptInfo(StringInfo str, const ForeignKeyOptInfo *node)
 {
 	int			i;
@@ -2672,18 +2791,6 @@ _outForeignKeyOptInfo(StringInfo str, const ForeignKeyOptInfo *node)
 }
 
 static void
-_outStatisticExtInfo(StringInfo str, const StatisticExtInfo *node)
-{
-	WRITE_NODE_TYPE("STATISTICEXTINFO");
-
-	/* NB: this isn't a complete set of fields */
-	WRITE_OID_FIELD(statOid);
-	/* don't write rel, leads to infinite recursion in plan tree dump */
-	WRITE_CHAR_FIELD(kind);
-	WRITE_BITMAPSET_FIELD(keys);
-}
-
-static void
 _outEquivalenceClass(StringInfo str, const EquivalenceClass *node)
 {
 	/*
@@ -2703,7 +2810,6 @@ _outEquivalenceClass(StringInfo str, const EquivalenceClass *node)
 	WRITE_BITMAPSET_FIELD(ec_relids);
 	WRITE_BOOL_FIELD(ec_has_const);
 	WRITE_BOOL_FIELD(ec_has_volatile);
-	WRITE_BOOL_FIELD(ec_below_outer_join);
 	WRITE_BOOL_FIELD(ec_broken);
 	WRITE_UINT_FIELD(ec_sortref);
 	WRITE_UINT_FIELD(ec_min_security);
@@ -2711,6 +2817,7 @@ _outEquivalenceClass(StringInfo str, const EquivalenceClass *node)
 }
 
 static void
+<<<<<<< HEAD
 _outEquivalenceMember(StringInfo str, const EquivalenceMember *node)
 {
 	WRITE_NODE_TYPE("EQUIVALENCEMEMBER");
@@ -2943,6 +3050,8 @@ _outPlannerParamItem(StringInfo str, const PlannerParamItem *node)
 
 #ifndef COMPILING_BINARY_FUNCS
 static void
+=======
+>>>>>>> REL_16_9
 _outExtensibleNode(StringInfo str, const ExtensibleNode *node)
 {
 	const ExtensibleNodeMethods *methods;
@@ -2958,6 +3067,7 @@ _outExtensibleNode(StringInfo str, const ExtensibleNode *node)
 }
 #endif /* COMPILING_BINARY_FUNCS */
 
+<<<<<<< HEAD
 /*****************************************************************************
  *
  *	Stuff from parsenodes.h.
@@ -3588,10 +3698,12 @@ _outSetOperationStmt(StringInfo str, const SetOperationStmt *node)
 	WRITE_NODE_FIELD(groupClauses);
 }
 
+=======
+>>>>>>> REL_16_9
 static void
 _outRangeTblEntry(StringInfo str, const RangeTblEntry *node)
 {
-	WRITE_NODE_TYPE("RTE");
+	WRITE_NODE_TYPE("RANGETBLENTRY");
 
 	/* put alias + eref first to make dump more legible */
 	WRITE_NODE_FIELD(alias);
@@ -3606,10 +3718,16 @@ _outRangeTblEntry(StringInfo str, const RangeTblEntry *node)
 			WRITE_CHAR_FIELD(relkind);
 			WRITE_INT_FIELD(rellockmode);
 			WRITE_NODE_FIELD(tablesample);
+			WRITE_UINT_FIELD(perminfoindex);
 			break;
 		case RTE_SUBQUERY:
 			WRITE_NODE_FIELD(subquery);
 			WRITE_BOOL_FIELD(security_barrier);
+			/* we re-use these RELATION fields, too: */
+			WRITE_OID_FIELD(relid);
+			WRITE_CHAR_FIELD(relkind);
+			WRITE_INT_FIELD(rellockmode);
+			WRITE_UINT_FIELD(perminfoindex);
 			break;
 		case RTE_JOIN:
 			WRITE_ENUM_FIELD(jointype, JoinType);
@@ -3647,11 +3765,12 @@ _outRangeTblEntry(StringInfo str, const RangeTblEntry *node)
 			break;
 		case RTE_NAMEDTUPLESTORE:
 			WRITE_STRING_FIELD(enrname);
-			WRITE_FLOAT_FIELD(enrtuples, "%.0f");
-			WRITE_OID_FIELD(relid);
+			WRITE_FLOAT_FIELD(enrtuples);
 			WRITE_NODE_FIELD(coltypes);
 			WRITE_NODE_FIELD(coltypmods);
 			WRITE_NODE_FIELD(colcollations);
+			/* we re-use these RELATION fields, too: */
+			WRITE_OID_FIELD(relid);
 			break;
 		case RTE_RESULT:
 			/* no extra fields */
@@ -3666,20 +3785,15 @@ _outRangeTblEntry(StringInfo str, const RangeTblEntry *node)
 	WRITE_BOOL_FIELD(lateral);
 	WRITE_BOOL_FIELD(inh);
 	WRITE_BOOL_FIELD(inFromCl);
-	WRITE_UINT_FIELD(requiredPerms);
-	WRITE_OID_FIELD(checkAsUser);
-	WRITE_BITMAPSET_FIELD(selectedCols);
-	WRITE_BITMAPSET_FIELD(insertedCols);
-	WRITE_BITMAPSET_FIELD(updatedCols);
-	WRITE_BITMAPSET_FIELD(extraUpdatedCols);
 	WRITE_NODE_FIELD(securityQuals);
 
 	WRITE_BOOL_FIELD(forceDistRandom);
 }
 
 static void
-_outRangeTblFunction(StringInfo str, const RangeTblFunction *node)
+_outA_Expr(StringInfo str, const A_Expr *node)
 {
+<<<<<<< HEAD
 	WRITE_NODE_TYPE("RANGETBLFUNCTION");
 
 	WRITE_NODE_FIELD(funcexpr);
@@ -3710,69 +3824,69 @@ static void
 _outAExpr(StringInfo str, const A_Expr *node)
 {
 	WRITE_NODE_TYPE("AEXPR");
+=======
+	WRITE_NODE_TYPE("A_EXPR");
+>>>>>>> REL_16_9
 
 	switch (node->kind)
 	{
 		case AEXPR_OP:
-			appendStringInfoChar(str, ' ');
 			WRITE_NODE_FIELD(name);
 			break;
 		case AEXPR_OP_ANY:
-			appendStringInfoChar(str, ' ');
+			appendStringInfoString(str, " ANY");
 			WRITE_NODE_FIELD(name);
-			appendStringInfoString(str, " ANY ");
 			break;
 		case AEXPR_OP_ALL:
-			appendStringInfoChar(str, ' ');
+			appendStringInfoString(str, " ALL");
 			WRITE_NODE_FIELD(name);
-			appendStringInfoString(str, " ALL ");
 			break;
 		case AEXPR_DISTINCT:
-			appendStringInfoString(str, " DISTINCT ");
+			appendStringInfoString(str, " DISTINCT");
 			WRITE_NODE_FIELD(name);
 			break;
 		case AEXPR_NOT_DISTINCT:
-			appendStringInfoString(str, " NOT_DISTINCT ");
+			appendStringInfoString(str, " NOT_DISTINCT");
 			WRITE_NODE_FIELD(name);
 			break;
 		case AEXPR_NULLIF:
-			appendStringInfoString(str, " NULLIF ");
+			appendStringInfoString(str, " NULLIF");
 			WRITE_NODE_FIELD(name);
 			break;
 		case AEXPR_IN:
-			appendStringInfoString(str, " IN ");
+			appendStringInfoString(str, " IN");
 			WRITE_NODE_FIELD(name);
 			break;
 		case AEXPR_LIKE:
-			appendStringInfoString(str, " LIKE ");
+			appendStringInfoString(str, " LIKE");
 			WRITE_NODE_FIELD(name);
 			break;
 		case AEXPR_ILIKE:
-			appendStringInfoString(str, " ILIKE ");
+			appendStringInfoString(str, " ILIKE");
 			WRITE_NODE_FIELD(name);
 			break;
 		case AEXPR_SIMILAR:
-			appendStringInfoString(str, " SIMILAR ");
+			appendStringInfoString(str, " SIMILAR");
 			WRITE_NODE_FIELD(name);
 			break;
 		case AEXPR_BETWEEN:
-			appendStringInfoString(str, " BETWEEN ");
+			appendStringInfoString(str, " BETWEEN");
 			WRITE_NODE_FIELD(name);
 			break;
 		case AEXPR_NOT_BETWEEN:
-			appendStringInfoString(str, " NOT_BETWEEN ");
+			appendStringInfoString(str, " NOT_BETWEEN");
 			WRITE_NODE_FIELD(name);
 			break;
 		case AEXPR_BETWEEN_SYM:
-			appendStringInfoString(str, " BETWEEN_SYM ");
+			appendStringInfoString(str, " BETWEEN_SYM");
 			WRITE_NODE_FIELD(name);
 			break;
 		case AEXPR_NOT_BETWEEN_SYM:
-			appendStringInfoString(str, " NOT_BETWEEN_SYM ");
+			appendStringInfoString(str, " NOT_BETWEEN_SYM");
 			WRITE_NODE_FIELD(name);
 			break;
 		default:
-			appendStringInfoString(str, " ??");
+			elog(ERROR, "unrecognized A_Expr_Kind: %d", (int) node->kind);
 			break;
 	}
 
@@ -3782,85 +3896,61 @@ _outAExpr(StringInfo str, const A_Expr *node)
 }
 
 static void
-_outValue(StringInfo str, const Value *value)
+_outInteger(StringInfo str, const Integer *node)
 {
-	switch (value->type)
-	{
-		case T_Integer:
-			appendStringInfo(str, "%d", value->val.ival);
-			break;
-		case T_Float:
-
-			/*
-			 * We assume the value is a valid numeric literal and so does not
-			 * need quoting.
-			 */
-			appendStringInfoString(str, value->val.str);
-			break;
-		case T_String:
-
-			/*
-			 * We use outToken to provide escaping of the string's content,
-			 * but we don't want it to do anything with an empty string.
-			 */
-			appendStringInfoChar(str, '"');
-			if (value->val.str[0] != '\0')
-				outToken(str, value->val.str);
-			appendStringInfoChar(str, '"');
-			break;
-		case T_BitString:
-			/* internal representation already has leading 'b' */
-			appendStringInfoString(str, value->val.str);
-			break;
-		case T_Null:
-			/* this is seen only within A_Const, not in transformed trees */
-			appendStringInfoString(str, "NULL");
-			break;
-		default:
-			elog(ERROR, "unrecognized node type: %d", (int) value->type);
-			break;
-	}
+	appendStringInfo(str, "%d", node->ival);
 }
 #endif /* COMPILING_BINARY_FUNCS */
 
 static void
-_outColumnRef(StringInfo str, const ColumnRef *node)
+_outFloat(StringInfo str, const Float *node)
 {
-	WRITE_NODE_TYPE("COLUMNREF");
-
-	WRITE_NODE_FIELD(fields);
-	WRITE_LOCATION_FIELD(location);
+	/*
+	 * We assume the value is a valid numeric literal and so does not need
+	 * quoting.
+	 */
+	appendStringInfoString(str, node->fval);
 }
 
 static void
-_outParamRef(StringInfo str, const ParamRef *node)
+_outBoolean(StringInfo str, const Boolean *node)
 {
-	WRITE_NODE_TYPE("PARAMREF");
-
-	WRITE_INT_FIELD(number);
-	WRITE_LOCATION_FIELD(location);
-}
-
-/*
- * Node types found in raw parse trees (supported for debug purposes)
- */
-
-static void
-_outRawStmt(StringInfo str, const RawStmt *node)
-{
-	WRITE_NODE_TYPE("RAWSTMT");
-
-	WRITE_NODE_FIELD(stmt);
-	WRITE_LOCATION_FIELD(stmt_location);
-	WRITE_INT_FIELD(stmt_len);
+	appendStringInfoString(str, node->boolval ? "true" : "false");
 }
 
 #ifndef COMPILING_BINARY_FUNCS
 static void
-_outAConst(StringInfo str, const A_Const *node)
+_outString(StringInfo str, const String *node)
+{
+	/*
+	 * We use outToken to provide escaping of the string's content, but we
+	 * don't want it to convert an empty string to '""', because we're putting
+	 * double quotes around the string already.
+	 */
+	appendStringInfoChar(str, '"');
+	if (node->sval[0] != '\0')
+		outToken(str, node->sval);
+	appendStringInfoChar(str, '"');
+}
+
+static void
+_outBitString(StringInfo str, const BitString *node)
+{
+	/*
+	 * The lexer will always produce a string starting with 'b' or 'x'.  There
+	 * might be characters following that that need escaping, but outToken
+	 * won't escape the 'b' or 'x'.  This is relied on by nodeTokenType.
+	 */
+	Assert(node->bsval[0] == 'b' || node->bsval[0] == 'x');
+	outToken(str, node->bsval);
+}
+
+static void
+_outA_Const(StringInfo str, const A_Const *node)
 {
 	WRITE_NODE_TYPE("A_CONST");
 
+<<<<<<< HEAD
 	appendStringInfoString(str, " :val ");
 	_outValue(str, &(node->val));
 	WRITE_LOCATION_FIELD(location);
@@ -4010,6 +4100,15 @@ _outRangeTableFuncCol(StringInfo str, const RangeTableFuncCol *node)
 	WRITE_BOOL_FIELD(is_not_null);
 	WRITE_NODE_FIELD(colexpr);
 	WRITE_NODE_FIELD(coldefexpr);
+=======
+	if (node->isnull)
+		appendStringInfoString(str, " NULL");
+	else
+	{
+		appendStringInfoString(str, " :val ");
+		outNode(str, &node->val);
+	}
+>>>>>>> REL_16_9
 	WRITE_LOCATION_FIELD(location);
 }
 #endif /* COMPILING_BINARY_FUNCS */
@@ -4036,14 +4135,23 @@ _outConstraint(StringInfo str, const Constraint *node)
 
 	WRITE_NODE_FIELD(exclusions);
 
+<<<<<<< HEAD
 	WRITE_NODE_FIELD(options);
 	WRITE_STRING_FIELD(indexname);
 	WRITE_STRING_FIELD(indexspace);
 	WRITE_BOOL_FIELD(reset_default_tblspc);
+=======
+		case CONSTR_IDENTITY:
+			appendStringInfoString(str, "IDENTITY");
+			WRITE_NODE_FIELD(options);
+			WRITE_CHAR_FIELD(generated_when);
+			break;
+>>>>>>> REL_16_9
 
 	WRITE_STRING_FIELD(access_method);
 	WRITE_NODE_FIELD(where_clause);
 
+<<<<<<< HEAD
 	WRITE_NODE_FIELD(pktable);
 	WRITE_NODE_FIELD(fk_attrs);
 	WRITE_NODE_FIELD(pk_attrs);
@@ -4119,6 +4227,89 @@ _outPartitionRangeDatum(StringInfo str, const PartitionRangeDatum *node)
 	WRITE_NODE_FIELD(value);
 	WRITE_LOCATION_FIELD(location);
 }
+=======
+		case CONSTR_CHECK:
+			appendStringInfoString(str, "CHECK");
+			WRITE_BOOL_FIELD(is_no_inherit);
+			WRITE_NODE_FIELD(raw_expr);
+			WRITE_STRING_FIELD(cooked_expr);
+			WRITE_BOOL_FIELD(skip_validation);
+			WRITE_BOOL_FIELD(initially_valid);
+			break;
+
+		case CONSTR_PRIMARY:
+			appendStringInfoString(str, "PRIMARY_KEY");
+			WRITE_NODE_FIELD(keys);
+			WRITE_NODE_FIELD(including);
+			WRITE_NODE_FIELD(options);
+			WRITE_STRING_FIELD(indexname);
+			WRITE_STRING_FIELD(indexspace);
+			WRITE_BOOL_FIELD(reset_default_tblspc);
+			/* access_method and where_clause not currently used */
+			break;
+
+		case CONSTR_UNIQUE:
+			appendStringInfoString(str, "UNIQUE");
+			WRITE_BOOL_FIELD(nulls_not_distinct);
+			WRITE_NODE_FIELD(keys);
+			WRITE_NODE_FIELD(including);
+			WRITE_NODE_FIELD(options);
+			WRITE_STRING_FIELD(indexname);
+			WRITE_STRING_FIELD(indexspace);
+			WRITE_BOOL_FIELD(reset_default_tblspc);
+			/* access_method and where_clause not currently used */
+			break;
+
+		case CONSTR_EXCLUSION:
+			appendStringInfoString(str, "EXCLUSION");
+			WRITE_NODE_FIELD(exclusions);
+			WRITE_NODE_FIELD(including);
+			WRITE_NODE_FIELD(options);
+			WRITE_STRING_FIELD(indexname);
+			WRITE_STRING_FIELD(indexspace);
+			WRITE_BOOL_FIELD(reset_default_tblspc);
+			WRITE_STRING_FIELD(access_method);
+			WRITE_NODE_FIELD(where_clause);
+			break;
+
+		case CONSTR_FOREIGN:
+			appendStringInfoString(str, "FOREIGN_KEY");
+			WRITE_NODE_FIELD(pktable);
+			WRITE_NODE_FIELD(fk_attrs);
+			WRITE_NODE_FIELD(pk_attrs);
+			WRITE_CHAR_FIELD(fk_matchtype);
+			WRITE_CHAR_FIELD(fk_upd_action);
+			WRITE_CHAR_FIELD(fk_del_action);
+			WRITE_NODE_FIELD(fk_del_set_cols);
+			WRITE_NODE_FIELD(old_conpfeqop);
+			WRITE_OID_FIELD(old_pktable_oid);
+			WRITE_BOOL_FIELD(skip_validation);
+			WRITE_BOOL_FIELD(initially_valid);
+			break;
+
+		case CONSTR_ATTR_DEFERRABLE:
+			appendStringInfoString(str, "ATTR_DEFERRABLE");
+			break;
+
+		case CONSTR_ATTR_NOT_DEFERRABLE:
+			appendStringInfoString(str, "ATTR_NOT_DEFERRABLE");
+			break;
+
+		case CONSTR_ATTR_DEFERRED:
+			appendStringInfoString(str, "ATTR_DEFERRED");
+			break;
+
+		case CONSTR_ATTR_IMMEDIATE:
+			appendStringInfoString(str, "ATTR_IMMEDIATE");
+			break;
+
+		default:
+			elog(ERROR, "unrecognized ConstrType: %d", (int) node->contype);
+			break;
+	}
+}
+
+>>>>>>> REL_16_9
 
 static void
 _outCreateDirectoryTableStmt(StringInfo str, const CreateDirectoryTableStmt *node)
@@ -4185,21 +4376,28 @@ outNode(StringInfo str, const void *obj)
 
 	if (obj == NULL)
 		appendStringInfoString(str, "<>");
-	else if (IsA(obj, List) || IsA(obj, IntList) || IsA(obj, OidList))
+	else if (IsA(obj, List) || IsA(obj, IntList) || IsA(obj, OidList) ||
+			 IsA(obj, XidList))
 		_outList(str, obj);
-	else if (IsA(obj, Integer) ||
-			 IsA(obj, Float) ||
-			 IsA(obj, String) ||
-			 IsA(obj, BitString))
-	{
-		/* nodeRead does not want to see { } around these! */
-		_outValue(str, obj);
-	}
+	/* nodeRead does not want to see { } around these! */
+	else if (IsA(obj, Integer))
+		_outInteger(str, (Integer *) obj);
+	else if (IsA(obj, Float))
+		_outFloat(str, (Float *) obj);
+	else if (IsA(obj, Boolean))
+		_outBoolean(str, (Boolean *) obj);
+	else if (IsA(obj, String))
+		_outString(str, (String *) obj);
+	else if (IsA(obj, BitString))
+		_outBitString(str, (BitString *) obj);
+	else if (IsA(obj, Bitmapset))
+		outBitmapset(str, (Bitmapset *) obj);
 	else
 	{
 		appendStringInfoChar(str, '{');
 		switch (nodeTag(obj))
 		{
+<<<<<<< HEAD
 			case T_PlannedStmt:
 				_outPlannedStmt(str, obj);
 				break;
@@ -5185,6 +5383,9 @@ outNode(StringInfo str, const void *obj)
 			case T_GpDropPartitionCmd:
 				_outGpDropPartitionCmd(str, obj);
 				break;
+=======
+#include "outfuncs.switch.c"
+>>>>>>> REL_16_9
 
 			case T_CreateSchemaStmt:
 				_outCreateSchemaStmt(str, obj);

@@ -4,9 +4,13 @@
  *	  prototypes for pathnode.c, relnode.c.
  *
  *
+<<<<<<< HEAD
  * Portions Copyright (c) 2005-2008, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+=======
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
+>>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/optimizer/pathnode.h
@@ -101,7 +105,10 @@ extern MemoizePath *create_memoize_path(PlannerInfo *root,
 										bool singlerow,
 										bool binary_mode,
 										double calls);
+<<<<<<< HEAD
 
+=======
+>>>>>>> REL_16_9
 extern UniquePath *create_unique_path(PlannerInfo *root, RelOptInfo *rel,
 									  Path *subpath, SpecialJoinInfo *sjinfo);
 extern UniquePath *create_unique_rowid_path(PlannerInfo *root,
@@ -120,8 +127,15 @@ extern GatherMergePath *create_gather_merge_path(PlannerInfo *root,
 												 Relids required_outer,
 												 double *rows);
 extern SubqueryScanPath *create_subqueryscan_path(PlannerInfo *root,
+<<<<<<< HEAD
 												  RelOptInfo *rel, Path *subpath,
 												  List *pathkeys, CdbPathLocus locus,
+=======
+												  RelOptInfo *rel,
+												  Path *subpath,
+												  bool trivial_pathtarget,
+												  List *pathkeys,
+>>>>>>> REL_16_9
 												  Relids required_outer);
 extern Path *create_functionscan_path(PlannerInfo *root, RelOptInfo *rel,
 									  RangeTblEntry *rte,
@@ -300,7 +314,9 @@ extern WindowAggPath *create_windowagg_path(PlannerInfo *root,
 											Path *subpath,
 											PathTarget *target,
 											List *windowFuncs,
-											WindowClause *winclause);
+											WindowClause *winclause,
+											List *qual,
+											bool topwindow);
 extern SetOpPath *create_setop_path(PlannerInfo *root,
 									RelOptInfo *rel,
 									Path *subpath,
@@ -332,8 +348,13 @@ extern ModifyTablePath *create_modifytable_path(PlannerInfo *root,
 												List *updateColnosLists,
 												List *withCheckOptionLists, List *returningLists,
 												List *rowMarks, OnConflictExpr *onconflict,
+<<<<<<< HEAD
 												int epqParam);
 extern Path *create_limit_path(PlannerInfo *root, RelOptInfo *rel,
+=======
+												List *mergeActionLists, int epqParam);
+extern LimitPath *create_limit_path(PlannerInfo *root, RelOptInfo *rel,
+>>>>>>> REL_16_9
 									Path *subpath,
 									Node *limitOffset, Node *limitCount,
 									LimitOption limitOption,
@@ -356,12 +377,14 @@ extern void expand_planner_arrays(PlannerInfo *root, int add_size);
 extern RelOptInfo *build_simple_rel(PlannerInfo *root, int relid,
 									RelOptInfo *parent);
 extern RelOptInfo *find_base_rel(PlannerInfo *root, int relid);
+extern RelOptInfo *find_base_rel_ignore_join(PlannerInfo *root, int relid);
 extern RelOptInfo *find_join_rel(PlannerInfo *root, Relids relids);
 extern RelOptInfo *build_join_rel(PlannerInfo *root,
 								  Relids joinrelids,
 								  RelOptInfo *outer_rel,
 								  RelOptInfo *inner_rel,
 								  SpecialJoinInfo *sjinfo,
+<<<<<<< HEAD
 								  List **restrictlist_ptr,
 								  RelAggInfo *agg_info);
 extern RelOptInfo *build_base_grouped_rel(PlannerInfo *root, RelOptInfo *rel,
@@ -373,6 +396,10 @@ extern RelAggInfo *get_grouped_rel_agg_info(PlannerInfo *root,
 											RelOptInfo *joinrel_plain);
 extern RelOptInfo *find_grouped_rel(PlannerInfo *root, Relids relids);
 extern RelOptInfo *get_grouped_rel(PlannerInfo *root, RelOptInfo *rel);
+=======
+								  List *pushed_down_joins,
+								  List **restrictlist_ptr);
+>>>>>>> REL_16_9
 extern Relids min_join_parameterization(PlannerInfo *root,
 										Relids joinrelids,
 										RelOptInfo *outer_rel,
@@ -395,10 +422,11 @@ extern ParamPathInfo *get_appendrel_parampathinfo(RelOptInfo *appendrel,
 												  Relids required_outer);
 extern ParamPathInfo *find_param_path_info(RelOptInfo *rel,
 										   Relids required_outer);
+extern Bitmapset *get_param_path_clause_serials(Path *path);
 extern RelOptInfo *build_child_join_rel(PlannerInfo *root,
 										RelOptInfo *outer_rel, RelOptInfo *inner_rel,
 										RelOptInfo *parent_joinrel, List *restrictlist,
-										SpecialJoinInfo *sjinfo, JoinType jointype);
+										SpecialJoinInfo *sjinfo);
 
 extern RelAggInfo *create_rel_agg_info(PlannerInfo *root, RelOptInfo *rel);
 

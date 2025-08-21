@@ -12,11 +12,19 @@
 #include <string.h>
 #include <stdio.h>
 
+<<<<<<< HEAD
+=======
+#include "common/jsonapi.h"
+>>>>>>> REL_16_9
 #include "fe_utils/psqlscan.h"
 #include "fe_utils/string_utils.h"
 #include "getopt_long.h"
 #include "libpq-fe.h"
 #include "mb/pg_wchar.h"
+<<<<<<< HEAD
+=======
+#include "utils/memdebug.h"
+>>>>>>> REL_16_9
 
 
 typedef struct pe_test_config
@@ -30,6 +38,11 @@ typedef struct pe_test_config
 	int			failure_count;
 } pe_test_config;
 
+<<<<<<< HEAD
+=======
+#define NEVER_ACCESS_STR "\xff never-to-be-touched"
+
+>>>>>>> REL_16_9
 
 /*
  * An escape function to be tested by this test.
@@ -56,6 +69,14 @@ typedef struct pe_test_escape_func
 	 */
 	bool		supports_only_ascii_overlap;
 
+<<<<<<< HEAD
+=======
+	/*
+	 * Does the escape function have a length input?
+	 */
+	bool		supports_input_length;
+
+>>>>>>> REL_16_9
 	bool		(*escape) (PGconn *conn, PQExpBuffer target,
 						   const char *unescaped, size_t unescaped_len,
 						   PQExpBuffer escape_err);
@@ -80,6 +101,170 @@ static const PsqlScanCallbacks test_scan_callbacks = {
 };
 
 
+<<<<<<< HEAD
+=======
+/*
+ * Print the string into buf, making characters outside of plain ascii
+ * somewhat easier to recognize.
+ *
+ * The output format could stand to be improved significantly, it's not at all
+ * unambiguous.
+ */
+static void
+escapify(PQExpBuffer buf, const char *str, size_t len)
+{
+	for (size_t i = 0; i < len; i++)
+	{
+		char		c = *str;
+
+		if (c == '\n')
+			appendPQExpBufferStr(buf, "\\n");
+		else if (c == '\0')
+			appendPQExpBufferStr(buf, "\\0");
+		else if (c < ' ' || c > '~')
+			appendPQExpBuffer(buf, "\\x%2x", (uint8_t) c);
+		else
+			appendPQExpBufferChar(buf, c);
+		str++;
+	}
+}
+
+static void
+report_result(pe_test_config *tc,
+			  bool success,
+			  const char *testname,
+			  const char *details,
+			  const char *subname,
+			  const char *resultdesc)
+{
+	int			test_id = ++tc->test_count;
+	bool		print_details = true;
+	bool		print_result = true;
+
+	if (success)
+	{
+		if (tc->verbosity <= 0)
+			print_details = false;
+		if (tc->verbosity < 0)
+			print_result = false;
+	}
+	else
+		tc->failure_count++;
+
+	if (print_details)
+		printf("%s", details);
+
+	if (print_result)
+		printf("%s %d - %s: %s: %s\n",
+			   success ? "ok" : "not ok",
+			   test_id, testname,
+			   subname,
+			   resultdesc);
+}
+
+/*
+ * Return true for encodings in which bytes in a multi-byte character look
+ * like valid ascii characters.
+ */
+static bool
+encoding_conflicts_ascii(int encoding)
+{
+	/*
+	 * We don't store this property directly anywhere, but whether an encoding
+	 * is a client-only encoding is a good proxy.
+	 */
+	if (encoding > PG_ENCODING_BE_LAST)
+		return true;
+	return false;
+}
+
+
+/*
+ * Confirm escaping doesn't read past the end of an allocation.  Consider the
+ * result of malloc(4096), in the absence of freelist entries satisfying the
+ * allocation.  On OpenBSD, reading one byte past the end of that object
+ * yields SIGSEGV.
+ *
+ * Run this test before the program's other tests, so freelists are minimal.
+ * len=4096 didn't SIGSEGV, likely due to free() calls in libpq.  len=8192
+ * did.  Use 128 KiB, to somewhat insulate the outcome from distant new free()
+ * calls and libc changes.
+ */
+static void
+test_gb18030_page_multiple(pe_test_config *tc)
+{
+	PQExpBuffer testname;
+	size_t		input_len = 0x20000;
+	char	   *input;
+
+	/* prepare input */
+	input = pg_malloc(input_len);
+	memset(input, '-', input_len - 1);
+	input[input_len - 1] = 0xfe;
+
+	/* name to describe the test */
+	testname = createPQExpBuffer();
+	appendPQExpBuffer(testname, ">repeat(%c, %zu)", input[0], input_len - 1);
+	escapify(testname, input + input_len - 1, 1);
+	appendPQExpBuffer(testname, "< - GB18030 - PQescapeLiteral");
+
+	/* test itself */
+	PQsetClientEncoding(tc->conn, "GB18030");
+	report_result(tc, PQescapeLiteral(tc->conn, input, input_len) == NULL,
+				  testname->data, "",
+				  "input validity vs escape success", "ok");
+
+	destroyPQExpBuffer(testname);
+	pg_free(input);
+}
+
+/*
+ * Confirm json parsing doesn't read past the end of an allocation.  This
+ * exercises wchar.c infrastructure like the true "escape" tests do, but this
+ * isn't an "escape" test.
+ */
+static void
+test_gb18030_json(pe_test_config *tc)
+{
+	PQExpBuffer raw_buf;
+	PQExpBuffer testname;
+	const char	input[] = "{\"\\u\xFE";
+	size_t		input_len = sizeof(input) - 1;
+	JsonLexContext *lex;
+	JsonSemAction sem = {0};	/* no callbacks */
+	JsonParseErrorType json_error;
+	char	   *error_str;
+
+	/* prepare input like test_one_vector_escape() does */
+	raw_buf = createPQExpBuffer();
+	appendBinaryPQExpBuffer(raw_buf, input, input_len);
+	appendPQExpBufferStr(raw_buf, NEVER_ACCESS_STR);
+	VALGRIND_MAKE_MEM_NOACCESS(&raw_buf->data[input_len],
+							   raw_buf->len - input_len);
+
+	/* name to describe the test */
+	testname = createPQExpBuffer();
+	appendPQExpBuffer(testname, ">");
+	escapify(testname, input, input_len);
+	appendPQExpBuffer(testname, "< - GB18030 - pg_parse_json");
+
+	/* test itself */
+	lex = makeJsonLexContextCstringLen(raw_buf->data, input_len,
+									   PG_GB18030, false);
+	json_error = pg_parse_json(lex, &sem);
+	error_str = psprintf("JsonParseErrorType %d", json_error);
+	report_result(tc, json_error == JSON_UNICODE_ESCAPE_FORMAT,
+				  testname->data, "",
+				  "diagnosed", error_str);
+
+	pfree(error_str);
+	pfree(lex);
+	destroyPQExpBuffer(testname);
+	destroyPQExpBuffer(raw_buf);
+}
+
+
+>>>>>>> REL_16_9
 static bool
 escape_literal(PGconn *conn, PQExpBuffer target,
 			   const char *unescaped, size_t unescaped_len,
@@ -234,21 +419,37 @@ static pe_test_escape_func pe_test_escape_funcs[] =
 	{
 		.name = "PQescapeLiteral",
 		.reports_errors = true,
+<<<<<<< HEAD
+=======
+		.supports_input_length = true,
+>>>>>>> REL_16_9
 		.escape = escape_literal,
 	},
 	{
 		.name = "PQescapeIdentifier",
 		.reports_errors = true,
+<<<<<<< HEAD
+=======
+		.supports_input_length = true,
+>>>>>>> REL_16_9
 		.escape = escape_identifier
 	},
 	{
 		.name = "PQescapeStringConn",
 		.reports_errors = true,
+<<<<<<< HEAD
+=======
+		.supports_input_length = true,
+>>>>>>> REL_16_9
 		.escape = escape_string_conn
 	},
 	{
 		.name = "PQescapeString",
 		.reports_errors = false,
+<<<<<<< HEAD
+=======
+		.supports_input_length = true,
+>>>>>>> REL_16_9
 		.escape = escape_string
 	},
 	{
@@ -256,6 +457,10 @@ static pe_test_escape_func pe_test_escape_funcs[] =
 		.reports_errors = false,
 		.supports_only_valid = true,
 		.supports_only_ascii_overlap = true,
+<<<<<<< HEAD
+=======
+		.supports_input_length = true,
+>>>>>>> REL_16_9
 		.escape = escape_replace
 	},
 	{
@@ -272,6 +477,10 @@ static pe_test_escape_func pe_test_escape_funcs[] =
 
 
 #define TV(enc, string) {.client_encoding = (enc), .escape=string, .escape_len=sizeof(string) - 1, }
+<<<<<<< HEAD
+=======
+#define TV_LEN(enc, string, len) {.client_encoding = (enc), .escape=string, .escape_len=len, }
+>>>>>>> REL_16_9
 static pe_test_vector pe_test_vectors[] =
 {
 	/* expected to work sanity checks */
@@ -359,6 +568,7 @@ static pe_test_vector pe_test_vectors[] =
 	TV("mule_internal", "\\\x9c';\0;"),
 
 	TV("sql_ascii", "1\xC0'"),
+<<<<<<< HEAD
 };
 
 
@@ -437,6 +647,30 @@ encoding_conflicts_ascii(int encoding)
 	return false;
 }
 
+=======
+
+	/*
+	 * Testcases that are not null terminated for the specified input length.
+	 * That's interesting to verify that escape functions don't read beyond
+	 * the intended input length.
+	 *
+	 * One interesting special case is GB18030, which has the odd behaviour
+	 * needing to read beyond the first byte to determine the length of a
+	 * multi-byte character.
+	 */
+	TV_LEN("gbk", "\x80", 1),
+	TV_LEN("GB18030", "\x80", 1),
+	TV_LEN("GB18030", "\x80\0", 2),
+	TV_LEN("GB18030", "\x80\x30", 2),
+	TV_LEN("GB18030", "\x80\x30\0", 3),
+	TV_LEN("GB18030", "\x80\x30\x30", 3),
+	TV_LEN("GB18030", "\x80\x30\x30\0", 4),
+	TV_LEN("UTF-8", "\xC3\xb6  ", 1),
+	TV_LEN("UTF-8", "\xC3\xb6  ", 2),
+};
+
+
+>>>>>>> REL_16_9
 static const char *
 scan_res_s(PsqlScanResult res)
 {
@@ -511,7 +745,11 @@ test_psql_parse(pe_test_config *tc, PQExpBuffer testname,
 	else
 		resdesc = "ok";
 
+<<<<<<< HEAD
 	report_result(tc, !test_fails, testname, details,
+=======
+	report_result(tc, !test_fails, testname->data, details->data,
+>>>>>>> REL_16_9
 				  "psql parse",
 				  resdesc);
 }
@@ -521,6 +759,10 @@ test_one_vector_escape(pe_test_config *tc, const pe_test_vector *tv, const pe_te
 {
 	PQExpBuffer testname;
 	PQExpBuffer details;
+<<<<<<< HEAD
+=======
+	PQExpBuffer raw_buf;
+>>>>>>> REL_16_9
 	PQExpBuffer escape_buf;
 	PQExpBuffer escape_err;
 	size_t		input_encoding_validlen;
@@ -534,6 +776,10 @@ test_one_vector_escape(pe_test_config *tc, const pe_test_vector *tv, const pe_te
 	escape_err = createPQExpBuffer();
 	testname = createPQExpBuffer();
 	details = createPQExpBuffer();
+<<<<<<< HEAD
+=======
+	raw_buf = createPQExpBuffer();
+>>>>>>> REL_16_9
 	escape_buf = createPQExpBuffer();
 
 	if (ef->supports_only_ascii_overlap &&
@@ -567,8 +813,13 @@ test_one_vector_escape(pe_test_config *tc, const pe_test_vector *tv, const pe_te
 
 	input_encoding0_validlen = pg_encoding_verifymbstr(PQclientEncoding(tc->conn),
 													   tv->escape,
+<<<<<<< HEAD
 													   strlen(tv->escape));
 	input_encoding0_valid = input_encoding0_validlen == strlen(tv->escape);
+=======
+													   strnlen(tv->escape, tv->escape_len));
+	input_encoding0_valid = input_encoding0_validlen == strnlen(tv->escape, tv->escape_len);
+>>>>>>> REL_16_9
 	appendPQExpBuffer(details, "#\t input encoding valid till 0: %d\n",
 					  input_encoding0_valid);
 
@@ -580,9 +831,50 @@ test_one_vector_escape(pe_test_config *tc, const pe_test_vector *tv, const pe_te
 		goto out;
 
 
+<<<<<<< HEAD
 	/* call the to-be-tested escape function */
 	escape_success = ef->escape(tc->conn, escape_buf,
 								tv->escape, tv->escape_len,
+=======
+	/*
+	 * Put the to-be-escaped data into a buffer, so that we
+	 *
+	 * a) can mark memory beyond end of the string as inaccessible when using
+	 * valgrind
+	 *
+	 * b) can append extra data beyond the length passed to the escape
+	 * function, to verify that that data is not processed.
+	 *
+	 * TODO: Should we instead/additionally escape twice, once with unmodified
+	 * and once with appended input? That way we could compare the two.
+	 */
+	appendBinaryPQExpBuffer(raw_buf, tv->escape, tv->escape_len);
+
+	if (ef->supports_input_length)
+	{
+		/*
+		 * Append likely invalid string that does *not* contain a null byte
+		 * (which'd prevent some invalid accesses to later memory).
+		 */
+		appendPQExpBufferStr(raw_buf, NEVER_ACCESS_STR);
+
+		VALGRIND_MAKE_MEM_NOACCESS(&raw_buf->data[tv->escape_len],
+								   raw_buf->len - tv->escape_len);
+	}
+	else
+	{
+		/* append invalid string, after \0 */
+		appendPQExpBufferChar(raw_buf, 0);
+		appendPQExpBufferStr(raw_buf, NEVER_ACCESS_STR);
+
+		VALGRIND_MAKE_MEM_NOACCESS(&raw_buf->data[tv->escape_len + 1],
+								   raw_buf->len - tv->escape_len - 1);
+	}
+
+	/* call the to-be-tested escape function */
+	escape_success = ef->escape(tc->conn, escape_buf,
+								raw_buf->data, tv->escape_len,
+>>>>>>> REL_16_9
 								escape_err);
 	if (!escape_success)
 	{
@@ -592,6 +884,11 @@ test_one_vector_escape(pe_test_config *tc, const pe_test_vector *tv, const pe_te
 
 	if (escape_buf->len > 0)
 	{
+<<<<<<< HEAD
+=======
+		bool		contains_never;
+
+>>>>>>> REL_16_9
 		appendPQExpBuffer(details, "#\t escaped string: %zd bytes: ", escape_buf->len);
 		escapify(details, escape_buf->data, escape_buf->len);
 		appendPQExpBufferChar(details, '\n');
@@ -603,6 +900,19 @@ test_one_vector_escape(pe_test_config *tc, const pe_test_vector *tv, const pe_te
 
 		appendPQExpBuffer(details, "#\t escape encoding valid: %d\n",
 						  escape_encoding_valid);
+<<<<<<< HEAD
+=======
+
+		/*
+		 * Verify that no data beyond the end of the input is included in the
+		 * escaped string.  It'd be better to use something like memmem()
+		 * here, but that's not available everywhere.
+		 */
+		contains_never = strstr(escape_buf->data, NEVER_ACCESS_STR) == NULL;
+		report_result(tc, contains_never, testname->data, details->data,
+					  "escaped data beyond end of input",
+					  contains_never ? "no" : "all secrets revealed");
+>>>>>>> REL_16_9
 	}
 	else
 	{
@@ -643,7 +953,11 @@ test_one_vector_escape(pe_test_config *tc, const pe_test_vector *tv, const pe_te
 				resdesc = "valid input failed to escape, due to zero byte";
 		}
 
+<<<<<<< HEAD
 		report_result(tc, ok, testname, details,
+=======
+		report_result(tc, ok, testname->data, details->data,
+>>>>>>> REL_16_9
 					  "input validity vs escape success",
 					  resdesc);
 	}
@@ -673,7 +987,11 @@ test_one_vector_escape(pe_test_config *tc, const pe_test_vector *tv, const pe_te
 			resdesc = "invalid input produced valid output";
 		}
 
+<<<<<<< HEAD
 		report_result(tc, ok, testname, details,
+=======
+		report_result(tc, ok, testname->data, details->data,
+>>>>>>> REL_16_9
 					  "input and escaped encoding validity",
 					  resdesc);
 	}
@@ -693,6 +1011,10 @@ out:
 	destroyPQExpBuffer(details);
 	destroyPQExpBuffer(testname);
 	destroyPQExpBuffer(escape_buf);
+<<<<<<< HEAD
+=======
+	destroyPQExpBuffer(raw_buf);
+>>>>>>> REL_16_9
 }
 
 static void
@@ -729,7 +1051,11 @@ usage(const char *hint)
 		   "  -c, --conninfo=CONNINFO   connection information to use\n"
 		   "  -v, --verbose             show test details even for successes\n"
 		   "  -q, --quiet               only show failures\n"
+<<<<<<< HEAD
 		   "      --force-unsupported   test invalid input even if unsupported\n"
+=======
+		   "  -f, --force-unsupported   test invalid input even if unsupported\n"
+>>>>>>> REL_16_9
 		);
 
 	if (hint)
@@ -752,7 +1078,11 @@ main(int argc, char *argv[])
 		{NULL, 0, NULL, 0},
 	};
 
+<<<<<<< HEAD
 	while ((c = getopt_long(argc, argv, "vqh", long_options, &option_index)) != -1)
+=======
+	while ((c = getopt_long(argc, argv, "c:fhqv", long_options, &option_index)) != -1)
+>>>>>>> REL_16_9
 	{
 		switch (c)
 		{
@@ -790,6 +1120,12 @@ main(int argc, char *argv[])
 		exit(1);
 	}
 
+<<<<<<< HEAD
+=======
+	test_gb18030_page_multiple(&tc);
+	test_gb18030_json(&tc);
+
+>>>>>>> REL_16_9
 	for (int i = 0; i < lengthof(pe_test_vectors); i++)
 	{
 		test_one_vector(&tc, &pe_test_vectors[i]);

@@ -39,11 +39,15 @@
 #include "px.h"
 #include "utils/builtins.h"
 #include "utils/uuid.h"
+<<<<<<< HEAD
 #include "utils/guc.h"
 
 #include "px-crypt.h"
 #include "pgcrypto.h"
 #include "pgp.h"
+=======
+#include "varatt.h"
+>>>>>>> REL_16_9
 
 PG_MODULE_MAGIC;
 
@@ -121,7 +125,8 @@ pgcrypto_fips_check(bool *newval, void **extra, GucSource source)
 /* private stuff */
 
 typedef int (*PFN) (const char *name, void **res);
-static void *find_provider(text *name, PFN pf, const char *desc, int silent);
+static void *find_provider(text *name, PFN provider_lookup, const char *desc,
+						   int silent);
 
 /* SQL function: hash(bytea, text) returns bytea */
 PG_FUNCTION_INFO_V1(pg_digest);

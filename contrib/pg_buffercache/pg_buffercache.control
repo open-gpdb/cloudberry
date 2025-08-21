@@ -1,5 +1,9 @@
 # pg_buffercache extension
 comment = 'examine the shared buffer cache'
+<<<<<<< HEAD
 default_version = '1.4.1'
+=======
+default_version = '1.4'
+>>>>>>> REL_16_9
 module_pathname = '$libdir/pg_buffercache'
 relocatable = true

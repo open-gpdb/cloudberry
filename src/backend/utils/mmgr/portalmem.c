@@ -8,9 +8,13 @@
  * doesn't actually run the executor for them.
  *
  *
+<<<<<<< HEAD
  * Portions Copyright (c) 2006-2009, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+=======
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
+>>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -23,6 +27,7 @@
 #include "access/xact.h"
 #include "catalog/pg_type.h"
 #include "commands/portalcmds.h"
+#include "funcapi.h"
 #include "miscadmin.h"
 #include "storage/ipc.h"
 #include "utils/builtins.h"
@@ -183,7 +188,7 @@ CreatePortal(const char *name, bool allowDup, bool dupSilent)
 {
 	Portal		portal;
 
-	AssertArg(PointerIsValid(name));
+	Assert(PointerIsValid(name));
 
 	portal = GetPortalByName(name);
 	if (PortalIsValid(portal))
@@ -307,11 +312,11 @@ PortalDefineQuery(Portal portal,
 				  List *stmts,
 				  CachedPlan *cplan)
 {
-	AssertArg(PortalIsValid(portal));
-	AssertState(portal->status == PORTAL_NEW);
+	Assert(PortalIsValid(portal));
+	Assert(portal->status == PORTAL_NEW);
 
-	AssertArg(sourceText != NULL);
-	AssertArg(commandTag != CMDTAG_UNKNOWN || stmts == NIL);
+	Assert(sourceText != NULL);
+	Assert(commandTag != CMDTAG_UNKNOWN || stmts == NIL);
 
 	portal->prepStmtName = prepStmtName;
 	portal->sourceText = sourceText;
@@ -489,7 +494,7 @@ MarkPortalFailed(Portal portal)
 void
 PortalDrop(Portal portal, bool isTopCommit)
 {
-	AssertArg(PortalIsValid(portal));
+	Assert(PortalIsValid(portal));
 
 	/*
 	 * Don't allow dropping a pinned portal, it's still needed by whoever
@@ -1265,13 +1270,10 @@ Datum
 pg_cursor(PG_FUNCTION_ARGS)
 {
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
-	TupleDesc	tupdesc;
-	Tuplestorestate *tupstore;
-	MemoryContext per_query_ctx;
-	MemoryContext oldcontext;
 	HASH_SEQ_STATUS hash_seq;
 	PortalHashEnt *hentry;
 
+<<<<<<< HEAD
 	/* check to see if caller supports us returning a tuplestore */
 	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
 		ereport(ERROR,
@@ -1306,29 +1308,32 @@ pg_cursor(PG_FUNCTION_ARGS)
 	TupleDescInitEntry(tupdesc, (AttrNumber) 7, "is_parallel",
 					   BOOLOID, -1, 0);
 
+=======
+>>>>>>> REL_16_9
 	/*
 	 * We put all the tuples into a tuplestore in one scan of the hashtable.
 	 * This avoids any issue of the hashtable possibly changing between calls.
 	 */
-	tupstore =
-		tuplestore_begin_heap(rsinfo->allowedModes & SFRM_Materialize_Random,
-							  false, work_mem);
-
-	/* generate junk in short-term context */
-	MemoryContextSwitchTo(oldcontext);
+	InitMaterializedSRF(fcinfo, 0);
 
 	hash_seq_init(&hash_seq, PortalHashTable);
 	while ((hentry = hash_seq_search(&hash_seq)) != NULL)
 	{
 		Portal		portal = hentry->portal;
+<<<<<<< HEAD
 		Datum		values[7];
 		bool		nulls[7];
+=======
+		Datum		values[6];
+		bool		nulls[6] = {0};
+>>>>>>> REL_16_9
 
 		/* report only "visible" entries */
 		if (!portal->visible)
 			continue;
-
-		MemSet(nulls, 0, sizeof(nulls));
+		/* also ignore it if PortalDefineQuery hasn't been called yet */
+		if (!portal->sourceText)
+			continue;
 
 		values[0] = CStringGetTextDatum(portal->name);
 		values[1] = CStringGetTextDatum(portal->sourceText);
@@ -1338,15 +1343,8 @@ pg_cursor(PG_FUNCTION_ARGS)
 		values[5] = TimestampTzGetDatum(portal->creation_time);
 		values[6] = BoolGetDatum(PortalIsParallelRetrieveCursor(portal));
 
-		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
 	}
-
-	/* clean up and return the tuplestore */
-	tuplestore_donestoring(tupstore);
-
-	rsinfo->returnMode = SFRM_Materialize;
-	rsinfo->setResult = tupstore;
-	rsinfo->setDesc = tupdesc;
 
 	return (Datum) 0;
 }

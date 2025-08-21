@@ -3,7 +3,7 @@
  * be-fsstubs.c
  *	  Builtin functions for open/close/read/write operations on large objects
  *
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -43,6 +43,10 @@
 #include <unistd.h>
 
 #include "access/xact.h"
+<<<<<<< HEAD
+=======
+#include "catalog/pg_largeobject.h"
+>>>>>>> REL_16_9
 #include "libpq/be-fsstubs.h"
 #include "libpq/libpq-fs.h"
 #include "miscadmin.h"
@@ -52,6 +56,10 @@
 #include "utils/builtins.h"
 #include "utils/memutils.h"
 #include "utils/snapmgr.h"
+<<<<<<< HEAD
+=======
+#include "varatt.h"
+>>>>>>> REL_16_9
 
 /* define this to enable debug logging */
 /* #define FSDB 1 */
@@ -97,6 +105,12 @@ be_lo_open(PG_FUNCTION_ARGS)
 	elog(DEBUG4, "lo_open(%u,%d)", lobjId, mode);
 #endif
 
+<<<<<<< HEAD
+=======
+	if (mode & INV_WRITE)
+		PreventCommandIfReadOnly("lo_open(INV_WRITE)");
+
+>>>>>>> REL_16_9
 	/*
 	 * Allocate a large object descriptor first.  This will also create
 	 * 'fscxt' if this is the first LO opened in this transaction.
@@ -257,6 +271,7 @@ be_lo_creat(PG_FUNCTION_ARGS)
 {
 	Oid			lobjId;
 
+<<<<<<< HEAD
 	ereport(ERROR,
 		(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 		 errmsg("large objects are not supported")));
@@ -266,7 +281,11 @@ be_lo_creat(PG_FUNCTION_ARGS)
 	 * ensure that AtEOXact_LargeObject knows there is state to clean up
 	 */
 	lo_cleanup_needed = true;
+=======
+	PreventCommandIfReadOnly("lo_creat()");
+>>>>>>> REL_16_9
 
+	lo_cleanup_needed = true;
 	lobjId = inv_create(InvalidOid);
 
 	PG_RETURN_OID(lobjId);
@@ -277,6 +296,7 @@ be_lo_create(PG_FUNCTION_ARGS)
 {
 	Oid			lobjId = PG_GETARG_OID(0);
 
+<<<<<<< HEAD
 	ereport(ERROR,
 		(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 		 errmsg("large objects are not supported")));
@@ -286,7 +306,11 @@ be_lo_create(PG_FUNCTION_ARGS)
 	 * ensure that AtEOXact_LargeObject knows there is state to clean up
 	 */
 	lo_cleanup_needed = true;
+=======
+	PreventCommandIfReadOnly("lo_create()");
+>>>>>>> REL_16_9
 
+	lo_cleanup_needed = true;
 	lobjId = inv_create(lobjId);
 
 	PG_RETURN_OID(lobjId);
@@ -340,9 +364,13 @@ be_lo_unlink(PG_FUNCTION_ARGS)
 {
 	Oid			lobjId = PG_GETARG_OID(0);
 
+<<<<<<< HEAD
 	ereport(ERROR,
 		(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 		 errmsg("large objects are not supported")));
+=======
+	PreventCommandIfReadOnly("lo_unlink()");
+>>>>>>> REL_16_9
 
 	/*
 	 * Must be owner of the large object.  It would be cleaner to check this
@@ -350,7 +378,7 @@ be_lo_unlink(PG_FUNCTION_ARGS)
 	 * relevant FDs.
 	 */
 	if (!lo_compat_privileges &&
-		!pg_largeobject_ownercheck(lobjId, GetUserId()))
+		!object_ownercheck(LargeObjectRelationId, lobjId, GetUserId()))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("must be owner of large object %u", lobjId)));
@@ -410,9 +438,13 @@ be_lowrite(PG_FUNCTION_ARGS)
 	int			bytestowrite;
 	int			totalwritten;
 
+<<<<<<< HEAD
 	ereport(ERROR,
 		(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 		 errmsg("large objects are not supported")));
+=======
+	PreventCommandIfReadOnly("lowrite()");
+>>>>>>> REL_16_9
 
 	bytestowrite = VARSIZE_ANY_EXHDR(wbuf);
 	totalwritten = lo_write(fd, VARDATA_ANY(wbuf), bytestowrite);
@@ -467,6 +499,11 @@ lo_import_internal(text *filename, Oid lobjOid)
 	LargeObjectDesc *lobj;
 	Oid			oid;
 
+<<<<<<< HEAD
+=======
+	PreventCommandIfReadOnly("lo_import()");
+
+>>>>>>> REL_16_9
 	/*
 	 * open the file to be read in
 	 */
@@ -615,9 +652,13 @@ be_lo_truncate(PG_FUNCTION_ARGS)
 	int32		fd = PG_GETARG_INT32(0);
 	int32		len = PG_GETARG_INT32(1);
 
+<<<<<<< HEAD
 	ereport(ERROR,
 		(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 		 errmsg("large objects are not supported")));
+=======
+	PreventCommandIfReadOnly("lo_truncate()");
+>>>>>>> REL_16_9
 
 	lo_truncate_internal(fd, len);
 	PG_RETURN_INT32(0);
@@ -628,6 +669,8 @@ be_lo_truncate64(PG_FUNCTION_ARGS)
 {
 	int32		fd = PG_GETARG_INT32(0);
 	int64		len = PG_GETARG_INT64(1);
+
+	PreventCommandIfReadOnly("lo_truncate64()");
 
 	lo_truncate_internal(fd, len);
 	PG_RETURN_INT32(0);
@@ -737,19 +780,16 @@ newLOfd(void)
 		newsize = 64;
 		cookies = (LargeObjectDesc **)
 			MemoryContextAllocZero(fscxt, newsize * sizeof(LargeObjectDesc *));
-		cookies_size = newsize;
 	}
 	else
 	{
 		/* Double size of array */
 		i = cookies_size;
 		newsize = cookies_size * 2;
-		cookies = (LargeObjectDesc **)
-			repalloc(cookies, newsize * sizeof(LargeObjectDesc *));
-		MemSet(cookies + cookies_size, 0,
-			   (newsize - cookies_size) * sizeof(LargeObjectDesc *));
-		cookies_size = newsize;
+		cookies =
+			repalloc0_array(cookies, LargeObjectDesc *, cookies_size, newsize);
 	}
+	cookies_size = newsize;
 
 	return i;
 }
@@ -873,6 +913,11 @@ be_lo_from_bytea(PG_FUNCTION_ARGS)
 	LargeObjectDesc *loDesc;
 	int			written PG_USED_FOR_ASSERTS_ONLY;
 
+<<<<<<< HEAD
+=======
+	PreventCommandIfReadOnly("lo_from_bytea()");
+
+>>>>>>> REL_16_9
 	lo_cleanup_needed = true;
 	loOid = inv_create(loOid);
 	loDesc = inv_open(loOid, INV_WRITE, CurrentMemoryContext);
@@ -895,6 +940,11 @@ be_lo_put(PG_FUNCTION_ARGS)
 	LargeObjectDesc *loDesc;
 	int			written PG_USED_FOR_ASSERTS_ONLY;
 
+<<<<<<< HEAD
+=======
+	PreventCommandIfReadOnly("lo_put()");
+
+>>>>>>> REL_16_9
 	lo_cleanup_needed = true;
 	loDesc = inv_open(loOid, INV_WRITE, CurrentMemoryContext);
 

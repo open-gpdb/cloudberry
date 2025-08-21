@@ -6,7 +6,7 @@
  *
  * This code is released under the terms of the PostgreSQL License.
  *
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/test/regress/regress.c
@@ -39,8 +39,10 @@
 #include "parser/parse_coerce.h"
 #include "port/atomics.h"
 #include "storage/spin.h"
+#include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/geo_decls.h"
+#include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
 #include "utils/typcache.h"
@@ -55,22 +57,22 @@
 
 #define EXPECT_EQ_U32(result_expr, expected_expr)	\
 	do { \
-		uint32		result = (result_expr); \
-		uint32		expected = (expected_expr); \
-		if (result != expected) \
+		uint32		actual_result = (result_expr); \
+		uint32		expected_result = (expected_expr); \
+		if (actual_result != expected_result) \
 			elog(ERROR, \
 				 "%s yielded %u, expected %s in file \"%s\" line %u", \
-				 #result_expr, result, #expected_expr, __FILE__, __LINE__); \
+				 #result_expr, actual_result, #expected_expr, __FILE__, __LINE__); \
 	} while (0)
 
 #define EXPECT_EQ_U64(result_expr, expected_expr)	\
 	do { \
-		uint64		result = (result_expr); \
-		uint64		expected = (expected_expr); \
-		if (result != expected) \
+		uint64		actual_result = (result_expr); \
+		uint64		expected_result = (expected_expr); \
+		if (actual_result != expected_result) \
 			elog(ERROR, \
 				 "%s yielded " UINT64_FORMAT ", expected %s in file \"%s\" line %u", \
-				 #result_expr, result, #expected_expr, __FILE__, __LINE__); \
+				 #result_expr, actual_result, #expected_expr, __FILE__, __LINE__); \
 	} while (0)
 
 #define LDELIM			'('
@@ -181,6 +183,11 @@ widget_in(PG_FUNCTION_ARGS)
 			coord[i++] = p + 1;
 	}
 
+	/*
+	 * Note: DON'T convert this error to "soft" style (errsave/ereturn).  We
+	 * want this data type to stay permanently in the hard-error world so that
+	 * it can be used for testing that such cases still work reasonably.
+	 */
 	if (i < NARGS)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
@@ -531,6 +538,16 @@ int44out(PG_FUNCTION_ARGS)
 	PG_RETURN_CSTRING(result);
 }
 
+PG_FUNCTION_INFO_V1(test_canonicalize_path);
+Datum
+test_canonicalize_path(PG_FUNCTION_ARGS)
+{
+	char	   *path = text_to_cstring(PG_GETARG_TEXT_PP(0));
+
+	canonicalize_path(path);
+	PG_RETURN_TEXT_P(cstring_to_text(path));
+}
+
 PG_FUNCTION_INFO_V1(make_tuple_indirect);
 Datum
 make_tuple_indirect(PG_FUNCTION_ARGS)
@@ -626,6 +643,29 @@ make_tuple_indirect(PG_FUNCTION_ARGS)
 	 * function into a container type (record, array, etc) it should be OK.
 	 */
 	PG_RETURN_POINTER(newtup->t_data);
+}
+
+PG_FUNCTION_INFO_V1(get_environ);
+
+Datum
+get_environ(PG_FUNCTION_ARGS)
+{
+	extern char **environ;
+	int			nvals = 0;
+	ArrayType  *result;
+	Datum	   *env;
+
+	for (char **s = environ; *s; s++)
+		nvals++;
+
+	env = palloc(nvals * sizeof(Datum));
+
+	for (int i = 0; i < nvals; i++)
+		env[i] = CStringGetTextDatum(environ[i]);
+
+	result = construct_array_builtin(env, nvals, TEXTOID);
+
+	PG_RETURN_POINTER(result);
 }
 
 PG_FUNCTION_INFO_V1(regress_setenv);
@@ -1149,7 +1189,7 @@ test_enc_conversion(PG_FUNCTION_ARGS)
 	int			convertedbytes;
 	int			dstlen;
 	Datum		values[2];
-	bool		nulls[2];
+	bool		nulls[2] = {0};
 	HeapTuple	tuple;
 
 	if (src_encoding < 0)
@@ -1238,7 +1278,6 @@ test_enc_conversion(PG_FUNCTION_ARGS)
 		pfree(dst);
 	}
 
-	MemSet(nulls, 0, sizeof(nulls));
 	values[0] = Int32GetDatum(convertedbytes);
 	values[1] = PointerGetDatum(retval);
 	tuple = heap_form_tuple(tupdesc, values, nulls);
@@ -1255,4 +1294,44 @@ binary_coercible(PG_FUNCTION_ARGS)
 	Oid			targettype = PG_GETARG_OID(1);
 
 	PG_RETURN_BOOL(IsBinaryCoercible(srctype, targettype));
+}
+
+/*
+ * Return the length of the portion of a tuple consisting of the given array
+ * of data types.  The input data types must be fixed-length data types.
+ */
+PG_FUNCTION_INFO_V1(get_columns_length);
+Datum
+get_columns_length(PG_FUNCTION_ARGS)
+{
+	ArrayType  *ta = PG_GETARG_ARRAYTYPE_P(0);
+	Oid		   *type_oids;
+	int			ntypes;
+	int			column_offset = 0;
+
+	if (ARR_HASNULL(ta) && array_contains_nulls(ta))
+		elog(ERROR, "argument must not contain nulls");
+
+	if (ARR_NDIM(ta) > 1)
+		elog(ERROR, "argument must be empty or one-dimensional array");
+
+	type_oids = (Oid *) ARR_DATA_PTR(ta);
+	ntypes = ArrayGetNItems(ARR_NDIM(ta), ARR_DIMS(ta));
+	for (int i = 0; i < ntypes; i++)
+	{
+		Oid			typeoid = type_oids[i];
+		int16		typlen;
+		bool		typbyval;
+		char		typalign;
+
+		get_typlenbyvalalign(typeoid, &typlen, &typbyval, &typalign);
+
+		/* the data type must be fixed-length */
+		if (typlen < 0)
+			elog(ERROR, "type %u is not fixed-length data type", typeoid);
+
+		column_offset = att_align_nominal(column_offset + typlen, typalign);
+	}
+
+	PG_RETURN_INT32(column_offset);
 }

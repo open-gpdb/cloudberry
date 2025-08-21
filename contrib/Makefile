@@ -15,6 +15,8 @@ SUBDIRS = \
 		amcheck		\
 		auth_delay	\
 		auto_explain	\
+		basic_archive	\
+		basebackup_to_shell	\
 		bloom		\
 		btree_gin	\
 		btree_gist	\
@@ -41,10 +43,14 @@ SUBDIRS = \
 		pg_stat_statements \
 		pg_surgery	\
 		pg_trgm		\
-		pgcrypto	\
 		pgrowlocks	\
 		pgstattuple	\
 		pg_visibility	\
+<<<<<<< HEAD
+=======
+		pg_walinspect	\
+		postgres_fdw	\
+>>>>>>> REL_16_9
 		seg		\
 		spi		\
 		tablefunc	\
@@ -63,9 +69,9 @@ SUBDIRS += \
 		indexscan
 
 ifeq ($(with_ssl),openssl)
-SUBDIRS += sslinfo
+SUBDIRS += pgcrypto sslinfo
 else
-ALWAYS_SUBDIRS += sslinfo
+ALWAYS_SUBDIRS += pgcrypto sslinfo
 endif
 
 ifneq ($(with_uuid),no)

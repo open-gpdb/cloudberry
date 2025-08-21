@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 -- TODO: incremental sort is turned off by default, because it may have
 -- wrong result for some core case. Turn it on to run the existing tests
 -- and minimize the difference from upstream.
@@ -19,6 +20,8 @@ select * from (select * from tenk1 order by four) t order by four, ten;
  Optimizer: Postgres query optimizer
 (8 rows)
 
+=======
+>>>>>>> REL_16_9
 -- When there is a LIMIT clause, incremental sort is beneficial because
 -- it only has to sort some of the groups, and not the entire table.
 explain (costs off)
@@ -1590,6 +1593,7 @@ explain (costs off) select a,b,sum(c) from t group by 1,2 order by 1,2,3 limit 1
 -- Incremental sort vs. set operations with varno 0
 set enable_hashagg to off;
 explain (costs off) select * from t union select * from t order by 1,3;
+<<<<<<< HEAD
                                QUERY PLAN                               
 ------------------------------------------------------------------------
  Gather Motion 3:1  (slice1; segments: 3)
@@ -1607,10 +1611,27 @@ explain (costs off) select * from t union select * from t order by 1,3;
                                  ->  Seq Scan on t
                                  ->  Seq Scan on t t_1
 (15 rows)
+=======
+                        QUERY PLAN                        
+----------------------------------------------------------
+ Incremental Sort
+   Sort Key: t.a, t.c
+   Presorted Key: t.a
+   ->  Unique
+         ->  Sort
+               Sort Key: t.a, t.b, t.c
+               ->  Gather
+                     Workers Planned: 2
+                     ->  Parallel Append
+                           ->  Parallel Seq Scan on t
+                           ->  Parallel Seq Scan on t t_1
+(11 rows)
+>>>>>>> REL_16_9
 
 -- Full sort, not just incremental sort can be pushed below a gather merge path
 -- by generate_useful_gather_paths.
 explain (costs off) select distinct a,b from t;
+<<<<<<< HEAD
                 QUERY PLAN                
 ------------------------------------------
  Gather Motion 3:1  (slice1; segments: 3)
@@ -1620,6 +1641,17 @@ explain (costs off) select distinct a,b from t;
          ->  Sort
                Sort Key: a, b
                ->  Seq Scan on t
+=======
+                   QUERY PLAN                   
+------------------------------------------------
+ Unique
+   ->  Gather Merge
+         Workers Planned: 2
+         ->  Unique
+               ->  Sort
+                     Sort Key: a, b
+                     ->  Parallel Seq Scan on t
+>>>>>>> REL_16_9
 (7 rows)
 
 drop table t;
@@ -1804,6 +1836,7 @@ order by 1, 2;
                ->  Function Scan on generate_series
 (7 rows)
 
+<<<<<<< HEAD
 -- Disallow pushing down sort when pathkey is an SRF.
 explain (costs off) select unique1 from tenk1 order by unnest('{1,2}'::int[]);
                                QUERY PLAN                                
@@ -1816,3 +1849,5 @@ explain (costs off) select unique1 from tenk1 order by unnest('{1,2}'::int[]);
                ->  Index Only Scan using tenk1_unique1 on tenk1
 (6 rows)
 
+=======
+>>>>>>> REL_16_9

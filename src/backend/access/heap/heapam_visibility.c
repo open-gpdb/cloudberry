@@ -11,21 +11,24 @@
  * shared buffer content lock on the buffer containing the tuple.
  *
  * NOTE: When using a non-MVCC snapshot, we must check
- * TransactionIdIsInProgress (which looks in the PGPROC array)
- * before TransactionIdDidCommit/TransactionIdDidAbort (which look in
- * pg_xact).  Otherwise we have a race condition: we might decide that a
- * just-committed transaction crashed, because none of the tests succeed.
- * xact.c is careful to record commit/abort in pg_xact before it unsets
- * MyProc->xid in the PGPROC array.  That fixes that problem, but it
- * also means there is a window where TransactionIdIsInProgress and
- * TransactionIdDidCommit will both return true.  If we check only
- * TransactionIdDidCommit, we could consider a tuple committed when a
- * later GetSnapshotData call will still think the originating transaction
- * is in progress, which leads to application-level inconsistency.  The
- * upshot is that we gotta check TransactionIdIsInProgress first in all
- * code paths, except for a few cases where we are looking at
- * subtransactions of our own main transaction and so there can't be any
- * race condition.
+ * TransactionIdIsInProgress (which looks in the PGPROC array) before
+ * TransactionIdDidCommit (which look in pg_xact).  Otherwise we have a race
+ * condition: we might decide that a just-committed transaction crashed,
+ * because none of the tests succeed.  xact.c is careful to record
+ * commit/abort in pg_xact before it unsets MyProc->xid in the PGPROC array.
+ * That fixes that problem, but it also means there is a window where
+ * TransactionIdIsInProgress and TransactionIdDidCommit will both return true.
+ * If we check only TransactionIdDidCommit, we could consider a tuple
+ * committed when a later GetSnapshotData call will still think the
+ * originating transaction is in progress, which leads to application-level
+ * inconsistency.  The upshot is that we gotta check TransactionIdIsInProgress
+ * first in all code paths, except for a few cases where we are looking at
+ * subtransactions of our own main transaction and so there can't be any race
+ * condition.
+ *
+ * We can't use TransactionIdDidAbort here because it won't treat transactions
+ * that were in progress during a crash as aborted.  We determine that
+ * transactions aborted/crashed through process of elimination instead.
  *
  * When using an MVCC snapshot, we rely on XidInMVCCSnapshot rather than
  * TransactionIdIsInProgress, but the logic is otherwise the same: do not
@@ -52,7 +55,7 @@
  *	 HeapTupleSatisfiesAny()
  *		  all tuples are visible
  *
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -1618,7 +1621,7 @@ HeapTupleIsSurelyDead(HeapTuple htup, GlobalVisState *vistest)
 	 * all relevant hint bits were just set moments ago).
 	 */
 	if (!HeapTupleHeaderXminCommitted(tuple))
-		return HeapTupleHeaderXminInvalid(tuple) ? true : false;
+		return HeapTupleHeaderXminInvalid(tuple);
 
 	/*
 	 * If the inserting transaction committed, but any deleting transaction
@@ -1906,11 +1909,16 @@ HeapTupleSatisfiesHistoricMVCC(Relation relation, HeapTuple htup, Snapshot snaps
  *	if so, the indicated buffer is marked dirty.
  */
 bool
+<<<<<<< HEAD
 HeapTupleSatisfiesVisibility(Relation relation, HeapTuple tup, Snapshot snapshot, Buffer buffer)
+=======
+HeapTupleSatisfiesVisibility(HeapTuple htup, Snapshot snapshot, Buffer buffer)
+>>>>>>> REL_16_9
 {
 	switch (snapshot->snapshot_type)
 	{
 		case SNAPSHOT_MVCC:
+<<<<<<< HEAD
 			return HeapTupleSatisfiesMVCC(relation, tup, snapshot, buffer);
 			break;
 		case SNAPSHOT_SELF:
@@ -1931,6 +1939,21 @@ HeapTupleSatisfiesVisibility(Relation relation, HeapTuple tup, Snapshot snapshot
 		case SNAPSHOT_NON_VACUUMABLE:
 			return HeapTupleSatisfiesNonVacuumable(relation, tup, snapshot, buffer);
 			break;
+=======
+			return HeapTupleSatisfiesMVCC(htup, snapshot, buffer);
+		case SNAPSHOT_SELF:
+			return HeapTupleSatisfiesSelf(htup, snapshot, buffer);
+		case SNAPSHOT_ANY:
+			return HeapTupleSatisfiesAny(htup, snapshot, buffer);
+		case SNAPSHOT_TOAST:
+			return HeapTupleSatisfiesToast(htup, snapshot, buffer);
+		case SNAPSHOT_DIRTY:
+			return HeapTupleSatisfiesDirty(htup, snapshot, buffer);
+		case SNAPSHOT_HISTORIC_MVCC:
+			return HeapTupleSatisfiesHistoricMVCC(htup, snapshot, buffer);
+		case SNAPSHOT_NON_VACUUMABLE:
+			return HeapTupleSatisfiesNonVacuumable(htup, snapshot, buffer);
+>>>>>>> REL_16_9
 	}
 
 	return false;				/* keep compiler quiet */

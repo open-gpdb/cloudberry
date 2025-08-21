@@ -4,7 +4,7 @@
  *	  prototypes for clauses.c.
  *
  *
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/optimizer/clauses.h
@@ -49,8 +49,8 @@ extern bool contain_leaked_vars(Node *clause);
 
 extern Relids find_nonnullable_rels(Node *clause);
 extern List *find_nonnullable_vars(Node *clause);
-extern List *find_forced_null_vars(Node *clause);
-extern Var *find_forced_null_var(Node *clause);
+extern List *find_forced_null_vars(Node *node);
+extern Var *find_forced_null_var(Node *node);
 
 extern char check_execute_on_functions(Node *clause);
 
@@ -68,6 +68,7 @@ extern Expr *transform_array_Const_to_ArrayExpr(Const *c);
 extern Query *inline_set_returning_function(PlannerInfo *root,
 											RangeTblEntry *rte);
 
+<<<<<<< HEAD
 
 extern Expr *evaluate_expr(Expr *expr, Oid result_type, int32 result_typmod,
 			  Oid result_collation);
@@ -82,4 +83,8 @@ extern Bitmapset *pull_paramids(Expr *expr);
 extern GroupedVarInfo *translate_expr_to_rel_vars(PlannerInfo *root,
 												  GroupedVarInfo *gvi, Index relid);
 
+=======
+extern Bitmapset *pull_paramids(Expr *expr);
+
+>>>>>>> REL_16_9
 #endif							/* CLAUSES_H */

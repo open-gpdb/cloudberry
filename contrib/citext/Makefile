@@ -11,8 +11,12 @@ DATA = citext--1.4.sql \
 	citext--1.0--1.1.sql
 PGFILEDESC = "citext - case-insensitive character string data type"
 
+<<<<<<< HEAD
 REGRESS = citext
 REGRESS_OPTS += --init-file=$(top_srcdir)/src/test/regress/init_file
+=======
+REGRESS = create_index_acl citext citext_utf8
+>>>>>>> REL_16_9
 
 ifdef USE_PGXS
 PG_CONFIG = pg_config

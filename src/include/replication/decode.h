@@ -2,7 +2,7 @@
  * decode.h
  *	   PostgreSQL WAL to logical transformation
  *
- * Portions Copyright (c) 2012-2021, PostgreSQL Global Development Group
+ * Portions Copyright (c) 2012-2023, PostgreSQL Global Development Group
  *
  *-------------------------------------------------------------------------
  */
@@ -27,9 +27,14 @@ extern void heap2_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
 extern void xact_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
 extern void standby_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
 extern void logicalmsg_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
+<<<<<<< HEAD
 extern void appendonly_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
 
 extern void	LogicalDecodingProcessRecord(LogicalDecodingContext *ctx,
+=======
+
+extern void LogicalDecodingProcessRecord(LogicalDecodingContext *ctx,
+>>>>>>> REL_16_9
 										 XLogReaderState *record);
 
 #endif

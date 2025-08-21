@@ -3,9 +3,13 @@
  * copy.c
  *		Implements the COPY utility command
  *
+<<<<<<< HEAD
  * Portions Copyright (c) 2005-2008, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+=======
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
+>>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -146,26 +150,40 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 	{
 		if (stmt->is_program)
 		{
-			if (!is_member_of_role(GetUserId(), ROLE_PG_EXECUTE_SERVER_PROGRAM))
+			if (!has_privs_of_role(GetUserId(), ROLE_PG_EXECUTE_SERVER_PROGRAM))
 				ereport(ERROR,
 						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-						 errmsg("must be superuser or a member of the pg_execute_server_program role to COPY to or from an external program"),
+						 errmsg("permission denied to COPY to or from an external program"),
+						 errdetail("Only roles with privileges of the \"%s\" role may COPY to or from an external program.",
+								   "pg_execute_server_program"),
 						 errhint("Anyone can COPY to stdout or from stdin. "
 								 "psql's \\copy command also works for anyone.")));
 		}
 		else
 		{
+<<<<<<< HEAD
 			if (is_from && !is_member_of_role(GetUserId(), ROLE_PG_READ_SERVER_FILES) && rel->rd_rel->relkind != RELKIND_DIRECTORY_TABLE)
+=======
+			if (is_from && !has_privs_of_role(GetUserId(), ROLE_PG_READ_SERVER_FILES))
+>>>>>>> REL_16_9
 				ereport(ERROR,
 						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-						 errmsg("must be superuser or a member of the pg_read_server_files role to COPY from a file"),
+						 errmsg("permission denied to COPY from a file"),
+						 errdetail("Only roles with privileges of the \"%s\" role may COPY from a file.",
+								   "pg_read_server_files"),
 						 errhint("Anyone can COPY to stdout or from stdin. "
 								 "psql's \\copy command also works for anyone.")));
 
+<<<<<<< HEAD
 			if (!is_from && !is_member_of_role(GetUserId(), ROLE_PG_WRITE_SERVER_FILES) && rel->rd_rel->relkind != RELKIND_DIRECTORY_TABLE)
+=======
+			if (!is_from && !has_privs_of_role(GetUserId(), ROLE_PG_WRITE_SERVER_FILES))
+>>>>>>> REL_16_9
 				ereport(ERROR,
 						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-						 errmsg("must be superuser or a member of the pg_write_server_files role to COPY to a file"),
+						 errmsg("permission denied to COPY to a file"),
+						 errdetail("Only roles with privileges of the \"%s\" role may COPY to a file.",
+								   "pg_write_server_files"),
 						 errhint("Anyone can COPY to stdout or from stdin. "
 								 "psql's \\copy command also works for anyone.")));
 		}
@@ -174,7 +192,7 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 	if (stmt->relation)
 	{
 		ParseNamespaceItem *nsitem;
-		RangeTblEntry *rte;
+		RTEPermissionInfo *perminfo;
 		TupleDesc	tupDesc;
 		List	   *attnums;
 		ListCell   *cur;
@@ -194,8 +212,9 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 
 		nsitem = addRangeTableEntryForRelation(pstate, rel, lockmode,
 											   NULL, false, false);
-		rte = nsitem->p_rte;
-		rte->requiredPerms = (is_from ? ACL_INSERT : ACL_SELECT);
+
+		perminfo = nsitem->p_perminfo;
+		perminfo->requiredPerms = (is_from ? ACL_INSERT : ACL_SELECT);
 
 		if (stmt->whereClause)
 		{
@@ -221,15 +240,15 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 		attnums = CopyGetAttnums(tupDesc, rel, attnamelist);
 		foreach (cur, attnums)
 		{
-			int			attno = lfirst_int(cur) -
-			FirstLowInvalidHeapAttributeNumber;
+			int			attno;
+			Bitmapset **bms;
 
-			if (is_from)
-				rte->insertedCols = bms_add_member(rte->insertedCols, attno);
-			else
-				rte->selectedCols = bms_add_member(rte->selectedCols, attno);
+			attno = lfirst_int(cur) - FirstLowInvalidHeapAttributeNumber;
+			bms = is_from ? &perminfo->insertedCols : &perminfo->selectedCols;
+
+			*bms = bms_add_member(*bms, attno);
 		}
-		ExecCheckRTPerms(pstate->p_rtable, true);
+		ExecCheckPermissions(pstate->p_rtable, list_make1(perminfo), true);
 
 		/*
 		 * Permission check for row security policies.
@@ -257,8 +276,12 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 		 * backwards-compatibility, we do the translation to "COPY (SELECT
 		 * ...)" variant automatically, just like PostgreSQL does for RLS.
 		 */
+<<<<<<< HEAD
 		if (check_enable_rls(rte->relid, InvalidOid, false) == RLS_ENABLED ||
 			(!is_from && rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE))
+=======
+		if (check_enable_rls(relid, InvalidOid, false) == RLS_ENABLED)
+>>>>>>> REL_16_9
 		{
 			SelectStmt *select;
 			ColumnRef  *cr;
@@ -306,9 +329,8 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 				{
 					/*
 					 * Build the ColumnRef for each column.  The ColumnRef
-					 * 'fields' property is a String 'Value' node (see
-					 * nodes/value.h) that corresponds to the column name
-					 * respectively.
+					 * 'fields' property is a String node that corresponds to
+					 * the column name respectively.
 					 */
 					cr = makeNode(ColumnRef);
 					cr->fields = list_make1(lfirst(lc));
@@ -328,11 +350,14 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 
 			/*
 			 * Build RangeVar for from clause, fully qualified based on the
-			 * relation which we have opened and locked.
+			 * relation which we have opened and locked.  Use "ONLY" so that
+			 * COPY retrieves rows from only the target table not any
+			 * inheritance children, the same as when RLS doesn't apply.
 			 */
 			from = makeRangeVar(get_namespace_name(RelationGetNamespace(rel)),
 								pstrdup(RelationGetRelationName(rel)),
 								-1);
+			from->inh = false;	/* apply ONLY */
 
 			/* Build query */
 			select = makeNode(SelectStmt);
@@ -357,6 +382,12 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 	else
 	{
 		Assert(stmt->query);
+
+		/* MERGE is allowed by parser, but unimplemented. Reject for now */
+		if (IsA(stmt->query, MergeStmt))
+			ereport(ERROR,
+					errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					errmsg("MERGE not supported in COPY"));
 
 		query = makeNode(RawStmt);
 		query->stmt = stmt->query;
@@ -466,6 +497,7 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 	{
 		CopyToState cstate;
 
+<<<<<<< HEAD
 		/*
 		 * GPDB_91_MERGE_FIXME: ExecutorStart() is called in BeginCopyTo,
 		 * but the TRY-CATCH block only starts here. If an error is
@@ -483,6 +515,14 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 				cstate = BeginCopyToDirectoryTable(pstate, stmt->filename, stmt->dirfilename,
 												   rel, stmt->is_program, options);
 			}
+=======
+		cstate = BeginCopyTo(pstate, rel, query, relid,
+							 stmt->filename, stmt->is_program,
+							 NULL, stmt->attlist, stmt->options);
+		*processed = DoCopyTo(cstate);	/* copy from database to file */
+		EndCopyTo(cstate);
+	}
+>>>>>>> REL_16_9
 
 			else
 			{
@@ -536,6 +576,71 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 }
 
 /*
+ * Extract a CopyHeaderChoice value from a DefElem.  This is like
+ * defGetBoolean() but also accepts the special value "match".
+ */
+static CopyHeaderChoice
+defGetCopyHeaderChoice(DefElem *def, bool is_from)
+{
+	/*
+	 * If no parameter value given, assume "true" is meant.
+	 */
+	if (def->arg == NULL)
+		return COPY_HEADER_TRUE;
+
+	/*
+	 * Allow 0, 1, "true", "false", "on", "off", or "match".
+	 */
+	switch (nodeTag(def->arg))
+	{
+		case T_Integer:
+			switch (intVal(def->arg))
+			{
+				case 0:
+					return COPY_HEADER_FALSE;
+				case 1:
+					return COPY_HEADER_TRUE;
+				default:
+					/* otherwise, error out below */
+					break;
+			}
+			break;
+		default:
+			{
+				char	   *sval = defGetString(def);
+
+				/*
+				 * The set of strings accepted here should match up with the
+				 * grammar's opt_boolean_or_string production.
+				 */
+				if (pg_strcasecmp(sval, "true") == 0)
+					return COPY_HEADER_TRUE;
+				if (pg_strcasecmp(sval, "false") == 0)
+					return COPY_HEADER_FALSE;
+				if (pg_strcasecmp(sval, "on") == 0)
+					return COPY_HEADER_TRUE;
+				if (pg_strcasecmp(sval, "off") == 0)
+					return COPY_HEADER_FALSE;
+				if (pg_strcasecmp(sval, "match") == 0)
+				{
+					if (!is_from)
+						ereport(ERROR,
+								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+								 errmsg("cannot use \"%s\" with HEADER in COPY TO",
+										sval)));
+					return COPY_HEADER_MATCH;
+				}
+			}
+			break;
+	}
+	ereport(ERROR,
+			(errcode(ERRCODE_SYNTAX_ERROR),
+			 errmsg("%s requires a Boolean value or \"match\"",
+					def->defname)));
+	return COPY_HEADER_FALSE;	/* keep compiler quiet */
+}
+
+/*
  * Process the statement option list for COPY.
  *
  * Scan the options list (a list of DefElem) and transpose the information
@@ -582,10 +687,7 @@ ProcessCopyOptions(ParseState *pstate,
 			char	   *fmt = defGetString(defel);
 
 			if (format_specified)
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options"),
-						 parser_errposition(pstate, defel->location)));
+				errorConflictingDefElem(defel, pstate);
 			format_specified = true;
 			if (strcmp(fmt, "text") == 0)
 				 /* default format */ ;
@@ -602,20 +704,14 @@ ProcessCopyOptions(ParseState *pstate,
 		else if (strcmp(defel->defname, "freeze") == 0)
 		{
 			if (freeze_specified)
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options"),
-						 parser_errposition(pstate, defel->location)));
+				errorConflictingDefElem(defel, pstate);
 			freeze_specified = true;
 			opts_out->freeze = defGetBoolean(defel);
 		}
 		else if (strcmp(defel->defname, "delimiter") == 0)
 		{
 			if (opts_out->delim)
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options"),
-						 parser_errposition(pstate, defel->location)));
+				errorConflictingDefElem(defel, pstate);
 			opts_out->delim = defGetString(defel);
 
 			if (opts_out->delim && pg_strcasecmp(opts_out->delim, "off") == 0)
@@ -624,10 +720,7 @@ ProcessCopyOptions(ParseState *pstate,
 		else if (strcmp(defel->defname, "null") == 0)
 		{
 			if (opts_out->null_print)
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options"),
-						 parser_errposition(pstate, defel->location)));
+				errorConflictingDefElem(defel, pstate);
 			opts_out->null_print = defGetString(defel);
 
 			/*
@@ -639,41 +732,35 @@ ProcessCopyOptions(ParseState *pstate,
 			if(!opts_out->null_print)
 				opts_out->null_print = "";
 		}
+		else if (strcmp(defel->defname, "default") == 0)
+		{
+			if (opts_out->default_print)
+				errorConflictingDefElem(defel, pstate);
+			opts_out->default_print = defGetString(defel);
+		}
 		else if (strcmp(defel->defname, "header") == 0)
 		{
 			if (header_specified)
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options"),
-						 parser_errposition(pstate, defel->location)));
+				errorConflictingDefElem(defel, pstate);
 			header_specified = true;
-			opts_out->header_line = defGetBoolean(defel);
+			opts_out->header_line = defGetCopyHeaderChoice(defel, is_from);
 		}
 		else if (strcmp(defel->defname, "quote") == 0)
 		{
 			if (opts_out->quote)
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options"),
-						 parser_errposition(pstate, defel->location)));
+				errorConflictingDefElem(defel, pstate);
 			opts_out->quote = defGetString(defel);
 		}
 		else if (strcmp(defel->defname, "escape") == 0)
 		{
 			if (opts_out->escape)
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options"),
-						 parser_errposition(pstate, defel->location)));
+				errorConflictingDefElem(defel, pstate);
 			opts_out->escape = defGetString(defel);
 		}
 		else if (strcmp(defel->defname, "force_quote") == 0)
 		{
 			if (opts_out->force_quote || opts_out->force_quote_all)
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options"),
-						 parser_errposition(pstate, defel->location)));
+				errorConflictingDefElem(defel, pstate);
 			if (defel->arg && IsA(defel->arg, A_Star))
 				opts_out->force_quote_all = true;
 			else if (defel->arg && IsA(defel->arg, List))
@@ -698,10 +785,7 @@ ProcessCopyOptions(ParseState *pstate,
 		else if (strcmp(defel->defname, "force_not_null") == 0)
 		{
 			if (opts_out->force_notnull)
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options"),
-						 parser_errposition(pstate, defel->location)));
+				errorConflictingDefElem(defel, pstate);
 			if (defel->arg && IsA(defel->arg, List))
 				opts_out->force_notnull = castNode(List, defel->arg);
 			else if (defel->arg && IsA(defel->arg, String))
@@ -719,9 +803,7 @@ ProcessCopyOptions(ParseState *pstate,
 		else if (strcmp(defel->defname, "force_null") == 0)
 		{
 			if (opts_out->force_null)
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options")));
+				errorConflictingDefElem(defel, pstate);
 			if (defel->arg && IsA(defel->arg, List))
 				opts_out->force_null = castNode(List, defel->arg);
 			else
@@ -739,10 +821,7 @@ ProcessCopyOptions(ParseState *pstate,
 			 * allowed for the column list to be NIL.
 			 */
 			if (opts_out->convert_selectively)
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options"),
-						 parser_errposition(pstate, defel->location)));
+				errorConflictingDefElem(defel, pstate);
 			opts_out->convert_selectively = true;
 			if (defel->arg == NULL || IsA(defel->arg, List))
 				opts_out->convert_select = castNode(List, defel->arg);
@@ -756,10 +835,7 @@ ProcessCopyOptions(ParseState *pstate,
 		else if (strcmp(defel->defname, "encoding") == 0)
 		{
 			if (opts_out->file_encoding >= 0)
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options"),
-						 parser_errposition(pstate, defel->location)));
+				errorConflictingDefElem(defel, pstate);
 			opts_out->file_encoding = pg_char_to_encoding(defGetString(defel));
 			if (opts_out->file_encoding < 0)
 				ereport(ERROR,
@@ -847,6 +923,11 @@ ProcessCopyOptions(ParseState *pstate,
 
 	opts_out->eol_type = EOL_UNKNOWN;
 
+	if (opts_out->binary && opts_out->default_print)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("cannot specify DEFAULT in BINARY mode")));
+
 	/* Set defaults for omitted options */
 	if (!opts_out->delim)
 		opts_out->delim = opts_out->csv_mode ? "," : "\t";
@@ -888,6 +969,17 @@ ProcessCopyOptions(ParseState *pstate,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("COPY null representation cannot use newline or carriage return")));
 
+	if (opts_out->default_print)
+	{
+		opts_out->default_print_len = strlen(opts_out->default_print);
+
+		if (strchr(opts_out->default_print, '\r') != NULL ||
+			strchr(opts_out->default_print, '\n') != NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("COPY default representation cannot use newline or carriage return")));
+	}
+
 	/*
 	 * Disallow unsafe delimiter characters in non-CSV mode.  We can't allow
 	 * backslash because it would be ambiguous.  We can't allow the other
@@ -906,6 +998,7 @@ ProcessCopyOptions(ParseState *pstate,
 				 errmsg("COPY delimiter cannot be \"%s\"", opts_out->delim)));
 
 	/* Check header */
+<<<<<<< HEAD
 	/*
 	 * In PostgreSQL, HEADER is not allowed in text mode either, but in GPDB,
 	 * only forbid it with BINARY.
@@ -914,6 +1007,12 @@ ProcessCopyOptions(ParseState *pstate,
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
 				 errmsg("COPY cannot specify HEADER in BINARY mode")));
+=======
+	if (opts_out->binary && opts_out->header_line)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot specify HEADER in BINARY mode")));
+>>>>>>> REL_16_9
 
 	/* Check quote */
 	if (!opts_out->csv_mode && opts_out->quote != NULL)
@@ -996,6 +1095,7 @@ ProcessCopyOptions(ParseState *pstate,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("CSV quote character must not appear in the NULL specification")));
 
+<<<<<<< HEAD
 	if (opts_out->tags != NULL && !is_from)
 		ereport(ERROR,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -1234,6 +1334,36 @@ CopyToQueryOnSegment(CopyToState cstate)
 	/* run the plan --- the dest receiver will send tuples */
 	ExecutorRun(cstate->queryDesc, ForwardScanDirection, 0L, true);
 	return 0;
+=======
+	if (opts_out->default_print)
+	{
+		if (!is_from)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("COPY DEFAULT only available using COPY FROM")));
+
+		/* Don't allow the delimiter to appear in the default string. */
+		if (strchr(opts_out->default_print, opts_out->delim[0]) != NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("COPY delimiter must not appear in the DEFAULT specification")));
+
+		/* Don't allow the CSV quote char to appear in the default string. */
+		if (opts_out->csv_mode &&
+			strchr(opts_out->default_print, opts_out->quote[0]) != NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("CSV quote character must not appear in the DEFAULT specification")));
+
+		/* Don't allow the NULL and DEFAULT string to be the same */
+		if (opts_out->null_print_len == opts_out->default_print_len &&
+			strncmp(opts_out->null_print, opts_out->default_print,
+					opts_out->null_print_len) == 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("NULL specification and DEFAULT specification cannot be the same")));
+	}
+>>>>>>> REL_16_9
 }
 
 /*

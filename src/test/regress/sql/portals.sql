@@ -146,6 +146,18 @@ FETCH BACKWARD 1 FROM foo24; -- should fail
 
 END;
 
+BEGIN;
+
+DECLARE foo24 NO SCROLL CURSOR FOR SELECT * FROM tenk1 ORDER BY unique2;
+
+FETCH 1 FROM foo24;
+
+FETCH ABSOLUTE 2 FROM foo24; -- allowed
+
+FETCH ABSOLUTE 1 FROM foo24; -- should fail
+
+END;
+
 --
 -- Cursors outside transaction blocks
 --
@@ -175,7 +187,11 @@ CLOSE foo25;
 
 BEGIN;
 
+<<<<<<< HEAD
 DECLARE foo25ns NO SCROLL CURSOR WITH HOLD FOR SELECT * FROM tenk2 ORDER BY 1,2,3,4;
+=======
+DECLARE foo25ns NO SCROLL CURSOR WITH HOLD FOR SELECT * FROM tenk2;
+>>>>>>> REL_16_9
 
 FETCH FROM foo25ns;
 
@@ -563,6 +579,7 @@ fetch all in c2;
 fetch backward all in c2;
 rollback;
 
+<<<<<<< HEAD
 -- gpdb: Test executor should return NULL directly during commit for holdable
 -- cursor if previously executor has emitted all tuples. We've seen two issues
 -- below.
@@ -586,3 +603,28 @@ FETCH ALL FROM foo2;
 COMMIT;
 FETCH ALL FROM foo2;
 CLOSE foo2;
+=======
+-- Check fetching of toasted datums via cursors.
+begin;
+
+-- Other compression algorithms may cause the compressed data to be stored
+-- inline.  Use pglz to ensure consistent results.
+set default_toast_compression = 'pglz';
+
+create table toasted_data (f1 int[]);
+insert into toasted_data
+  select array_agg(i) from generate_series(12345678, 12345678 + 1000) i;
+
+declare local_portal cursor for select * from toasted_data;
+fetch all in local_portal;
+
+declare held_portal cursor with hold for select * from toasted_data;
+
+commit;
+
+drop table toasted_data;
+
+fetch all in held_portal;
+
+reset default_toast_compression;
+>>>>>>> REL_16_9

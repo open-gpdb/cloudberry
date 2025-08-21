@@ -2,7 +2,7 @@
 #
 # Makefile for backend/catalog
 #
-# Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+# Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
 # Portions Copyright (c) 1994, Regents of the University of California
 #
 # src/backend/catalog/Makefile
@@ -25,7 +25,9 @@ OBJS = \
 	objectaddress.o \
 	partition.o \
 	pg_aggregate.o \
+	pg_attrdef.o \
 	pg_cast.o \
+	pg_class.o \
 	pg_collation.o \
 	pg_constraint.o \
 	pg_conversion.o \
@@ -36,6 +38,7 @@ OBJS = \
 	pg_largeobject.o \
 	pg_namespace.o \
 	pg_operator.o \
+	pg_parameter_acl.o \
 	pg_proc.o \
 	pg_publication.o \
 	pg_range.o \
@@ -91,6 +94,7 @@ CATALOG_HEADERS := \
 	pg_stat_last_operation.h pg_stat_last_shoperation.h \
 	pg_foreign_table.h pg_foreign_table_seg.h pg_policy.h pg_replication_origin.h \
 	pg_default_acl.h pg_init_privs.h pg_seclabel.h pg_shseclabel.h \
+<<<<<<< HEAD
 	pg_collation.h pg_partitioned_table.h pg_range.h pg_transform.h \
 	pg_sequence.h pg_publication.h pg_publication_rel.h pg_subscription.h \
 	pg_subscription_rel.h gp_partition_template.h pg_task.h pg_task_run_history.h \
@@ -104,6 +108,12 @@ USE_INTERNAL_FTS_FOUND := $(if $(findstring USE_INTERNAL_FTS,$(CFLAGS)),true,fal
 ifeq ($(USE_INTERNAL_FTS_FOUND), true)
 CATALOG_HEADERS += gp_segment_configuration.h
 endif
+=======
+	pg_collation.h pg_parameter_acl.h pg_partitioned_table.h \
+	pg_range.h pg_transform.h \
+	pg_sequence.h pg_publication.h pg_publication_namespace.h \
+	pg_publication_rel.h pg_subscription.h pg_subscription_rel.h
+>>>>>>> REL_16_9
 
 GENERATED_HEADERS := $(CATALOG_HEADERS:%.h=%_d.h) schemapg.h system_fk_info.h
 
@@ -154,12 +164,16 @@ generated-header-symlinks: $(top_builddir)/src/include/catalog/header-stamp
 # configure run, even in distribution tarballs.  So depending on configure.ac
 # instead is cheating a bit, but it will achieve the goal of updating the
 # version number when it changes.
+<<<<<<< HEAD
 catalog_data_extra_path =
 ifeq ($(enable_catalog_ext),yes)
 catalog_data_extra_path = $(top_srcdir)/src/backend/catalog-extension/
 endif
 
 bki-stamp: genbki.pl Catalog.pm $(POSTGRES_BKI_SRCS) $(POSTGRES_BKI_DATA) $(top_srcdir)/configure.ac $(top_builddir)/src/Makefile.global
+=======
+bki-stamp: genbki.pl Catalog.pm $(POSTGRES_BKI_SRCS) $(POSTGRES_BKI_DATA) $(top_srcdir)/configure.ac $(top_srcdir)/src/include/access/transam.h
+>>>>>>> REL_16_9
 	$(PERL) $< --include-path=$(top_srcdir)/src/include/ \
 		--extra-path=$(catalog_data_extra_path) \
 		--set-version=$(PG_MAJORVERSION) $(POSTGRES_BKI_SRCS)
@@ -200,6 +214,7 @@ endif
 	$(INSTALL_DATA) $(srcdir)/information_schema.sql '$(DESTDIR)$(datadir)/information_schema.sql'
 	$(INSTALL_DATA) $(call vpathsearch,cdb_schema.sql) '$(DESTDIR)$(datadir)/cdb_init.d/cdb_schema.sql'
 	$(INSTALL_DATA) $(srcdir)/sql_features.txt '$(DESTDIR)$(datadir)/sql_features.txt'
+	$(INSTALL_DATA) $(srcdir)/fix-CVE-2024-4317.sql '$(DESTDIR)$(datadir)/fix-CVE-2024-4317.sql'
 
 installdirs:
 	$(MKDIR_P) '$(DESTDIR)$(datadir)'
@@ -207,10 +222,15 @@ installdirs:
 
 .PHONY: uninstall-data
 uninstall-data:
+<<<<<<< HEAD
 	rm -f $(addprefix '$(DESTDIR)$(datadir)'/, postgres.bki system_constraints.sql system_functions.sql system_views.sql information_schema.sql cdb_init.d/cdb_schema.sql cdb_init.d/gp_toolkit.sql sql_features.txt)
 ifeq ($(USE_INTERNAL_FTS_FOUND), false)
 	rm -f $(addprefix '$(DESTDIR)$(datadir)'/, external_fts.sql)
 endif
+=======
+	rm -f $(addprefix '$(DESTDIR)$(datadir)'/, postgres.bki system_constraints.sql system_functions.sql system_views.sql information_schema.sql sql_features.txt fix-CVE-2024-4317.sql)
+
+>>>>>>> REL_16_9
 # postgres.bki, system_constraints.sql, and the generated headers are
 # in the distribution tarball, so they are not cleaned here.
 clean:

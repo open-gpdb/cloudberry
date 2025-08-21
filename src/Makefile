@@ -69,17 +69,25 @@ clean:
 	$(MAKE) -C test $@
 	$(MAKE) -C tutorial NO_PGXS=1 $@
 	$(MAKE) -C test/isolation $@
+<<<<<<< HEAD
 	$(MAKE) -C test/thread $@
 	$(MAKE) -C $(MOCK_DIR) $@
 	$(MAKE) -C $(CMOCKERY_DIR) $@
+=======
+	$(MAKE) -C tools/pg_bsd_indent $@
+>>>>>>> REL_16_9
 
 distclean maintainer-clean:
 	$(MAKE) -C test $@
 	$(MAKE) -C tutorial NO_PGXS=1 $@
 	$(MAKE) -C test/isolation $@
+<<<<<<< HEAD
 	$(MAKE) -C test/thread $@
 	$(MAKE) -C $(MOCK_DIR) $@
 	$(MAKE) -C $(CMOCKERY_DIR) $@
+=======
+	$(MAKE) -C tools/pg_bsd_indent $@
+>>>>>>> REL_16_9
 	rm -f Makefile.port Makefile.global
 	rm -f contrib/interconnect/Makefile.interconnect
 

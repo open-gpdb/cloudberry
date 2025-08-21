@@ -2,7 +2,7 @@
  * dbsize.c
  *		Database object size functions, and related inquiries
  *
- * Copyright (c) 2002-2021, PostgreSQL Global Development Group
+ * Copyright (c) 2002-2023, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  src/backend/utils/adt/dbsize.c
@@ -19,6 +19,7 @@
 #include "catalog/catalog.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_authid.h"
+#include "catalog/pg_database.h"
 #include "catalog/pg_tablespace.h"
 #include "commands/dbcommands.h"
 #include "commands/tablespace.h"
@@ -34,6 +35,7 @@
 #include "utils/lsyscache.h"
 #include "utils/numeric.h"
 #include "utils/rel.h"
+<<<<<<< HEAD
 #include "utils/relcache.h"
 #include "utils/relfilenodemap.h"
 #include "utils/relmapper.h"
@@ -127,6 +129,49 @@ get_size_from_segDBs(const char *cmd)
 
 	return result;
 }
+=======
+#include "utils/relfilenumbermap.h"
+#include "utils/relmapper.h"
+#include "utils/syscache.h"
+
+/* Divide by two and round away from zero */
+#define half_rounded(x)   (((x) + ((x) < 0 ? -1 : 1)) / 2)
+
+/* Units used in pg_size_pretty functions.  All units must be powers of 2 */
+struct size_pretty_unit
+{
+	const char *name;			/* bytes, kB, MB, GB etc */
+	uint32		limit;			/* upper limit, prior to half rounding after
+								 * converting to this unit. */
+	bool		round;			/* do half rounding for this unit */
+	uint8		unitbits;		/* (1 << unitbits) bytes to make 1 of this
+								 * unit */
+};
+
+/* When adding units here also update the docs and the error message in pg_size_bytes */
+static const struct size_pretty_unit size_pretty_units[] = {
+	{"bytes", 10 * 1024, false, 0},
+	{"kB", 20 * 1024 - 1, true, 10},
+	{"MB", 20 * 1024 - 1, true, 20},
+	{"GB", 20 * 1024 - 1, true, 30},
+	{"TB", 20 * 1024 - 1, true, 40},
+	{"PB", 20 * 1024 - 1, true, 50},
+	{NULL, 0, false, 0}
+};
+
+/* Additional unit aliases accepted by pg_size_bytes */
+struct size_bytes_unit_alias
+{
+	const char *alias;
+	int			unit_index;		/* corresponding size_pretty_units element */
+};
+
+/* When adding units here also update the docs and the error message in pg_size_bytes */
+static const struct size_bytes_unit_alias size_bytes_aliases[] = {
+	{"B", 0},
+	{NULL}
+};
+>>>>>>> REL_16_9
 
 /* Return physical size of directory contents, or 0 if dir doesn't exist */
 static int64
@@ -184,12 +229,12 @@ calculate_database_size(Oid dbOid)
 	AclResult	aclresult;
 
 	/*
-	 * User must have connect privilege for target database or be a member of
-	 * pg_read_all_stats
+	 * User must have connect privilege for target database or have privileges
+	 * of pg_read_all_stats
 	 */
-	aclresult = pg_database_aclcheck(dbOid, GetUserId(), ACL_CONNECT);
+	aclresult = object_aclcheck(DatabaseRelationId, dbOid, GetUserId(), ACL_CONNECT);
 	if (aclresult != ACLCHECK_OK &&
-		!is_member_of_role(GetUserId(), ROLE_PG_READ_ALL_STATS))
+		!has_privs_of_role(GetUserId(), ROLE_PG_READ_ALL_STATS))
 	{
 		aclcheck_error(aclresult, OBJECT_DATABASE,
 					   get_database_name(dbOid));
@@ -327,14 +372,14 @@ calculate_tablespace_size(Oid tblspcOid)
 	AclResult	aclresult;
 
 	/*
-	 * User must be a member of pg_read_all_stats or have CREATE privilege for
-	 * target tablespace, either explicitly granted or implicitly because it
-	 * is default for current database.
+	 * User must have privileges of pg_read_all_stats or have CREATE privilege
+	 * for target tablespace, either explicitly granted or implicitly because
+	 * it is default for current database.
 	 */
 	if (tblspcOid != MyDatabaseTableSpace &&
-		!is_member_of_role(GetUserId(), ROLE_PG_READ_ALL_STATS))
+		!has_privs_of_role(GetUserId(), ROLE_PG_READ_ALL_STATS))
 	{
-		aclresult = pg_tablespace_aclcheck(tblspcOid, GetUserId(), ACL_CREATE);
+		aclresult = object_aclcheck(TableSpaceRelationId, tblspcOid, GetUserId(), ACL_CREATE);
 		if (aclresult != ACLCHECK_OK)
 			aclcheck_error(aclresult, OBJECT_TABLESPACE,
 						   get_tablespace_name(tblspcOid));
@@ -451,7 +496,11 @@ pg_tablespace_size_name(PG_FUNCTION_ARGS)
  * is no check here or at the call sites for that.
  */
 static int64
+<<<<<<< HEAD
 calculate_relation_size(Relation rel, ForkNumber forknum)
+=======
+calculate_relation_size(RelFileLocator *rfn, BackendId backend, ForkNumber forknum)
+>>>>>>> REL_16_9
 {
 	int64		totalsize = 0;
 	char	   *relationpath;
@@ -527,6 +576,7 @@ pg_relation_size(PG_FUNCTION_ARGS)
 	if (rel == NULL)
 		PG_RETURN_NULL();
 
+<<<<<<< HEAD
 	if (rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
 	{
 		FdwRoutine *fdwroutine;
@@ -562,6 +612,10 @@ pg_relation_size(PG_FUNCTION_ARGS)
 
 		size += get_size_from_segDBs(sql);
 	}
+=======
+	size = calculate_relation_size(&(rel->rd_locator), rel->rd_backend,
+								   forkname_to_number(text_to_cstring(forkName)));
+>>>>>>> REL_16_9
 
 	relation_close(rel, AccessShareLock);
 
@@ -585,7 +639,12 @@ calculate_toast_table_size(Oid toastrelid)
 
 	/* toast heap size, including FSM and VM size */
 	for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
+<<<<<<< HEAD
 		size += calculate_relation_size(toastRel, forkNum);
+=======
+		size += calculate_relation_size(&(toastRel->rd_locator),
+										toastRel->rd_backend, forkNum);
+>>>>>>> REL_16_9
 
 	/* toast index size, including FSM and VM size */
 	indexlist = RelationGetIndexList(toastRel);
@@ -598,7 +657,12 @@ calculate_toast_table_size(Oid toastrelid)
 		toastIdxRel = relation_open(lfirst_oid(lc),
 									AccessShareLock);
 		for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
+<<<<<<< HEAD
 			size += calculate_relation_size(toastIdxRel, forkNum);
+=======
+			size += calculate_relation_size(&(toastIdxRel->rd_locator),
+											toastIdxRel->rd_backend, forkNum);
+>>>>>>> REL_16_9
 
 		relation_close(toastIdxRel, AccessShareLock);
 	}
@@ -629,11 +693,17 @@ calculate_table_size(Relation rel)
 	/*
 	 * heap size, including FSM and VM
 	 */
+<<<<<<< HEAD
 	if (rel->rd_node.relNode != 0)
 	{
 		for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
 			size += calculate_relation_size(rel, forkNum);
 	}
+=======
+	for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
+		size += calculate_relation_size(&(rel->rd_locator), rel->rd_backend,
+										forkNum);
+>>>>>>> REL_16_9
 
 	/*
 	 * Size of toast relation
@@ -701,10 +771,17 @@ calculate_indexes_size(Relation rel)
 
 			idxRel = try_relation_open(idxOid, AccessShareLock, false);
 
+<<<<<<< HEAD
 			if (RelationIsValid(idxRel))
 			{
 				for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
 					size += calculate_relation_size(idxRel, forkNum);
+=======
+			for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
+				size += calculate_relation_size(&(idxRel->rd_locator),
+												idxRel->rd_backend,
+												forkNum);
+>>>>>>> REL_16_9
 
 				relation_close(idxRel, AccessShareLock);
 			}
@@ -846,13 +923,11 @@ pg_size_pretty(PG_FUNCTION_ARGS)
 {
 	int64		size = PG_GETARG_INT64(0);
 	char		buf[64];
-	int64		limit = 10 * 1024;
-	int64		limit2 = limit * 2 - 1;
+	const struct size_pretty_unit *unit;
 
-	if (Abs(size) < limit)
-		snprintf(buf, sizeof(buf), INT64_FORMAT " bytes", size);
-	else
+	for (unit = size_pretty_units; unit->name != NULL; unit++)
 	{
+<<<<<<< HEAD
 		/*
 		 * We use divide instead of bit shifting so that behavior matches for
 		 * both positive and negative size values.
@@ -880,7 +955,36 @@ pg_size_pretty(PG_FUNCTION_ARGS)
 							 half_rounded(size));
 				}
 			}
+=======
+		uint8		bits;
+		uint64		abs_size = size < 0 ? 0 - (uint64) size : (uint64) size;
+
+		/*
+		 * Use this unit if there are no more units or the absolute size is
+		 * below the limit for the current unit.
+		 */
+		if (unit[1].name == NULL || abs_size < unit->limit)
+		{
+			if (unit->round)
+				size = half_rounded(size);
+
+			snprintf(buf, sizeof(buf), INT64_FORMAT " %s", size, unit->name);
+			break;
+>>>>>>> REL_16_9
 		}
+
+		/*
+		 * Determine the number of bits to use to build the divisor.  We may
+		 * need to use 1 bit less than the difference between this and the
+		 * next unit if the next unit uses half rounding.  Or we may need to
+		 * shift an extra bit if this unit uses half rounding and the next one
+		 * does not.  We use division rather than shifting right by this
+		 * number of bits to ensure positive and negative values are rounded
+		 * in the same way.
+		 */
+		bits = (unit[1].unitbits - unit->unitbits - (unit[1].round == true)
+				+ (unit->round == true));
+		size /= ((int64) 1) << bits;
 	}
 
 	PG_RETURN_TEXT_P(cstring_to_text(buf));
@@ -951,15 +1055,12 @@ Datum
 pg_size_pretty_numeric(PG_FUNCTION_ARGS)
 {
 	Numeric		size = PG_GETARG_NUMERIC(0);
-	Numeric		limit,
-				limit2;
-	char	   *result;
+	char	   *result = NULL;
+	const struct size_pretty_unit *unit;
 
-	limit = int64_to_numeric(10 * 1024);
-	limit2 = int64_to_numeric(10 * 1024 * 2 - 1);
-
-	if (numeric_is_less(numeric_absolute(size), limit))
+	for (unit = size_pretty_units; unit->name != NULL; unit++)
 	{
+<<<<<<< HEAD
 		result = psprintf("%s bytes", numeric_to_cstring(size));
 	}
 	else
@@ -967,9 +1068,16 @@ pg_size_pretty_numeric(PG_FUNCTION_ARGS)
 		/* keep one extra bit for rounding */
 		/* size /= (1 << 9) */
 		size = numeric_truncated_divide(size, 1 << 9);
+=======
+		unsigned int shiftby;
+>>>>>>> REL_16_9
 
-		if (numeric_is_less(numeric_absolute(size), limit2))
+		/* use this unit if there are no more units or we're below the limit */
+		if (unit[1].name == NULL ||
+			numeric_is_less(numeric_absolute(size),
+							int64_to_numeric(unit->limit)))
 		{
+<<<<<<< HEAD
 			size = numeric_half_rounded(size);
 			result = psprintf("%s kB", numeric_to_cstring(size));
 		}
@@ -1001,7 +1109,25 @@ pg_size_pretty_numeric(PG_FUNCTION_ARGS)
 					result = psprintf("%s TB", numeric_to_cstring(size));
 				}
 			}
+=======
+			if (unit->round)
+				size = numeric_half_rounded(size);
+
+			result = psprintf("%s %s", numeric_to_cstring(size), unit->name);
+			break;
+>>>>>>> REL_16_9
 		}
+
+		/*
+		 * Determine the number of bits to use to build the divisor.  We may
+		 * need to use 1 bit less than the difference between this and the
+		 * next unit if the next unit uses half rounding.  Or we may need to
+		 * shift an extra bit if this unit uses half rounding and the next one
+		 * does not.
+		 */
+		shiftby = (unit[1].unitbits - unit->unitbits - (unit[1].round == true)
+				   + (unit->round == true));
+		size = numeric_truncated_divide(size, ((int64) 1) << shiftby);
 	}
 
 	PG_RETURN_TEXT_P(cstring_to_text(result));
@@ -1102,6 +1228,7 @@ pg_size_bytes(PG_FUNCTION_ARGS)
 	/* Handle possible unit */
 	if (*strptr != '\0')
 	{
+		const struct size_pretty_unit *unit;
 		int64		multiplier = 0;
 
 		/* Trim any trailing whitespace */
@@ -1113,26 +1240,35 @@ pg_size_bytes(PG_FUNCTION_ARGS)
 		endptr++;
 		*endptr = '\0';
 
-		/* Parse the unit case-insensitively */
-		if (pg_strcasecmp(strptr, "bytes") == 0)
-			multiplier = (int64) 1;
-		else if (pg_strcasecmp(strptr, "kb") == 0)
-			multiplier = (int64) 1024;
-		else if (pg_strcasecmp(strptr, "mb") == 0)
-			multiplier = ((int64) 1024) * 1024;
+		for (unit = size_pretty_units; unit->name != NULL; unit++)
+		{
+			/* Parse the unit case-insensitively */
+			if (pg_strcasecmp(strptr, unit->name) == 0)
+				break;
+		}
 
-		else if (pg_strcasecmp(strptr, "gb") == 0)
-			multiplier = ((int64) 1024) * 1024 * 1024;
+		/* If not found, look in table of aliases */
+		if (unit->name == NULL)
+		{
+			for (const struct size_bytes_unit_alias *a = size_bytes_aliases; a->alias != NULL; a++)
+			{
+				if (pg_strcasecmp(strptr, a->alias) == 0)
+				{
+					unit = &size_pretty_units[a->unit_index];
+					break;
+				}
+			}
+		}
 
-		else if (pg_strcasecmp(strptr, "tb") == 0)
-			multiplier = ((int64) 1024) * 1024 * 1024 * 1024;
-
-		else
+		/* Verify we found a valid unit in the loop above */
+		if (unit->name == NULL)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					 errmsg("invalid size: \"%s\"", text_to_cstring(arg)),
 					 errdetail("Invalid size unit: \"%s\".", strptr),
-					 errhint("Valid units are \"bytes\", \"kB\", \"MB\", \"GB\", and \"TB\".")));
+					 errhint("Valid units are \"bytes\", \"B\", \"kB\", \"MB\", \"GB\", \"TB\", and \"PB\".")));
+
+		multiplier = ((int64) 1) << unit->unitbits;
 
 		if (multiplier > 1)
 		{
@@ -1170,7 +1306,11 @@ Datum
 pg_relation_filenode(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
+<<<<<<< HEAD
 	Oid 		result;
+=======
+	RelFileNumber result;
+>>>>>>> REL_16_9
 	HeapTuple	tuple;
 	Form_pg_class relform;
 
@@ -1181,6 +1321,7 @@ pg_relation_filenode(PG_FUNCTION_ARGS)
 
 	switch (relform->relkind)
 	{
+<<<<<<< HEAD
 		case RELKIND_RELATION:
 		case RELKIND_MATVIEW:
 		case RELKIND_INDEX:
@@ -1202,22 +1343,34 @@ pg_relation_filenode(PG_FUNCTION_ARGS)
 			/* no storage, return NULL */
 			result = InvalidOid;
 			break;
+=======
+		if (relform->relfilenode)
+			result = relform->relfilenode;
+		else					/* Consult the relation mapper */
+			result = RelationMapOidToFilenumber(relid,
+												relform->relisshared);
+	}
+	else
+	{
+		/* no storage, return NULL */
+		result = InvalidRelFileNumber;
+>>>>>>> REL_16_9
 	}
 
 	ReleaseSysCache(tuple);
 
-	if (!OidIsValid(result))
+	if (!RelFileNumberIsValid(result))
 		PG_RETURN_NULL();
 
 	PG_RETURN_OID(result);
 }
 
 /*
- * Get the relation via (reltablespace, relfilenode)
+ * Get the relation via (reltablespace, relfilenumber)
  *
  * This is expected to be used when somebody wants to match an individual file
  * on the filesystem back to its table. That's not trivially possible via
- * pg_class, because that doesn't contain the relfilenodes of shared and nailed
+ * pg_class, because that doesn't contain the relfilenumbers of shared and nailed
  * tables.
  *
  * We don't fail but return NULL if we cannot find a mapping.
@@ -1229,14 +1382,18 @@ Datum
 pg_filenode_relation(PG_FUNCTION_ARGS)
 {
 	Oid			reltablespace = PG_GETARG_OID(0);
+<<<<<<< HEAD
 	Oid 		relfilenode = PG_GETARG_OID(1);
+=======
+	RelFileNumber relfilenumber = PG_GETARG_OID(1);
+>>>>>>> REL_16_9
 	Oid			heaprel;
 
-	/* test needed so RelidByRelfilenode doesn't misbehave */
-	if (!OidIsValid(relfilenode))
+	/* test needed so RelidByRelfilenumber doesn't misbehave */
+	if (!RelFileNumberIsValid(relfilenumber))
 		PG_RETURN_NULL();
 
-	heaprel = RelidByRelfilenode(reltablespace, relfilenode);
+	heaprel = RelidByRelfilenumber(reltablespace, relfilenumber);
 
 	if (!OidIsValid(heaprel))
 		PG_RETURN_NULL();
@@ -1255,7 +1412,7 @@ pg_relation_filepath(PG_FUNCTION_ARGS)
 	Oid			relid = PG_GETARG_OID(0);
 	HeapTuple	tuple;
 	Form_pg_class relform;
-	RelFileNode rnode;
+	RelFileLocator rlocator;
 	BackendId	backend;
 	char	   *path;
 
@@ -1266,6 +1423,7 @@ pg_relation_filepath(PG_FUNCTION_ARGS)
 
 	switch (relform->relkind)
 	{
+<<<<<<< HEAD
 		case RELKIND_RELATION:
 		case RELKIND_MATVIEW:
 		case RELKIND_INDEX:
@@ -1300,9 +1458,33 @@ pg_relation_filepath(PG_FUNCTION_ARGS)
 			rnode.dbNode = InvalidOid;
 			rnode.spcNode = InvalidOid;
 			break;
+=======
+		/* This logic should match RelationInitPhysicalAddr */
+		if (relform->reltablespace)
+			rlocator.spcOid = relform->reltablespace;
+		else
+			rlocator.spcOid = MyDatabaseTableSpace;
+		if (rlocator.spcOid == GLOBALTABLESPACE_OID)
+			rlocator.dbOid = InvalidOid;
+		else
+			rlocator.dbOid = MyDatabaseId;
+		if (relform->relfilenode)
+			rlocator.relNumber = relform->relfilenode;
+		else					/* Consult the relation mapper */
+			rlocator.relNumber = RelationMapOidToFilenumber(relid,
+															relform->relisshared);
+	}
+	else
+	{
+		/* no storage, return NULL */
+		rlocator.relNumber = InvalidRelFileNumber;
+		/* some compilers generate warnings without these next two lines */
+		rlocator.dbOid = InvalidOid;
+		rlocator.spcOid = InvalidOid;
+>>>>>>> REL_16_9
 	}
 
-	if (!OidIsValid(rnode.relNode))
+	if (!RelFileNumberIsValid(rlocator.relNumber))
 	{
 		ReleaseSysCache(tuple);
 		PG_RETURN_NULL();
@@ -1333,7 +1515,7 @@ pg_relation_filepath(PG_FUNCTION_ARGS)
 
 	ReleaseSysCache(tuple);
 
-	path = relpathbackend(rnode, backend, MAIN_FORKNUM);
+	path = relpathbackend(rlocator, backend, MAIN_FORKNUM);
 
 	PG_RETURN_TEXT_P(cstring_to_text(path));
 }

@@ -3,7 +3,7 @@
  * pqsignal.c
  *	  Backend signal(2) support (see also src/port/pqsignal.c)
  *
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -97,6 +97,7 @@ pqinitmask(void)
 	sigdelset(&StartupBlockSig, SIGALRM);
 #endif
 }
+<<<<<<< HEAD
 
 /*
  * Set up a postmaster signal handler for signal "signo"
@@ -137,3 +138,5 @@ pqsignal_pm(int signo, pqsigfunc func)
 		return SIG_ERR;
 	return oact.sa_handler;
 }
+=======
+>>>>>>> REL_16_9

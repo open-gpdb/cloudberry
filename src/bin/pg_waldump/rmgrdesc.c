@@ -32,6 +32,7 @@
 #include "storage/standbydefs.h"
 #include "utils/relmapper.h"
 
+<<<<<<< HEAD
 #include "access/bitmap_xlog.h"
 #include "access/distributedlog.h"
 #include "cdb/cdbappendonlyxlog.h"
@@ -39,6 +40,8 @@
 #include "paxc_desc.h"
 #endif
 
+=======
+>>>>>>> REL_16_9
 #define PG_RMGR(symname,name,redo,desc,identify,startup,cleanup,mask,decode) \
 	{ name, desc, identify},
 
@@ -48,8 +51,13 @@ static const RmgrDescData RmgrDescTable[RM_N_BUILTIN_IDS] = {
 
 #define CUSTOM_NUMERIC_NAME_LEN sizeof("custom###")
 
+<<<<<<< HEAD
 static char CustomNumericNames[RM_N_CUSTOM_IDS][CUSTOM_NUMERIC_NAME_LEN] = {0};
 static RmgrDescData CustomRmgrDesc[RM_N_CUSTOM_IDS] = {0};
+=======
+static char CustomNumericNames[RM_N_CUSTOM_IDS][CUSTOM_NUMERIC_NAME_LEN] = {{0}};
+static RmgrDescData CustomRmgrDesc[RM_N_CUSTOM_IDS] = {{0}};
+>>>>>>> REL_16_9
 static bool CustomRmgrDescInitialized = false;
 
 /*
@@ -87,12 +95,15 @@ initialize_custom_rmgrs(void)
 		CustomRmgrDesc[i].rm_desc = default_desc;
 		CustomRmgrDesc[i].rm_identify = default_identify;
 	}
+<<<<<<< HEAD
 
 #ifdef USE_PAX_STORAGE
 	CustomRmgrDesc[PAX_RMGR_ID - RM_MIN_CUSTOM_ID].rm_name = "pax";
 	CustomRmgrDesc[PAX_RMGR_ID - RM_MIN_CUSTOM_ID].rm_desc = pax_rmgr_desc;
 	CustomRmgrDesc[PAX_RMGR_ID - RM_MIN_CUSTOM_ID].rm_identify = pax_rmgr_identify;
 #endif
+=======
+>>>>>>> REL_16_9
 	CustomRmgrDescInitialized = true;
 }
 

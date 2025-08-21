@@ -3,7 +3,7 @@
  * blinsert.c
  *		Bloom index build and insert functions.
  *
- * Copyright (c) 2016-2021, PostgreSQL Global Development Group
+ * Copyright (c) 2016-2023, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  contrib/bloom/blinsert.c
@@ -129,7 +129,7 @@ blbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 			 RelationGetRelationName(index));
 
 	/* Initialize the meta page */
-	BloomInitMetapage(index);
+	BloomInitMetapage(index, MAIN_FORKNUM);
 
 	/* Initialize the bloom build state */
 	memset(&buildstate, 0, sizeof(buildstate));
@@ -163,6 +163,7 @@ blbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 void
 blbuildempty(Relation index)
 {
+<<<<<<< HEAD
 	Page		metapage;
 
 	/* Construct metapage. */
@@ -190,6 +191,10 @@ blbuildempty(Relation index)
 	 * checkpoint may have moved the redo pointer past our xlog record.
 	 */
 	smgrimmedsync(index->rd_smgr, INIT_FORKNUM);
+=======
+	/* Initialize the meta page */
+	BloomInitMetapage(index, INIT_FORKNUM);
+>>>>>>> REL_16_9
 }
 
 /*
@@ -234,8 +239,6 @@ blinsert(Relation index, Datum *values, bool *isnull,
 
 	if (metaData->nEnd > metaData->nStart)
 	{
-		Page		page;
-
 		blkno = metaData->notFullPage[metaData->nStart];
 		Assert(blkno != InvalidBlockNumber);
 

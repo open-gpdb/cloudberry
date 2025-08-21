@@ -3,7 +3,7 @@
  * matview.c
  *	  materialized view support
  *
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -371,7 +371,7 @@ SetMatViewIVMState(Relation relation, bool newstate)
  * ExecRefreshMatView -- execute a REFRESH MATERIALIZED VIEW command
  *
  * This refreshes the materialized view by creating a new table and swapping
- * the relfilenodes of the new table and the old materialized view, so the OID
+ * the relfilenumbers of the new table and the old materialized view, so the OID
  * of the original materialized view is preserved. Thus we do not lose GRANT
  * nor references to this materialized view.
  *
@@ -435,7 +435,10 @@ ExecRefreshMatView(RefreshMatViewStmt *stmt, const char *queryString,
 	SetUserIdAndSecContext(relowner,
 						   save_sec_context | SECURITY_RESTRICTED_OPERATION);
 	save_nestlevel = NewGUCNestLevel();
+<<<<<<< HEAD
 	oldPopulated = RelationIsPopulated(matviewRel);
+=======
+>>>>>>> REL_16_9
 
 	/* Make sure it is a materialized view. */
 	if (matviewRel->rd_rel->relkind != RELKIND_MATVIEW)
@@ -542,6 +545,7 @@ ExecRefreshMatView(RefreshMatViewStmt *stmt, const char *queryString,
 	 */
 	SetMatViewPopulatedState(matviewRel, !stmt->skipData);
 
+<<<<<<< HEAD
 	if (IS_QD_OR_SINGLENODE())
 	{
 		/*
@@ -569,6 +573,8 @@ ExecRefreshMatView(RefreshMatViewStmt *stmt, const char *queryString,
 
 	dataQuery->parentStmtType = PARENTSTMTTYPE_REFRESH_MATVIEW;
 
+=======
+>>>>>>> REL_16_9
 	/* Concurrent refresh builds new data in temp tablespace, and does diff. */
 	if (concurrent)
 	{
@@ -660,14 +666,21 @@ ExecRefreshMatView(RefreshMatViewStmt *stmt, const char *queryString,
 	 * it against access by any other process until commit (by which time it
 	 * will be gone).
 	 */
+<<<<<<< HEAD
 	OIDNewHeap = make_new_heap_with_colname(matviewOid, tableSpace, matviewRel->rd_rel->relam, relpersistence,
 							   ExclusiveLock, ao_has_index, true, "_$");
+=======
+	OIDNewHeap = make_new_heap(matviewOid, tableSpace,
+							   matviewRel->rd_rel->relam,
+							   relpersistence, ExclusiveLock);
+>>>>>>> REL_16_9
 	LockRelationOid(OIDNewHeap, AccessExclusiveLock);
 	dest = CreateTransientRelDestReceiver(OIDNewHeap, matviewOid, concurrent, relpersistence,
 										  stmt->skipData);
 
 	refreshClause = MakeRefreshClause(concurrent, stmt->skipData, stmt->relation);
 
+<<<<<<< HEAD
 	/*
 	 * Only in dispatcher role, we should set intoPolicy, else it should remain NULL.
 	 */
@@ -675,6 +688,8 @@ ExecRefreshMatView(RefreshMatViewStmt *stmt, const char *queryString,
 	{
 		dataQuery->intoPolicy = matviewRel->rd_cdbpolicy;
 	}
+=======
+>>>>>>> REL_16_9
 	/* Generate the data, if wanted. */
 	/*
 	 * In GPDB, we call refresh_matview_datafill() even when WITH NO DATA was
@@ -705,6 +720,7 @@ ExecRefreshMatView(RefreshMatViewStmt *stmt, const char *queryString,
 		refresh_by_heap_swap(matviewOid, OIDNewHeap, relpersistence);
 
 		/*
+<<<<<<< HEAD
 		 * Inform stats collector about our activity: basically, we truncated
 		 * the matview and inserted some new data.  (The concurrent code path
 		 * above doesn't need to worry about this because the inserts and
@@ -717,6 +733,12 @@ ExecRefreshMatView(RefreshMatViewStmt *stmt, const char *queryString,
 		 * the current comment to avoid further upstream merge issues.
 		 * The pgstat is updated in function transientrel_shutdown on QE side.
 		 * This related to issue: https://github.com/greenplum-db/gpdb/issues/11375
+=======
+		 * Inform cumulative stats system about our activity: basically, we
+		 * truncated the matview and inserted some new data.  (The concurrent
+		 * code path above doesn't need to worry about this because the
+		 * inserts and deletes it issues get counted by lower-level code.)
+>>>>>>> REL_16_9
 		 */
 		// pgstat_count_truncate(matviewRel);
 		// if (!stmt->skipData)
@@ -847,7 +869,7 @@ refresh_matview_datafill(DestReceiver *dest, Query *query,
 	ExecutorStart(queryDesc, 0);
 
 	/* run the plan */
-	ExecutorRun(queryDesc, ForwardScanDirection, 0L, true);
+	ExecutorRun(queryDesc, ForwardScanDirection, 0, true);
 
 	/* and clean up */
 	ExecutorFinish(queryDesc);
@@ -1167,8 +1189,12 @@ refresh_by_match_merge(Oid matviewOid, Oid tempOid, Oid relowner,
 					 "(SELECT 1 FROM %s newdata2 WHERE newdata2.* IS NOT NULL "
 					 "AND newdata2.* OPERATOR(pg_catalog.*=) newdata.* "
 					 "AND newdata2.ctid OPERATOR(pg_catalog.<>) "
+<<<<<<< HEAD
 					 "newdata.ctid AND newdata2.gp_segment_id "
 					 "OPERATOR(pg_catalog.=) newdata.gp_segment_id)",
+=======
+					 "newdata.ctid)",
+>>>>>>> REL_16_9
 					 tempname, tempname, tempname);
 	if (SPI_execute(querybuf.data, false, 1) != SPI_OK_SELECT)
 		elog(ERROR, "SPI_exec failed: %s", querybuf.data);
@@ -1196,6 +1222,7 @@ refresh_by_match_merge(Oid matviewOid, Oid tempOid, Oid relowner,
 	 * because you cannot create temp tables in SRO context.  For extra
 	 * paranoia, add the composite type column only after switching back to
 	 * SRO context.
+<<<<<<< HEAD
 	 *
 	 * Greenplum doesn't store diffs in a composite type column, instead it
 	 * creates a similar table with the same distribution for performance
@@ -1223,6 +1250,23 @@ refresh_by_match_merge(Oid matviewOid, Oid tempOid, Oid relowner,
 	appendStringInfo(&querybuf,
 					 "ALTER TABLE %s ADD COLUMN sid pg_catalog.int4",
 					 diffname);
+=======
+	 */
+	SetUserIdAndSecContext(relowner,
+						   save_sec_context | SECURITY_LOCAL_USERID_CHANGE);
+	resetStringInfo(&querybuf);
+	appendStringInfo(&querybuf,
+					 "CREATE TEMP TABLE %s (tid pg_catalog.tid)",
+					 diffname);
+	if (SPI_exec(querybuf.data, 0) != SPI_OK_UTILITY)
+		elog(ERROR, "SPI_exec failed: %s", querybuf.data);
+	SetUserIdAndSecContext(relowner,
+						   save_sec_context | SECURITY_RESTRICTED_OPERATION);
+	resetStringInfo(&querybuf);
+	appendStringInfo(&querybuf,
+					 "ALTER TABLE %s ADD COLUMN newdata %s",
+					 diffname, tempname);
+>>>>>>> REL_16_9
 	if (SPI_exec(querybuf.data, 0) != SPI_OK_UTILITY)
 		elog(ERROR, "SPI_exec failed: %s", querybuf.data);
 
@@ -1230,9 +1274,15 @@ refresh_by_match_merge(Oid matviewOid, Oid tempOid, Oid relowner,
 	resetStringInfo(&querybuf);
 	appendStringInfo(&querybuf,
 					 "INSERT INTO %s "
+<<<<<<< HEAD
 					 "SELECT newdata.*, mv.ctid AS tid, mv.gp_segment_id as sid "
 					 "FROM %s mv FULL JOIN %s newdata ON (",
 					 diffname, matviewname, tempname);
+=======
+					 "SELECT mv.ctid AS tid, newdata.*::%s AS newdata "
+					 "FROM %s mv FULL JOIN %s newdata ON (",
+					 diffname, tempname, matviewname, tempname);
+>>>>>>> REL_16_9
 
 	/*
 	 * Get the list of index OIDs for the table from the relcache, and look up
@@ -1259,15 +1309,12 @@ refresh_by_match_merge(Oid matviewOid, Oid tempOid, Oid relowner,
 			int			indnkeyatts = indexStruct->indnkeyatts;
 			oidvector  *indclass;
 			Datum		indclassDatum;
-			bool		isnull;
 			int			i;
 
 			/* Must get indclass the hard way. */
-			indclassDatum = SysCacheGetAttr(INDEXRELID,
-											indexRel->rd_indextuple,
-											Anum_pg_index_indclass,
-											&isnull);
-			Assert(!isnull);
+			indclassDatum = SysCacheGetAttrNotNull(INDEXRELID,
+												   indexRel->rd_indextuple,
+												   Anum_pg_index_indclass);
 			indclass = (oidvector *) DatumGetPointer(indclassDatum);
 
 			/* Add quals for all columns from this index. */
@@ -1327,7 +1374,11 @@ refresh_by_match_merge(Oid matviewOid, Oid tempOid, Oid relowner,
 					appendStringInfoString(&querybuf, " AND ");
 
 				leftop = quote_qualified_identifier("newdata",
+<<<<<<< HEAD
 													NameStr(newattr->attname));
+=======
+													NameStr(attr->attname));
+>>>>>>> REL_16_9
 				rightop = quote_qualified_identifier("mv",
 													 NameStr(attr->attname));
 
@@ -1351,9 +1402,12 @@ refresh_by_match_merge(Oid matviewOid, Oid tempOid, Oid relowner,
 	 *
 	 * ExecRefreshMatView() checks that after taking the exclusive lock on the
 	 * matview. So at least one unique index is guaranteed to exist here
-	 * because the lock is still being held; so an Assert seems sufficient.
+	 * because the lock is still being held.  (One known exception is if a
+	 * function called as part of refreshing the matview drops the index.
+	 * That's a pretty silly thing to do.)
 	 */
-	Assert(foundUniqueIndex);
+	if (!foundUniqueIndex)
+		elog(ERROR, "could not find suitable unique index on materialized view");
 
 
 
@@ -1385,8 +1439,12 @@ refresh_by_match_merge(Oid matviewOid, Oid tempOid, Oid relowner,
 					 "DELETE FROM %s mv WHERE ctid OPERATOR(pg_catalog.=) ANY "
 					 "(SELECT diff.tid FROM %s diff "
 					 "WHERE diff.tid IS NOT NULL "
+<<<<<<< HEAD
 					 "AND diff.tid OPERATOR(pg_catalog.=) mv.ctid AND diff.sid "
 					 "OPERATOR(pg_catalog.=) mv.gp_segment_id)",
+=======
+					 "AND diff.newdata IS NULL)",
+>>>>>>> REL_16_9
 					 matviewname, diffname);
 	if (SPI_exec(querybuf.data, 0) != SPI_OK_DELETE)
 		elog(ERROR, "SPI_exec failed: %s", querybuf.data);
@@ -1403,8 +1461,14 @@ refresh_by_match_merge(Oid matviewOid, Oid tempOid, Oid relowner,
 			appendStringInfo(&querybuf, " %s,", NameStr(attr->attname));
 	}
 	appendStringInfo(&querybuf,
+<<<<<<< HEAD
 					 " FROM %s diff WHERE tid IS NULL",
 					 diffname);
+=======
+					 "INSERT INTO %s SELECT (diff.newdata).* "
+					 "FROM %s diff WHERE tid IS NULL",
+					 matviewname, diffname);
+>>>>>>> REL_16_9
 	if (SPI_exec(querybuf.data, 0) != SPI_OK_INSERT)
 		elog(ERROR, "SPI_exec failed: %s", querybuf.data);
 

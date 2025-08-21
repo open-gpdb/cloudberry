@@ -3,7 +3,7 @@
  * archive.c
  *	  Common WAL archive routines
  *
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -20,7 +20,7 @@
 #endif
 
 #include "common/archive.h"
-#include "lib/stringinfo.h"
+#include "common/percentrepl.h"
 
 #include "cdb/cdbvars.h"
 
@@ -37,7 +37,7 @@ extern void pg_ltoa(int32 value, char *a);
  * The result is a palloc'd string for the restore command built.  The
  * caller is responsible for freeing it.  If any of the required arguments
  * is NULL and that the corresponding alias is found in the command given
- * by the caller, then NULL is returned.
+ * by the caller, then an error is thrown.
  */
 char *
 BuildRestoreCommand(const char *restoreCommand,
@@ -45,19 +45,20 @@ BuildRestoreCommand(const char *restoreCommand,
 					const char *xlogfname,
 					const char *lastRestartPointFname)
 {
+<<<<<<< HEAD
 	StringInfoData result;
 	const char *sp;
 #ifndef FRONTEND
 	char        contentid[12];  /* sign, 10 digits and '\0' */
 #endif
+=======
+	char	   *nativePath = NULL;
+	char	   *result;
+>>>>>>> REL_16_9
 
-	/*
-	 * Build the command to be executed.
-	 */
-	initStringInfo(&result);
-
-	for (sp = restoreCommand; *sp; sp++)
+	if (xlogpath)
 	{
+<<<<<<< HEAD
 		if (*sp == '%')
 		{
 			switch (sp[1])
@@ -134,7 +135,17 @@ BuildRestoreCommand(const char *restoreCommand,
 		{
 			appendStringInfoChar(&result, *sp);
 		}
+=======
+		nativePath = pstrdup(xlogpath);
+		make_native_path(nativePath);
+>>>>>>> REL_16_9
 	}
 
-	return result.data;
+	result = replace_percent_placeholders(restoreCommand, "restore_command", "frp",
+										  xlogfname, lastRestartPointFname, nativePath);
+
+	if (nativePath)
+		pfree(nativePath);
+
+	return result;
 }

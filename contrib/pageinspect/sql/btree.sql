@@ -1,7 +1,10 @@
+<<<<<<< HEAD
 -- start_matchsubs
 -- m/ERROR:  block number out of range.*/
 -- s/ERROR:  block number out of range.*/ERROR:  block number out of range/
 -- end_matchsubs
+=======
+>>>>>>> REL_16_9
 CREATE TABLE test1 (a int8, b int4range);
 INSERT INTO test1 VALUES (72057594037927937, '[0,1)');
 CREATE INDEX test1_a_idx ON test1 USING btree (a);
@@ -14,6 +17,17 @@ SELECT * FROM bt_page_stats('test1_a_idx', -1);
 SELECT * FROM bt_page_stats('test1_a_idx', 0);
 SELECT * FROM bt_page_stats('test1_a_idx', 1);
 SELECT * FROM bt_page_stats('test1_a_idx', 2);
+
+-- bt_multi_page_stats() function returns a set of records of page statistics.
+CREATE TABLE test2 AS (SELECT generate_series(1, 1000)::int8 AS col1);
+CREATE INDEX test2_col1_idx ON test2(col1);
+SELECT * FROM bt_multi_page_stats('test2_col1_idx', 0, 1);
+SELECT * FROM bt_multi_page_stats('test2_col1_idx', 1, -1);
+SELECT * FROM bt_multi_page_stats('test2_col1_idx', 1, 0);
+SELECT * FROM bt_multi_page_stats('test2_col1_idx', 1, 2);
+SELECT * FROM bt_multi_page_stats('test2_col1_idx', 3, 2);
+SELECT * FROM bt_multi_page_stats('test2_col1_idx', 7, 2);
+DROP TABLE test2;
 
 SELECT * FROM bt_page_items('test1_a_idx', -1);
 SELECT * FROM bt_page_items('test1_a_idx', 0);

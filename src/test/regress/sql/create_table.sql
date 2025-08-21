@@ -2,6 +2,7 @@
 -- CREATE_TABLE
 --
 
+<<<<<<< HEAD
 --
 -- CLASS DEFINITIONS
 --
@@ -236,21 +237,15 @@ CREATE TABLE testjsonb (
        j jsonb
 );
 
+=======
+-- Error cases
+>>>>>>> REL_16_9
 CREATE TABLE unknowntab (
 	u unknown    -- fail
 );
 
 CREATE TYPE unknown_comptype AS (
 	u unknown    -- fail
-);
-
-CREATE TABLE IF NOT EXISTS test_tsvector(
-	t text,
-	a tsvector
-);
-
-CREATE TABLE IF NOT EXISTS test_tsvector(
-	t text
 );
 
 -- invalid: non-lowercase quoted reloptions identifiers
@@ -801,7 +796,7 @@ CREATE TABLE part_c_1_10 PARTITION OF part_c FOR VALUES FROM (1) TO (10);
 create table parted_notnull_inh_test (a int default 1, b int not null default 0) partition by list (a);
 create table parted_notnull_inh_test1 partition of parted_notnull_inh_test (a not null, b default 1) for values in (1);
 insert into parted_notnull_inh_test (b) values (null);
--- note that while b's default is overriden, a's default is preserved
+-- note that while b's default is overridden, a's default is preserved
 \d parted_notnull_inh_test1
 drop table parted_notnull_inh_test;
 
@@ -893,6 +888,9 @@ COMMENT ON COLUMN parted_col_comment.a IS 'Partition key';
 SELECT obj_description('parted_col_comment'::regclass);
 \d+ parted_col_comment
 DROP TABLE parted_col_comment;
+
+-- specifying storage parameters for partitioned tables is not supported
+CREATE TABLE parted_col_comment (a int, b text) PARTITION BY LIST (a) WITH (fillfactor=100);
 
 -- list partitioning on array type column
 CREATE TABLE arrlp (a int[]) PARTITION BY LIST (a);

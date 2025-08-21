@@ -3,7 +3,7 @@
  * sha2.h
  *	  Constants related to SHA224, 256, 384 AND 512.
  *
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -28,8 +28,11 @@
 #define PG_SHA512_BLOCK_LENGTH			128
 #define PG_SHA512_DIGEST_LENGTH			64
 #define PG_SHA512_DIGEST_STRING_LENGTH	(PG_SHA512_DIGEST_LENGTH * 2 + 1)
+<<<<<<< HEAD
 #define PG_SM3_BLOCK_LENGTH			64
 #define PG_SM3_DIGEST_LENGTH			32
 #define PG_SM3_DIGEST_STRING_LENGTH	(PG_SM3_DIGEST_LENGTH * 2 + 1)
+=======
+>>>>>>> REL_16_9
 
 #endif							/* _PG_SHA2_H_ */

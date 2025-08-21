@@ -4,9 +4,13 @@
  *	  Definitions for tagged nodes.
  *
  *
+<<<<<<< HEAD
  * Portions Copyright (c) 2005-2009, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+=======
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
+>>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/nodes/nodes.h
@@ -29,6 +33,7 @@ typedef enum NodeTag
 {
 	T_Invalid = 0,
 
+<<<<<<< HEAD
 	/*
 	 * TAGS FOR EXECUTOR NODES (execnodes.h)
 	 */
@@ -686,7 +691,99 @@ typedef enum NodeTag
 	T_ReindexIndexInfo,			/* in nodes/parsenodes.h */
 	T_EphemeralNamedRelationInfo, /* utils/queryenvironment.h */
 
+=======
+#include "nodes/nodetags.h"
+>>>>>>> REL_16_9
 } NodeTag;
+
+/*
+ * pg_node_attr() - Used in node definitions to set extra information for
+ * gen_node_support.pl
+ *
+ * Attributes can be attached to a node as a whole (place the attribute
+ * specification on the first line after the struct's opening brace)
+ * or to a specific field (place it at the end of that field's line).  The
+ * argument is a comma-separated list of attributes.  Unrecognized attributes
+ * cause an error.
+ *
+ * Valid node attributes:
+ *
+ * - abstract: Abstract types are types that cannot be instantiated but that
+ *   can be supertypes of other types.  We track their fields, so that
+ *   subtypes can use them, but we don't emit a node tag, so you can't
+ *   instantiate them.
+ *
+ * - custom_copy_equal: Has custom implementations in copyfuncs.c and
+ *   equalfuncs.c.
+ *
+ * - custom_read_write: Has custom implementations in outfuncs.c and
+ *   readfuncs.c.
+ *
+ * - custom_query_jumble: Has custom implementation in queryjumblefuncs.c.
+ *
+ * - no_copy: Does not support copyObject() at all.
+ *
+ * - no_equal: Does not support equal() at all.
+ *
+ * - no_copy_equal: Shorthand for both no_copy and no_equal.
+ *
+ * - no_query_jumble: Does not support JumbleQuery() at all.
+ *
+ * - no_read: Does not support nodeRead() at all.
+ *
+ * - nodetag_only: Does not support copyObject(), equal(), jumbleQuery()
+ *   outNode() or nodeRead().
+ *
+ * - special_read_write: Has special treatment in outNode() and nodeRead().
+ *
+ * - nodetag_number(VALUE): assign the specified nodetag number instead of
+ *   an auto-generated number.  Typically this would only be used in stable
+ *   branches, to give a newly-added node type a number without breaking ABI
+ *   by changing the numbers of existing node types.
+ *
+ * Node types can be supertypes of other types whether or not they are marked
+ * abstract: if a node struct appears as the first field of another struct
+ * type, then it is the supertype of that type.  The no_copy, no_equal,
+ * no_query_jumble and no_read node attributes are automatically inherited
+ * from the supertype.  (Notice that nodetag_only does not inherit, so it's
+ * not quite equivalent to a combination of other attributes.)
+ *
+ * Valid node field attributes:
+ *
+ * - array_size(OTHERFIELD): This field is a dynamically allocated array with
+ *   size indicated by the mentioned other field.  The other field is either a
+ *   scalar or a list, in which case the length of the list is used.
+ *
+ * - copy_as(VALUE): In copyObject(), replace the field's value with VALUE.
+ *
+ * - copy_as_scalar: In copyObject(), copy the field as a scalar value
+ *   (e.g. a pointer) even if it is a node-type pointer.
+ *
+ * - equal_as_scalar: In equal(), compare the field as a scalar value
+ *   even if it is a node-type pointer.
+ *
+ * - equal_ignore: Ignore the field for equality.
+ *
+ * - equal_ignore_if_zero: Ignore the field for equality if it is zero.
+ *   (Otherwise, compare normally.)
+ *
+ * - query_jumble_ignore: Ignore the field for the query jumbling.  Note
+ *   that typmod and collation information are usually irrelevant for the
+ *   query jumbling.
+ *
+ * - query_jumble_location: Mark the field as a location to track.  This is
+ *   only allowed for integer fields that include "location" in their name.
+ *
+ * - read_as(VALUE): In nodeRead(), replace the field's value with VALUE.
+ *
+ * - read_write_ignore: Ignore the field for read/write.  This is only allowed
+ *   if the node type is marked no_read or read_as() is also specified.
+ *
+ * - write_only_relids, write_only_nondefault_pathtarget, write_only_req_outer:
+ *   Special handling for Path struct; see there.
+ *
+ */
+#define pg_node_attr(...)
 
 /*
  * The first field of a node of any type is guaranteed to be the NodeTag.
@@ -814,7 +911,7 @@ extern int16 *readAttrNumberCols(int numCols);
 /*
  * nodes/copyfuncs.c
  */
-extern void *copyObjectImpl(const void *obj);
+extern void *copyObjectImpl(const void *from);
 
 /* cast result back to argument type, if supported by compiler */
 #ifdef HAVE_TYPEOF
@@ -839,6 +936,8 @@ extern bool equal(const void *a, const void *b);
  */
 typedef double Selectivity;		/* fraction of tuples a qualifier will pass */
 typedef double Cost;			/* execution cost (in page-access units) */
+typedef double Cardinality;		/* (estimated) number of rows or other integer
+								 * count */
 
 
 /*
@@ -853,7 +952,8 @@ typedef enum CmdType
 	CMD_SELECT,					/* select stmt */
 	CMD_UPDATE,					/* update stmt */
 	CMD_INSERT,					/* insert stmt */
-	CMD_DELETE,
+	CMD_DELETE,					/* delete stmt */
+	CMD_MERGE,					/* merge stmt */
 	CMD_UTILITY,				/* cmds like create, destroy, copy, vacuum,
 								 * etc. */
 	CMD_NOTHING					/* dummy command for instead nothing rules
@@ -893,9 +993,13 @@ typedef enum JoinType
 	 */
 	JOIN_SEMI,					/* 1 copy of each LHS row that has match(es) */
 	JOIN_ANTI,					/* 1 copy of each LHS row that has no match */
+<<<<<<< HEAD
 	JOIN_LASJ_NOTIN,			/* Left Anti Semi Join with Not-In semantics:
 									If any NULL values are produced by inner side,
 									return no join results. Otherwise, same as LASJ */
+=======
+	JOIN_RIGHT_ANTI,			/* 1 copy of each RHS row that has no match */
+>>>>>>> REL_16_9
 
 	/*
 	 * These codes are used internally in the planner, but are not supported
@@ -941,7 +1045,11 @@ typedef enum JoinType
 	   (1 << JOIN_FULL) | \
 	   (1 << JOIN_RIGHT) | \
 	   (1 << JOIN_ANTI) | \
+<<<<<<< HEAD
 	   (1 << JOIN_LASJ_NOTIN))) != 0)
+=======
+	   (1 << JOIN_RIGHT_ANTI))) != 0)
+>>>>>>> REL_16_9
 
 /*
  * AggStrategy -

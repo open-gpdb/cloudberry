@@ -1,9 +1,10 @@
 
-# Copyright (c) 2021, PostgreSQL Global Development Group
+# Copyright (c) 2021-2023, PostgreSQL Global Development Group
 
 use strict;
 use warnings;
 
+<<<<<<< HEAD
 use Config;
 use Fcntl ':mode';
 use File::stat qw{lstat};
@@ -13,6 +14,14 @@ use Test::More tests => 26;
 
 my $tempdir = TestLib::tempdir;
 my $tempdir_short = TestLib::tempdir_short;
+=======
+use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Utils;
+use Test::More;
+
+my $tempdir = PostgreSQL::Test::Utils::tempdir;
+my $tempdir_short = PostgreSQL::Test::Utils::tempdir_short;
+>>>>>>> REL_16_9
 
 program_help_ok('pg_ctl');
 program_version_ok('pg_ctl');
@@ -25,16 +34,17 @@ command_ok([ 'pg_ctl', 'initdb', '-D', "$tempdir/data", '-o', '-N'],
 	'pg_ctl initdb');
 command_ok([ $ENV{PG_REGRESS}, '--config-auth', "$tempdir/data" ],
 	'configure authentication');
-my $node_port = get_free_port();
+my $node_port = PostgreSQL::Test::Cluster::get_free_port();
 open my $conf, '>>', "$tempdir/data/postgresql.conf";
 print $conf "fsync = off\n";
 print $conf "port = $node_port\n";
-print $conf TestLib::slurp_file($ENV{TEMP_CONFIG})
+print $conf PostgreSQL::Test::Utils::slurp_file($ENV{TEMP_CONFIG})
   if defined $ENV{TEMP_CONFIG};
 
 if ($use_unix_sockets)
 {
 	print $conf "listen_addresses = ''\n";
+	$tempdir_short =~ s!\\!/!g if $PostgreSQL::Test::Utils::windows_os;
 	print $conf "unix_socket_directories = '$tempdir_short'\n";
 }
 else
@@ -44,8 +54,12 @@ else
 close $conf;
 my $ctlcmd = [
 	'pg_ctl', 'start', '-D', "$tempdir/data", '-l',
+<<<<<<< HEAD
 	"$TestLib::log_path/001_start_stop_server.log"
 	,'-o', '-c gp_role=utility --gp_dbid=-1 --gp_contentid=-1',
+=======
+	"$PostgreSQL::Test::Utils::log_path/001_start_stop_server.log"
+>>>>>>> REL_16_9
 ];
 command_like($ctlcmd, qr/done.*server started/s, 'pg_ctl start');
 
@@ -82,7 +96,8 @@ $logFileName = "$tempdir/data/perm-test-640.log";
 
 SKIP:
 {
-	skip "group access not supported on Windows", 3 if ($windows_os);
+	skip "group access not supported on Windows", 3
+	  if ($windows_os || $Config::Config{osname} eq 'cygwin');
 
 	system_or_bail 'pg_ctl', 'stop', '-D', "$tempdir/data";
 
@@ -105,6 +120,7 @@ command_ok([ 'pg_ctl', 'restart', '-D', "$tempdir/data" ],
 
 system_or_bail 'pg_ctl', 'stop', '-D', "$tempdir/data";
 
+<<<<<<< HEAD
 # gpdb specific: verify that --wrapper and --wrapper-args work as expected
 if (not $windows_os)
 {
@@ -128,3 +144,6 @@ if (not $windows_os)
 
 	system_or_bail 'pg_ctl', 'stop', '-D', "$tempdir/data", '-m', 'fast';
 }
+=======
+done_testing();
+>>>>>>> REL_16_9

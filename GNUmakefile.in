@@ -10,6 +10,7 @@ include $(top_builddir)/src/Makefile.global
 
 $(call recurse,all install,src config)
 
+<<<<<<< HEAD
 all:
 	$(MAKE) -C contrib/auto_explain all
 	$(MAKE) -C contrib/citext all
@@ -45,6 +46,12 @@ docs:
 $(call recurse,world,doc src config contrib gpcontrib,all)
 world:
 	+@echo "PostgreSQL, contrib, and documentation successfully made. Ready to install."
+=======
+docs:
+	$(MAKE) -C doc all
+
+$(call recurse,world,doc src config contrib,all)
+>>>>>>> REL_16_9
 
 # build src/ before contrib/
 world-contrib-recurse: world-src-recurse
@@ -57,6 +64,7 @@ world-bin-contrib-recurse: world-bin-src-recurse
 html man:
 	$(MAKE) -C doc $@
 
+<<<<<<< HEAD
 install:
 	$(MAKE) -C contrib/auto_explain $@
 	$(MAKE) -C contrib/citext $@
@@ -92,11 +100,26 @@ install-docs:
 $(call recurse,install-world,doc src config contrib gpcontrib,install)
 install-world:
 	+@echo "PostgreSQL, contrib, and documentation installation complete."
+=======
+install-docs:
+	$(MAKE) -C doc install
+
+$(call recurse,install-world,doc src config contrib,install)
+>>>>>>> REL_16_9
 
 # build src/ before contrib/
 install-world-contrib-recurse: install-world-src-recurse
 
+<<<<<<< HEAD
 $(call recurse,install-world-bin,src config contrib gpcontrib,install)
+=======
+$(call recurse,install-world-bin,src config contrib,install)
+
+# build src/ before contrib/
+install-world-bin-contrib-recurse: install-world-bin-src-recurse
+
+$(call recurse,installdirs uninstall init-po update-po,doc src config)
+>>>>>>> REL_16_9
 
 # build src/ before contrib/
 install-world-bin-contrib-recurse: install-world-bin-src-recurse
@@ -109,7 +132,7 @@ $(call recurse,distprep coverage,doc src config contrib gpcontrib)
 # it's not built by default
 $(call recurse,clean,doc contrib gpcontrib src config)
 clean:
-	rm -rf tmp_install/
+	rm -rf tmp_install/ portlock/
 # Garbage from autoconf:
 	@rm -rf autom4te.cache/
 # leap over gpAux/Makefile into subdirectories to avoid circular dependency.
@@ -126,7 +149,7 @@ distclean maintainer-clean:
 	$(MAKE) -C config $@
 	$(MAKE) -C gpMgmt $@
 	$(MAKE) -C src $@
-	rm -rf tmp_install/
+	rm -rf tmp_install/ portlock/
 # Garbage from autoconf:
 	@rm -rf autom4te.cache/
 	rm -f config.cache config.log config.status GNUmakefile
@@ -153,6 +176,7 @@ check-tests installcheck installcheck-parallel installcheck-tests: CHECKPREP_TOP
 check-tests installcheck installcheck-parallel installcheck-tests: submake-generated-headers
 	$(MAKE) -C src/test/regress $@
 
+<<<<<<< HEAD
 check:
 	if [ ! -f $(prefix)/greenplum_path.sh ]; then \
 		$(MAKE) -C $(top_builddir) install; \
@@ -196,6 +220,12 @@ endif
 ICW_TARGETS += gpcontrib gpMgmt/bin
 
 $(call recurse,installcheck-world,src/test src/pl src/interfaces/ecpg $(ICW_TARGETS) src/bin,installcheck)
+=======
+$(call recurse,check-world,src/test src/pl src/interfaces contrib src/bin src/tools/pg_bsd_indent,check)
+$(call recurse,checkprep,  src/test src/pl src/interfaces contrib src/bin)
+
+$(call recurse,installcheck-world,src/test src/pl src/interfaces contrib src/bin,installcheck)
+>>>>>>> REL_16_9
 $(call recurse,install-tests,src/test/regress,install-tests)
 
 # GPDB: Postgres disables the SSL tests during ICW because of the TCP port that

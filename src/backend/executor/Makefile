@@ -64,7 +64,10 @@ OBJS = \
 	nodeProjectSet.o \
 	nodeRecursiveunion.o \
 	nodeResult.o \
+<<<<<<< HEAD
 	nodeRuntimeFilter.o \
+=======
+>>>>>>> REL_16_9
 	nodeSamplescan.o \
 	nodeSeqscan.o \
 	nodeSetOp.o \

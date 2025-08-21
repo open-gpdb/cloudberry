@@ -3,7 +3,7 @@
  *
  *	server-side function support
  *
- *	Copyright (c) 2010-2021, PostgreSQL Global Development Group
+ *	Copyright (c) 2010-2023, PostgreSQL Global Development Group
  *	src/bin/pg_upgrade/function.c
  */
 
@@ -81,6 +81,7 @@ get_loadable_libraries(void)
 										FirstNormalObjectId);
 		totaltups += PQntuples(ress[dbnum]);
 
+<<<<<<< HEAD
 		/*
 		 * Systems that install plpython before 8.1 have
 		 * plpython_call_handler() defined in the "public" schema, causing
@@ -140,6 +141,8 @@ get_loadable_libraries(void)
 			PQclear(res);
 		}
 
+=======
+>>>>>>> REL_16_9
 		PQfinish(conn);
 	}
 
@@ -185,7 +188,6 @@ check_loadable_libraries(void)
 	int			libnum;
 	int			was_load_failure = false;
 	FILE	   *script = NULL;
-	bool		found = false;
 	char		output_path[MAXPGPATH];
 
 	prep_status("Checking for presence of required libraries");
@@ -199,7 +201,7 @@ check_loadable_libraries(void)
 	 * consistent order, which is important for reproducible behavior if one
 	 * library depends on another.
 	 */
-	qsort((void *) os_info.libraries, os_info.num_libraries,
+	qsort(os_info.libraries, os_info.num_libraries,
 		  sizeof(LibraryInfo), library_name_compare);
 
 	for (libnum = 0; libnum < os_info.num_libraries; libnum++)
@@ -212,22 +214,6 @@ check_loadable_libraries(void)
 		/* Did the library name change?  Probe it. */
 		if (libnum == 0 || strcmp(lib, os_info.libraries[libnum - 1].name) != 0)
 		{
-			/*
-			 * In Postgres 9.0, Python 3 support was added, and to do that, a
-			 * plpython2u language was created with library name plpython2.so
-			 * as a symbolic link to plpython.so.  In Postgres 9.1, only the
-			 * plpython2.so library was created, and both plpythonu and
-			 * plpython2u point to it.  For this reason, any reference to
-			 * library name "plpython" in an old PG <= 9.1 cluster must look
-			 * for "plpython2" in the new cluster.
-			 */
-			if (GET_MAJOR_VERSION(old_cluster.major_version) <= 900 &&
-				strcmp(lib, "$libdir/plpython") == 0)
-			{
-				lib = "$libdir/plpython2";
-				llen = strlen(lib);
-			}
-
 			strcpy(cmd, "LOAD '");
 			PQescapeStringConn(conn, cmd + strlen(cmd), lib, llen, NULL);
 			strcat(cmd, "'");
@@ -236,11 +222,10 @@ check_loadable_libraries(void)
 
 			if (PQresultStatus(res) != PGRES_COMMAND_OK)
 			{
-				found = true;
 				was_load_failure = true;
 
 				if (script == NULL && (script = fopen_priv(output_path, "w")) == NULL)
-					pg_fatal("could not open file \"%s\": %s\n",
+					pg_fatal("could not open file \"%s\": %s",
 							 output_path, strerror(errno));
 				fprintf(script, _("could not load library \"%s\": %s"),
 						lib,
@@ -259,9 +244,10 @@ check_loadable_libraries(void)
 
 	PQfinish(conn);
 
-	if (found)
+	if (script)
 	{
 		fclose(script);
+<<<<<<< HEAD
 		pg_log(PG_REPORT, "fatal\n");
 		gp_fatal_log(
 				"| Your installation references loadable libraries that are missing from the\n"
@@ -269,6 +255,14 @@ check_loadable_libraries(void)
 				"| or remove the functions using them from the old installation.  A list of\n"
 				"| problem libraries is in the file:\n"
 				"|     %s\n\n", output_path);
+=======
+		pg_log(PG_REPORT, "fatal");
+		pg_fatal("Your installation references loadable libraries that are missing from the\n"
+				 "new installation.  You can add these libraries to the new installation,\n"
+				 "or remove the functions using them from the old installation.  A list of\n"
+				 "problem libraries is in the file:\n"
+				 "    %s", output_path);
+>>>>>>> REL_16_9
 	}
 	else
 		check_ok();

@@ -1,6 +1,7 @@
 --
 -- CREATE_TABLE
 --
+<<<<<<< HEAD
 --
 -- CLASS DEFINITIONS
 --
@@ -199,6 +200,9 @@ CREATE TABLE array_index_op_test (
 CREATE TABLE testjsonb (
        j jsonb
 );
+=======
+-- Error cases
+>>>>>>> REL_16_9
 CREATE TABLE unknowntab (
 	u unknown    -- fail
 );
@@ -207,14 +211,6 @@ CREATE TYPE unknown_comptype AS (
 	u unknown    -- fail
 );
 ERROR:  column "u" has pseudo-type unknown
-CREATE TABLE IF NOT EXISTS test_tsvector(
-	t text,
-	a tsvector
-);
-CREATE TABLE IF NOT EXISTS test_tsvector(
-	t text
-);
-NOTICE:  relation "test_tsvector" already exists, skipping
 -- invalid: non-lowercase quoted reloptions identifiers
 CREATE TABLE tas_case WITH ("Fillfactor" = 10) AS SELECT 1 a;
 ERROR:  unrecognized parameter "Fillfactor"
@@ -1018,7 +1014,7 @@ create table parted_notnull_inh_test1 partition of parted_notnull_inh_test (a no
 insert into parted_notnull_inh_test (b) values (null);
 ERROR:  null value in column "b" of relation "parted_notnull_inh_test1" violates not-null constraint
 DETAIL:  Failing row contains (1, null).
--- note that while b's default is overriden, a's default is preserved
+-- note that while b's default is overridden, a's default is preserved
 \d parted_notnull_inh_test1
       Table "public.parted_notnull_inh_test1"
  Column |  Type   | Collation | Nullable | Default 
@@ -1194,6 +1190,10 @@ Partition key: LIST (a)
 Number of partitions: 0
 
 DROP TABLE parted_col_comment;
+-- specifying storage parameters for partitioned tables is not supported
+CREATE TABLE parted_col_comment (a int, b text) PARTITION BY LIST (a) WITH (fillfactor=100);
+ERROR:  cannot specify storage parameters for a partitioned table
+HINT:  Specify storage parameters for its leaf partitions instead.
 -- list partitioning on array type column
 CREATE TABLE arrlp (a int[]) PARTITION BY LIST (a);
 CREATE TABLE arrlp12 PARTITION OF arrlp FOR VALUES IN ('{1}', '{2}');

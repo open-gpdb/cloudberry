@@ -4,7 +4,7 @@
  *	  Definitions for using the POSTGRES copy command.
  *
  *
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/commands/copy.h
@@ -79,6 +79,17 @@ typedef enum
 } CopyDispatchMode;
 
 /*
+ * Represents whether a header line should be present, and whether it must
+ * match the actual names (which implies "true").
+ */
+typedef enum CopyHeaderChoice
+{
+	COPY_HEADER_FALSE = 0,
+	COPY_HEADER_TRUE,
+	COPY_HEADER_MATCH,
+} CopyHeaderChoice;
+
+/*
  * A struct to hold COPY options, in a parsed form. All of these are related
  * to formatting, except for 'freeze', which doesn't really belong here, but
  * it's expedient to parse it along with all the other options.
@@ -91,10 +102,12 @@ typedef struct CopyFormatOptions
 	bool		binary;			/* binary format? */
 	bool		freeze;			/* freeze rows on loading? */
 	bool		csv_mode;		/* Comma Separated Value format? */
-	bool		header_line;	/* CSV header line? */
+	CopyHeaderChoice header_line;	/* header line? */
 	char	   *null_print;		/* NULL marker string (server encoding!) */
 	int			null_print_len; /* length of same */
 	char	   *null_print_client;	/* same converted to file encoding */
+	char	   *default_print;	/* DEFAULT marker string */
+	int			default_print_len;	/* length of same */
 	char	   *delim;			/* column delimiter (must be 1 byte) */
 	char	   *quote;			/* CSV quote char (must be 1 byte) */
 	char	   *escape;			/* CSV escape char (must be 1 byte) */
@@ -127,6 +140,7 @@ typedef struct CopyFormatOptions
 typedef struct CopyFromStateData *CopyFromState;
 typedef struct CopyToStateData *CopyToState;
 
+<<<<<<< HEAD
 /* DestReceiver for COPY (query) TO */
 typedef struct
 {
@@ -137,13 +151,21 @@ typedef struct
 } DR_copy;
 
 typedef int (*copy_data_source_cb) (void *outbuf, int minread, int maxread, void *extra);
+=======
+typedef int (*copy_data_source_cb) (void *outbuf, int minread, int maxread);
+typedef void (*copy_data_dest_cb) (void *data, int len);
+>>>>>>> REL_16_9
 
-extern void DoCopy(ParseState *state, const CopyStmt *stmt,
+extern void DoCopy(ParseState *pstate, const CopyStmt *stmt,
 				   int stmt_location, int stmt_len,
 				   uint64 *processed);
 
+<<<<<<< HEAD
 extern void ProcessCopyOptions(ParseState *pstate, CopyFormatOptions *ops_out, bool is_from, List *options, Oid rel_oid);
 extern void ProcessCopyDirectoryTableOptions(ParseState *pstate, CopyFormatOptions *ops_out, bool is_from, List *options, Oid rel_oid);
+=======
+extern void ProcessCopyOptions(ParseState *pstate, CopyFormatOptions *opts_out, bool is_from, List *options);
+>>>>>>> REL_16_9
 extern CopyFromState BeginCopyFrom(ParseState *pstate, Relation rel, Node *whereClause,
 								   const char *filename,
 								   bool is_program, copy_data_source_cb data_source_cb,
@@ -186,10 +208,15 @@ typedef struct GpDistributionData
 /*
  * internal prototypes
  */
-extern CopyToState BeginCopyTo(ParseState *pstate, Relation rel, RawStmt *query,
+extern CopyToState BeginCopyTo(ParseState *pstate, Relation rel, RawStmt *raw_query,
 							   Oid queryRelId, const char *filename, bool is_program,
+<<<<<<< HEAD
 							   List *attnamelist, List *options);
 extern void EndCopyTo(CopyToState cstate, uint64 *processed);
+=======
+							   copy_data_dest_cb data_dest_cb, List *attnamelist, List *options);
+extern void EndCopyTo(CopyToState cstate);
+>>>>>>> REL_16_9
 extern uint64 DoCopyTo(CopyToState cstate);
 extern List *CopyGetAttnums(TupleDesc tupDesc, Relation rel,
 							List *attnamelist);

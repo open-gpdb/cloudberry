@@ -49,6 +49,7 @@ OBJS_COMMON = \
 	archive.o \
 	base64.o \
 	checksum_helper.o \
+	compression.o \
 	config_info.o \
 	controldata_utils.o \
 	d2s.o \
@@ -66,8 +67,10 @@ OBJS_COMMON = \
 	link-canary.o \
 	md5.o \
 	md5_common.o \
+	percentrepl.o \
 	pg_get_line.o \
 	pg_lzcompress.o \
+	pg_prng.o \
 	pgfnames.o \
 	psprintf.o \
 	relpath.o \
@@ -84,10 +87,14 @@ OBJS_COMMON = \
 
 ifeq ($(with_ssl),openssl)
 OBJS_COMMON += \
+<<<<<<< HEAD
 	cipher_openssl.o \
 	protocol_openssl.o \
+=======
+>>>>>>> REL_16_9
 	cryptohash_openssl.o \
-	hmac_openssl.o
+	hmac_openssl.o \
+	protocol_openssl.o
 else
 OBJS_COMMON += \
 	cipher.o \

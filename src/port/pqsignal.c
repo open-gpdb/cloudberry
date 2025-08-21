@@ -4,7 +4,7 @@
  *	  reliable BSD-style signal(2) routine stolen from RWW who stole it
  *	  from Stevens...
  *
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -34,6 +34,7 @@
 
 #ifndef FRONTEND
 #include "libpq/pqsignal.h"
+<<<<<<< HEAD
 #include "miscadmin.h"
 #endif
 
@@ -89,12 +90,16 @@ wrapper_handler(SIGNAL_ARGS)
 
 	(*pqsignal_handlers[postgres_signal_arg]) (postgres_signal_arg);
 }
+=======
+#endif
+>>>>>>> REL_16_9
 
 /*
  * Set up a signal handler, with SA_RESTART, for signal "signo"
  *
  * Returns the previous handler.
  *
+<<<<<<< HEAD
  * NB: If called within a signal handler, race conditions may lead to bogus
  * return values.  You should either avoid calling this within signal handlers
  * or ignore the return value.
@@ -104,11 +109,19 @@ wrapper_handler(SIGNAL_ARGS)
  * function instead of providing potentially-bogus return values.
  * Unfortunately, that requires modifying the pqsignal() in legacy-pqsignal.c,
  * which in turn requires an SONAME bump, which is probably not worth it.
+=======
+ * Note: the actual name of this function is either pqsignal_fe when
+ * compiled with -DFRONTEND, or pqsignal when compiled without that.
+ * This is to avoid a name collision with libpq's legacy-pqsignal.c.
+>>>>>>> REL_16_9
  */
 pqsigfunc
 pqsignal(int signo, pqsigfunc func)
 {
+<<<<<<< HEAD
 	pqsigfunc	orig_func = pqsignal_handlers[signo];	/* assumed atomic */
+=======
+>>>>>>> REL_16_9
 #if !(defined(WIN32) && defined(FRONTEND))
 	struct sigaction act,
 				oact;
@@ -134,6 +147,7 @@ pqsignal(int signo, pqsigfunc func)
 #endif
 	if (sigaction(signo, &act, &oact) < 0)
 		return SIG_ERR;
+<<<<<<< HEAD
 	else if (oact.sa_handler == wrapper_handler)
 		return orig_func;
 	else
@@ -144,5 +158,11 @@ pqsignal(int signo, pqsigfunc func)
 		return orig_func;
 	else
 		return ret;
+=======
+	return oact.sa_handler;
+#else
+	/* Forward to Windows native signal system. */
+	return signal(signo, func);
+>>>>>>> REL_16_9
 #endif
 }

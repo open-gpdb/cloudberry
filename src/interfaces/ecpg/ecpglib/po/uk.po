@@ -2,8 +2,13 @@ msgid ""
 msgstr ""
 "Project-Id-Version: postgresql\n"
 "Report-Msgid-Bugs-To: pgsql-bugs@lists.postgresql.org\n"
+<<<<<<< HEAD
 "POT-Creation-Date: 2021-06-10 08:39+0000\n"
 "PO-Revision-Date: 2021-08-17 10:54\n"
+=======
+"POT-Creation-Date: 2022-08-12 10:39+0000\n"
+"PO-Revision-Date: 2022-09-13 11:52\n"
+>>>>>>> REL_16_9
 "Last-Translator: \n"
 "Language-Team: Ukrainian\n"
 "Language: uk_UA\n"
@@ -14,18 +19,27 @@ msgstr ""
 "X-Crowdin-Project: postgresql\n"
 "X-Crowdin-Project-ID: 324573\n"
 "X-Crowdin-Language: uk\n"
+<<<<<<< HEAD
 "X-Crowdin-File: /REL_14_DEV/ecpglib.pot\n"
 "X-Crowdin-File-ID: 746\n"
+=======
+"X-Crowdin-File: /REL_15_STABLE/ecpglib.pot\n"
+"X-Crowdin-File-ID: 890\n"
+>>>>>>> REL_16_9
 
-#: connect.c:237
+#: connect.c:243
 msgid "empty message text"
 msgstr "пусте повідомлення"
 
+<<<<<<< HEAD
 #: connect.c:405 connect.c:627
+=======
+#: connect.c:410 connect.c:675
+>>>>>>> REL_16_9
 msgid "<DEFAULT>"
 msgstr "<ЗА_ЗАМОВЧУВАННЯМ>"
 
-#: descriptor.c:871 misc.c:119
+#: descriptor.c:876 misc.c:119
 msgid "NULL"
 msgstr "NULL"
 
@@ -185,16 +199,20 @@ msgstr "неможливо під'єднатися до бази даних %s �
 msgid "SQL error %d on line %d"
 msgstr "помилка SQL %d в рядку %d"
 
-#: error.c:254
+#: error.c:253
 msgid "the connection to the server was lost"
 msgstr "з'єднання із сервером втрачено"
 
+<<<<<<< HEAD
 #: error.c:346
+=======
+#: error.c:345
+>>>>>>> REL_16_9
 #, c-format
 msgid "SQL error: %s\n"
 msgstr "помилка SQL: %s\n"
 
-#: execute.c:2196 execute.c:2203
+#: execute.c:2189 execute.c:2196
 msgid "<empty>"
 msgstr "<пусто>"
 

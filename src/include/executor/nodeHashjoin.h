@@ -4,7 +4,7 @@
  *	  prototypes for nodeHashjoin.c
  *
  *
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/executor/nodeHashjoin.h
@@ -28,9 +28,14 @@ extern void ExecHashJoinReInitializeDSM(HashJoinState *state, ParallelContext *p
 extern void ExecHashJoinInitializeWorker(HashJoinState *state,
 										 ParallelWorkerContext *pwcxt);
 
+<<<<<<< HEAD
 extern void ExecHashJoinSaveTuple(PlanState *ps, MinimalTuple tuple, uint32 hashvalue,
 								  HashJoinTable hashtable, BufFile **fileptr,
 								  MemoryContext bfCxt);
 extern void ExecSquelchHashJoin(HashJoinState *node, bool force);
+=======
+extern void ExecHashJoinSaveTuple(MinimalTuple tuple, uint32 hashvalue,
+								  BufFile **fileptr, HashJoinTable hashtable);
+>>>>>>> REL_16_9
 
 #endif							/* NODEHASHJOIN_H */

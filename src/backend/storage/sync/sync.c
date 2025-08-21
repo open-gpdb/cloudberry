@@ -3,7 +3,7 @@
  * sync.c
  *	  File synchronization management code.
  *
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -30,6 +30,7 @@
 #include "portability/instr_time.h"
 #include "postmaster/bgwriter.h"
 #include "storage/bufmgr.h"
+#include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/latch.h"
 #include "storage/md.h"
@@ -37,10 +38,13 @@
 #include "utils/inval.h"
 #include "utils/memutils.h"
 
+<<<<<<< HEAD
 #include "utils/faultinjector.h"
 
 static MemoryContext pendingOpsCxt; /* context for the pending ops state  */
 
+=======
+>>>>>>> REL_16_9
 /*
  * In some contexts (currently, standalone backends and the checkpointer)
  * we keep track of pending fsync operations: we need to remember all relation
@@ -143,10 +147,10 @@ InitSync(void)
 {
 	/*
 	 * Create pending-operations hashtable if we need it.  Currently, we need
-	 * it if we are standalone (not under a postmaster) or if we are a startup
-	 * or checkpointer auxiliary process.
+	 * it if we are standalone (not under a postmaster) or if we are a
+	 * checkpointer auxiliary process.
 	 */
-	if (!IsUnderPostmaster || AmStartupProcess() || AmCheckpointerProcess())
+	if (!IsUnderPostmaster || AmCheckpointerProcess())
 	{
 		HASHCTL		hash_ctl;
 
@@ -173,7 +177,6 @@ InitSync(void)
 								 HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
 		pendingUnlinks = NIL;
 	}
-
 }
 
 /*
@@ -299,7 +302,6 @@ SyncPostCheckpoint(void)
 }
 
 /*
-
  *	ProcessSyncRequests() -- Process queued fsync requests.
  */
 void
@@ -548,7 +550,7 @@ RememberSyncRequest(const FileTag *ftag, SyncRequestType type)
 
 		/* Cancel previously entered request */
 		entry = (PendingFsyncEntry *) hash_search(pendingOps,
-												  (void *) ftag,
+												  ftag,
 												  HASH_FIND,
 												  NULL);
 		if (entry != NULL)
@@ -557,26 +559,32 @@ RememberSyncRequest(const FileTag *ftag, SyncRequestType type)
 	else if (type == SYNC_FILTER_REQUEST)
 	{
 		HASH_SEQ_STATUS hstat;
-		PendingFsyncEntry *entry;
+		PendingFsyncEntry *pfe;
 		ListCell   *cell;
 
 		/* Cancel matching fsync requests */
 		hash_seq_init(&hstat, pendingOps);
-		while ((entry = (PendingFsyncEntry *) hash_seq_search(&hstat)) != NULL)
+		while ((pfe = (PendingFsyncEntry *) hash_seq_search(&hstat)) != NULL)
 		{
-			if (entry->tag.handler == ftag->handler &&
-				syncsw[ftag->handler].sync_filetagmatches(ftag, &entry->tag))
-				entry->canceled = true;
+			if (pfe->tag.handler == ftag->handler &&
+				syncsw[ftag->handler].sync_filetagmatches(ftag, &pfe->tag))
+				pfe->canceled = true;
 		}
 
 		/* Cancel matching unlink requests */
 		foreach(cell, pendingUnlinks)
 		{
-			PendingUnlinkEntry *entry = (PendingUnlinkEntry *) lfirst(cell);
+			PendingUnlinkEntry *pue = (PendingUnlinkEntry *) lfirst(cell);
 
+<<<<<<< HEAD
 			if (entry->tag.handler == ftag->handler &&
 				syncsw[ftag->handler].sync_filetagmatches(ftag, &entry->tag))
 				entry->canceled = true;
+=======
+			if (pue->tag.handler == ftag->handler &&
+				syncsw[ftag->handler].sync_filetagmatches(ftag, &pue->tag))
+				pue->canceled = true;
+>>>>>>> REL_16_9
 		}
 	}
 	else if (type == SYNC_UNLINK_REQUEST)
@@ -604,7 +612,7 @@ RememberSyncRequest(const FileTag *ftag, SyncRequestType type)
 		Assert(type == SYNC_REQUEST);
 
 		entry = (PendingFsyncEntry *) hash_search(pendingOps,
-												  (void *) ftag,
+												  ftag,
 												  HASH_ENTER,
 												  &found);
 		/* if new entry, or was previously canceled, initialize it */
@@ -670,28 +678,4 @@ RegisterSyncRequest(const FileTag *ftag, SyncRequestType type,
 	}
 
 	return ret;
-}
-
-/*
- * In archive recovery, we rely on checkpointer to do fsyncs, but we will have
- * already created the pendingOps during initialization of the startup
- * process.  Calling this function drops the local pendingOps so that
- * subsequent requests will be forwarded to checkpointer.
- */
-void
-EnableSyncRequestForwarding(void)
-{
-	/* Perform any pending fsyncs we may have queued up, then drop table */
-	if (pendingOps)
-	{
-		ProcessSyncRequests();
-		hash_destroy(pendingOps);
-	}
-	pendingOps = NULL;
-
-	/*
-	 * We should not have any pending unlink requests, since mdunlink doesn't
-	 * queue unlink requests when isRedo.
-	 */
-	Assert(pendingUnlinks == NIL);
 }

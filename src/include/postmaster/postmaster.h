@@ -3,7 +3,7 @@
  * postmaster.h
  *	  Exports from postmaster/postmaster.c.
  *
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/postmaster/postmaster.h
@@ -14,9 +14,11 @@
 #define _POSTMASTER_H
 
 /* GUC options */
-extern bool EnableSSL;
-extern int	ReservedBackends;
+extern PGDLLIMPORT bool EnableSSL;
+extern PGDLLIMPORT int SuperuserReservedConnections;
+extern PGDLLIMPORT int ReservedConnections;
 extern PGDLLIMPORT int PostPortNumber;
+<<<<<<< HEAD
 extern int	Unix_socket_permissions;
 extern char *Unix_socket_group;
 extern char *Unix_socket_directories;
@@ -34,11 +36,28 @@ extern bool remove_temp_files_after_crash;
 extern bool enable_password_profile;
 
 extern int	terminal_fd;
+=======
+extern PGDLLIMPORT int Unix_socket_permissions;
+extern PGDLLIMPORT char *Unix_socket_group;
+extern PGDLLIMPORT char *Unix_socket_directories;
+extern PGDLLIMPORT char *ListenAddresses;
+extern PGDLLIMPORT bool ClientAuthInProgress;
+extern PGDLLIMPORT int PreAuthDelay;
+extern PGDLLIMPORT int AuthenticationTimeout;
+extern PGDLLIMPORT bool Log_connections;
+extern PGDLLIMPORT bool log_hostname;
+extern PGDLLIMPORT bool enable_bonjour;
+extern PGDLLIMPORT char *bonjour_name;
+extern PGDLLIMPORT bool restart_after_crash;
+extern PGDLLIMPORT bool remove_temp_files_after_crash;
+extern PGDLLIMPORT bool send_abort_for_crash;
+extern PGDLLIMPORT bool send_abort_for_kill;
+>>>>>>> REL_16_9
 
 #ifdef WIN32
-extern HANDLE PostmasterHandle;
+extern PGDLLIMPORT HANDLE PostmasterHandle;
 #else
-extern int	postmaster_alive_fds[2];
+extern PGDLLIMPORT int postmaster_alive_fds[2];
 
 /*
  * Constants that represent which of postmaster_alive_fds is held by

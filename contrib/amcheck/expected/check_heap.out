@@ -109,6 +109,26 @@ SELECT * FROM verify_heapam(relation := 'heaptest', skip := 'ALL-VISIBLE');
 INSERT INTO heaptest (a, b)
 	(SELECT gs, repeat('x', gs)
 		FROM generate_series(1,50) gs);
+-- pg_stat_io test:
+-- verify_heapam always uses a BAS_BULKREAD BufferAccessStrategy, whereas a
+-- sequential scan does so only if the table is large enough when compared to
+-- shared buffers (see initscan()). CREATE DATABASE ... also unconditionally
+-- uses a BAS_BULKREAD strategy, but we have chosen to use a tablespace and
+-- verify_heapam to provide coverage instead of adding another expensive
+-- operation to the main regression test suite.
+--
+-- Create an alternative tablespace and move the heaptest table to it, causing
+-- it to be rewritten and all the blocks to reliably evicted from shared
+-- buffers -- guaranteeing actual reads when we next select from it in the
+-- same transaction.  The heaptest table is smaller than the default
+-- wal_skip_threshold, so a wal_level=minimal commit reads the table into
+-- shared_buffers.  A transaction delays that and excludes any autovacuum.
+SET allow_in_place_tablespaces = true;
+CREATE TABLESPACE regress_test_stats_tblspc LOCATION '';
+SELECT sum(reads) AS stats_bulkreads_before
+  FROM pg_stat_io WHERE context = 'bulkread' \gset
+BEGIN;
+ALTER TABLE heaptest SET TABLESPACE regress_test_stats_tblspc;
 -- Check that valid options are not rejected nor corruption reported
 -- for a non-empty table
 SELECT * FROM verify_heapam(relation := 'heaptest', skip := 'none');
@@ -142,6 +162,24 @@ SELECT * FROM verify_heapam(relation := 'heaptest', startblock := 0, endblock :=
        |        |        | 
        |        |        | 
 (3 rows)
+
+COMMIT;
+-- verify_heapam should have read in the page written out by
+--   ALTER TABLE ... SET TABLESPACE ...
+-- causing an additional bulkread, which should be reflected in pg_stat_io.
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT sum(reads) AS stats_bulkreads_after
+  FROM pg_stat_io WHERE context = 'bulkread' \gset
+SELECT :stats_bulkreads_after > :stats_bulkreads_before;
+ ?column? 
+----------
+ t
+(1 row)
 
 CREATE ROLE regress_heaptest_role;
 -- verify permissions are checked (error due to function not callable)
@@ -227,6 +265,7 @@ CREATE TABLE test_partitioned (a int, b text default repeat('x', 5000))
 SELECT * FROM verify_heapam('test_partitioned',
 							startblock := NULL,
 							endblock := NULL);
+<<<<<<< HEAD
 ERROR:  "test_partitioned" is not a table, materialized view, or TOAST table
 CONTEXT:  SQL statement "SELECT t.blkno, t.offnum, t.attnum, t.msg
 	FROM verify_heapam_internal(relation,
@@ -237,6 +276,10 @@ CONTEXT:  SQL statement "SELECT t.blkno, t.offnum, t.attnum, t.msg
 							 endblock
 							 )t"
 PL/pgSQL function verify_heapam(regclass,boolean,boolean,text,bigint,bigint) line 3 at RETURN QUERY
+=======
+ERROR:  cannot check relation "test_partitioned"
+DETAIL:  This operation is not supported for partitioned tables.
+>>>>>>> REL_16_9
 -- Check that valid options are not rejected nor corruption reported
 -- for an empty partition table (the child one)
 CREATE TABLE test_partition partition OF test_partitioned FOR VALUES IN (1);
@@ -268,6 +311,7 @@ CREATE INDEX test_index ON test_partition (a);
 SELECT * FROM verify_heapam('test_index',
 							startblock := NULL,
 							endblock := NULL);
+<<<<<<< HEAD
 ERROR:  "test_index" is not a table, materialized view, or TOAST table
 CONTEXT:  SQL statement "SELECT t.blkno, t.offnum, t.attnum, t.msg
 	FROM verify_heapam_internal(relation,
@@ -278,11 +322,16 @@ CONTEXT:  SQL statement "SELECT t.blkno, t.offnum, t.attnum, t.msg
 							 endblock
 							 )t"
 PL/pgSQL function verify_heapam(regclass,boolean,boolean,text,bigint,bigint) line 3 at RETURN QUERY
+=======
+ERROR:  cannot check relation "test_index"
+DETAIL:  This operation is not supported for indexes.
+>>>>>>> REL_16_9
 -- Check that views are rejected
 CREATE VIEW test_view AS SELECT 1;
 SELECT * FROM verify_heapam('test_view',
 							startblock := NULL,
 							endblock := NULL);
+<<<<<<< HEAD
 ERROR:  "test_view" is not a table, materialized view, or TOAST table
 CONTEXT:  SQL statement "SELECT t.blkno, t.offnum, t.attnum, t.msg
 	FROM verify_heapam_internal(relation,
@@ -293,11 +342,16 @@ CONTEXT:  SQL statement "SELECT t.blkno, t.offnum, t.attnum, t.msg
 							 endblock
 							 )t"
 PL/pgSQL function verify_heapam(regclass,boolean,boolean,text,bigint,bigint) line 3 at RETURN QUERY
+=======
+ERROR:  cannot check relation "test_view"
+DETAIL:  This operation is not supported for views.
+>>>>>>> REL_16_9
 -- Check that sequences are rejected
 CREATE SEQUENCE test_sequence;
 SELECT * FROM verify_heapam('test_sequence',
 							startblock := NULL,
 							endblock := NULL);
+<<<<<<< HEAD
 ERROR:  "test_sequence" is not a table, materialized view, or TOAST table
 CONTEXT:  SQL statement "SELECT t.blkno, t.offnum, t.attnum, t.msg
 	FROM verify_heapam_internal(relation,
@@ -308,6 +362,12 @@ CONTEXT:  SQL statement "SELECT t.blkno, t.offnum, t.attnum, t.msg
 							 endblock
 							 )t"
 PL/pgSQL function verify_heapam(regclass,boolean,boolean,text,bigint,bigint) line 3 at RETURN QUERY
+=======
+ blkno | offnum | attnum | msg 
+-------+--------+--------+-----
+(0 rows)
+
+>>>>>>> REL_16_9
 -- Check that foreign tables are rejected
 CREATE FOREIGN DATA WRAPPER dummy;
 CREATE SERVER dummy_server FOREIGN DATA WRAPPER dummy;
@@ -315,6 +375,7 @@ CREATE FOREIGN TABLE test_foreign_table () SERVER dummy_server;
 SELECT * FROM verify_heapam('test_foreign_table',
 							startblock := NULL,
 							endblock := NULL);
+<<<<<<< HEAD
 ERROR:  "test_foreign_table" is not a table, materialized view, or TOAST table
 CONTEXT:  SQL statement "SELECT t.blkno, t.offnum, t.attnum, t.msg
 	FROM verify_heapam_internal(relation,
@@ -325,8 +386,13 @@ CONTEXT:  SQL statement "SELECT t.blkno, t.offnum, t.attnum, t.msg
 							 endblock
 							 )t"
 PL/pgSQL function verify_heapam(regclass,boolean,boolean,text,bigint,bigint) line 3 at RETURN QUERY
+=======
+ERROR:  cannot check relation "test_foreign_table"
+DETAIL:  This operation is not supported for foreign tables.
+>>>>>>> REL_16_9
 -- cleanup
 DROP TABLE heaptest;
+DROP TABLESPACE regress_test_stats_tblspc;
 DROP TABLE test_partition;
 DROP TABLE test_partitioned;
 DROP OWNED BY regress_heaptest_role; -- permissions

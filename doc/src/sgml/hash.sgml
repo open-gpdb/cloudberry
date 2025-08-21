@@ -49,7 +49,11 @@
   contrast, a hash index allows accessing the bucket pages directly,
   thereby potentially reducing index access time in larger tables. This
   reduction in "logical I/O" becomes even more pronounced on indexes/data
+<<<<<<< HEAD
   larger than shared_buffers/RAM. 
+=======
+  larger than shared_buffers/RAM.
+>>>>>>> REL_16_9
  </para>
 
  <para>
@@ -89,7 +93,11 @@
   overflow page becomes empty, overflow pages can be recycled for reuse
   in other buckets, though we never return them to the operating system.
   There is currently no provision to shrink a hash index, other than by
+<<<<<<< HEAD
   rebuilding it with REINDEX.  
+=======
+  rebuilding it with REINDEX.
+>>>>>>> REL_16_9
   There is no provision for reducing the number of buckets, either.
  </para>
 

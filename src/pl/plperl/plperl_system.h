@@ -109,6 +109,10 @@
 #undef fstat
 #undef kill
 #undef listen
+<<<<<<< HEAD
+=======
+#undef lseek
+>>>>>>> REL_16_9
 #undef lstat
 #undef mkdir
 #undef open

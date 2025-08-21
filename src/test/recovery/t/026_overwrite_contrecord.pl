@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 # Copyright (c) 2021, PostgreSQL Global Development Group
+=======
+# Copyright (c) 2021-2023, PostgreSQL Global Development Group
+>>>>>>> REL_16_9
 
 # Tests for already-propagated WAL segments ending in incomplete WAL records.
 
@@ -6,18 +10,29 @@ use strict;
 use warnings;
 
 use FindBin;
+<<<<<<< HEAD
 use PostgresNode;
 use TestLib;
 use Test::More;
 
 plan tests => 3;
 
+=======
+use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Utils;
+use Test::More;
+
+>>>>>>> REL_16_9
 # Test: Create a physical replica that's missing the last WAL file,
 # then restart the primary to create a divergent WAL file and observe
 # that the replica replays the "overwrite contrecord" from that new
 # file and the standby promotes successfully.
 
+<<<<<<< HEAD
 my $node = PostgresNode->get_new_node('primary');
+=======
+my $node = PostgreSQL::Test::Cluster->new('primary');
+>>>>>>> REL_16_9
 $node->init(allows_streaming => 1);
 # We need these settings for stability of WAL behavior.
 $node->append_conf(
@@ -75,7 +90,11 @@ unlink $node->basedir . "/pgdata/pg_wal/$endfile"
 
 # OK, create a standby at this spot.
 $node->backup_fs_cold('backup');
+<<<<<<< HEAD
 my $node_standby = PostgresNode->get_new_node('standby');
+=======
+my $node_standby = PostgreSQL::Test::Cluster->new('standby');
+>>>>>>> REL_16_9
 $node_standby->init_from_backup($node, 'backup', has_streaming => 1);
 
 $node_standby->start;
@@ -107,3 +126,8 @@ $node_standby->promote;
 
 $node->stop;
 $node_standby->stop;
+<<<<<<< HEAD
+=======
+
+done_testing();
+>>>>>>> REL_16_9

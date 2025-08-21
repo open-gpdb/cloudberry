@@ -2,7 +2,7 @@
 #
 # Makefile for ecpg compatibility library
 #
-# Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+# Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
 # Portions Copyright (c) 1994, Regents of the University of California
 #
 # src/interfaces/ecpg/compatlib/Makefile
@@ -19,7 +19,11 @@ SO_MAJOR_VERSION= 3
 SO_MINOR_VERSION= $(MAJORVERSION)
 
 override CPPFLAGS := -I../include -I$(top_srcdir)/src/interfaces/ecpg/include \
+<<<<<<< HEAD
 	-I$(libpq_srcdir) -I$(top_srcdir)/src/include/utils -DFRONTEND $(CPPFLAGS)
+=======
+	-I$(libpq_srcdir) $(CPPFLAGS)
+>>>>>>> REL_16_9
 override CFLAGS += $(PTHREAD_CFLAGS)
 
 SHLIB_LINK_INTERNAL = -L../ecpglib -lecpg -L../pgtypeslib -lpgtypes $(libpq_pgport_shlib)
@@ -39,7 +43,7 @@ OBJS = \
 	$(WIN32RES) \
 	informix.o
 
-PKG_CONFIG_REQUIRES_PRIVATE = libecpg libpgtypes
+PKG_CONFIG_REQUIRES_PRIVATE = libecpg, libpgtypes
 
 all: all-lib
 

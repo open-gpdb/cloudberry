@@ -29,8 +29,13 @@ CREATE VIEW test_tablesample_v2 AS
 
 -- check a sampled query doesn't affect cursor in progress
 BEGIN;
+<<<<<<< HEAD
 DECLARE tablesample_cur CURSOR FOR
   SELECT id FROM test_tablesample TABLESAMPLE SYSTEM (50) REPEATABLE (0) ORDER BY id;
+=======
+DECLARE tablesample_cur SCROLL CURSOR FOR
+  SELECT id FROM test_tablesample TABLESAMPLE SYSTEM (50) REPEATABLE (0);
+>>>>>>> REL_16_9
 
 FETCH FIRST FROM tablesample_cur;
 FETCH NEXT FROM tablesample_cur;

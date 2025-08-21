@@ -5,7 +5,7 @@
  *
  * All the actual insertion logic is in spgdoinsert.c.
  *
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -155,19 +155,14 @@ spgbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 void
 spgbuildempty(Relation index)
 {
-	Page		page;
-
-	/* Construct metapage. */
-	page = (Page) palloc(BLCKSZ);
-	SpGistInitMetapage(page);
+	Buffer		metabuffer,
+				rootbuffer,
+				nullbuffer;
 
 	/*
-	 * Write the page and log it unconditionally.  This is important
-	 * particularly for indexes created on tablespaces and databases whose
-	 * creation happened after the last redo pointer as recovery removes any
-	 * of their existing content when the corresponding create records are
-	 * replayed.
+	 * Initialize the meta page and root pages
 	 */
+<<<<<<< HEAD
 	PageEncryptInplace(page, INIT_FORKNUM,
 					   SPGIST_METAPAGE_BLKNO);
 	PageSetChecksumInplace(page, SPGIST_METAPAGE_BLKNO);
@@ -175,10 +170,20 @@ spgbuildempty(Relation index)
 			  (char *) page, true);
 	log_newpage(&index->rd_smgr->smgr_rnode.node, INIT_FORKNUM,
 				SPGIST_METAPAGE_BLKNO, page, true);
+=======
+	metabuffer = ReadBufferExtended(index, INIT_FORKNUM, P_NEW, RBM_NORMAL, NULL);
+	LockBuffer(metabuffer, BUFFER_LOCK_EXCLUSIVE);
+	rootbuffer = ReadBufferExtended(index, INIT_FORKNUM, P_NEW, RBM_NORMAL, NULL);
+	LockBuffer(rootbuffer, BUFFER_LOCK_EXCLUSIVE);
+	nullbuffer = ReadBufferExtended(index, INIT_FORKNUM, P_NEW, RBM_NORMAL, NULL);
+	LockBuffer(nullbuffer, BUFFER_LOCK_EXCLUSIVE);
+>>>>>>> REL_16_9
 
-	/* Likewise for the root page. */
-	SpGistInitPage(page, SPGIST_LEAF);
+	Assert(BufferGetBlockNumber(metabuffer) == SPGIST_METAPAGE_BLKNO);
+	Assert(BufferGetBlockNumber(rootbuffer) == SPGIST_ROOT_BLKNO);
+	Assert(BufferGetBlockNumber(nullbuffer) == SPGIST_NULL_BLKNO);
 
+<<<<<<< HEAD
 	PageEncryptInplace(page, INIT_FORKNUM,
 					   SPGIST_ROOT_BLKNO);
 	PageSetChecksumInplace(page, SPGIST_ROOT_BLKNO);
@@ -186,10 +191,18 @@ spgbuildempty(Relation index)
 			  (char *) page, true);
 	log_newpage(&index->rd_smgr->smgr_rnode.node, INIT_FORKNUM,
 				SPGIST_ROOT_BLKNO, page, true);
+=======
+	START_CRIT_SECTION();
+>>>>>>> REL_16_9
 
-	/* Likewise for the null-tuples root page. */
-	SpGistInitPage(page, SPGIST_LEAF | SPGIST_NULLS);
+	SpGistInitMetapage(BufferGetPage(metabuffer));
+	MarkBufferDirty(metabuffer);
+	SpGistInitBuffer(rootbuffer, SPGIST_LEAF);
+	MarkBufferDirty(rootbuffer);
+	SpGistInitBuffer(nullbuffer, SPGIST_LEAF | SPGIST_NULLS);
+	MarkBufferDirty(nullbuffer);
 
+<<<<<<< HEAD
 	PageEncryptInplace(page, INIT_FORKNUM,
 					   SPGIST_NULL_BLKNO);
 	PageSetChecksumInplace(page, SPGIST_NULL_BLKNO);
@@ -197,13 +210,17 @@ spgbuildempty(Relation index)
 			  (char *) page, true);
 	log_newpage(&index->rd_smgr->smgr_rnode.node, INIT_FORKNUM,
 				SPGIST_NULL_BLKNO, page, true);
+=======
+	log_newpage_buffer(metabuffer, true);
+	log_newpage_buffer(rootbuffer, true);
+	log_newpage_buffer(nullbuffer, true);
+>>>>>>> REL_16_9
 
-	/*
-	 * An immediate sync is required even if we xlog'd the pages, because the
-	 * writes did not go through shared buffers and therefore a concurrent
-	 * checkpoint may have moved the redo pointer past our xlog record.
-	 */
-	smgrimmedsync(index->rd_smgr, INIT_FORKNUM);
+	END_CRIT_SECTION();
+
+	UnlockReleaseBuffer(metabuffer);
+	UnlockReleaseBuffer(rootbuffer);
+	UnlockReleaseBuffer(nullbuffer);
 }
 
 /*

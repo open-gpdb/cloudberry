@@ -17,12 +17,17 @@ OBJS = \
 	compat.o \
 	pg_waldump.o \
 	rmgrdesc.o \
+<<<<<<< HEAD
 	$(PAX_OBJS) \
 	xlogreader.o
+=======
+	xlogreader.o \
+	xlogstats.o
+>>>>>>> REL_16_9
 
 override CPPFLAGS := -DFRONTEND $(CPPFLAGS)
 
-RMGRDESCSOURCES = $(sort $(notdir $(wildcard $(top_srcdir)/src/backend/access/rmgrdesc/*desc.c)))
+RMGRDESCSOURCES = $(sort $(notdir $(wildcard $(top_srcdir)/src/backend/access/rmgrdesc/*desc*.c)))
 RMGRDESCOBJS = $(patsubst %.c,%.o,$(RMGRDESCSOURCES))
 
 
@@ -34,6 +39,7 @@ pg_waldump: $(OBJS) | submake-libpgport
 xlogreader.c: % : $(top_srcdir)/src/backend/access/transam/%
 	rm -f $@ && $(LN_S) $< .
 
+<<<<<<< HEAD
 ifeq ($(enable_pax), yes)
 paxc_desc.c: % : $(top_srcdir)/contrib/pax_storage/src/cpp/storage/wal/%
 	rm -f $@ && $(LN_S) $< $@
@@ -45,6 +51,10 @@ rmgrdesc.o: paxc_desc.h
 
 paxc_desc.o: paxc_desc.h
 endif
+=======
+xlogstats.c: % : $(top_srcdir)/src/backend/access/transam/%
+	rm -f $@ && $(LN_S) $< .
+>>>>>>> REL_16_9
 
 $(RMGRDESCSOURCES): % : $(top_srcdir)/src/backend/access/rmgrdesc/%
 	rm -f $@ && $(LN_S) $< .
@@ -59,7 +69,11 @@ uninstall:
 	rm -f '$(DESTDIR)$(bindir)/pg_waldump$(X)'
 
 clean distclean maintainer-clean:
+<<<<<<< HEAD
 	rm -f pg_waldump$(X) $(OBJS) $(RMGRDESCSOURCES) xlogreader.c paxc_desc.c paxc_desc.h
+=======
+	rm -f pg_waldump$(X) $(OBJS) $(RMGRDESCSOURCES) xlogreader.c xlogstats.c
+>>>>>>> REL_16_9
 	rm -rf tmp_check
 
 check:

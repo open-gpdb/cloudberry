@@ -11,30 +11,27 @@
 -- NB: run this test early, because some later tests create bogus entries.
 -- **************** pg_depend ****************
 -- Look for illegal values in pg_depend fields.
--- classid/objid can be zero, but only in 'p' entries
 SELECT *
 FROM pg_depend as d1
 WHERE refclassid = 0 OR refobjid = 0 OR
-      deptype NOT IN ('a', 'e', 'i', 'n', 'p') OR
-      (deptype != 'p' AND (classid = 0 OR objid = 0)) OR
-      (deptype = 'p' AND (classid != 0 OR objid != 0 OR objsubid != 0));
+      classid = 0 OR objid = 0 OR
+      deptype NOT IN ('a', 'e', 'i', 'n', 'x', 'P', 'S');
  classid | objid | objsubid | refclassid | refobjid | refobjsubid | deptype 
 ---------+-------+----------+------------+----------+-------------+---------
 (0 rows)
 
 -- **************** pg_shdepend ****************
 -- Look for illegal values in pg_shdepend fields.
--- classid/objid can be zero, but only in 'p' entries
 SELECT *
 FROM pg_shdepend as d1
 WHERE refclassid = 0 OR refobjid = 0 OR
-      deptype NOT IN ('a', 'o', 'p', 'r') OR
-      (deptype != 'p' AND (classid = 0 OR objid = 0)) OR
-      (deptype = 'p' AND (dbid != 0 OR classid != 0 OR objid != 0 OR objsubid != 0));
+      classid = 0 OR objid = 0 OR
+      deptype NOT IN ('a', 'o', 'r', 't');
  dbid | classid | objid | objsubid | refclassid | refobjid | deptype 
 ------+---------+-------+----------+------------+----------+---------
 (0 rows)
 
+<<<<<<< HEAD
 -- Check each OID-containing system catalog to see if its lowest-numbered OID
 -- is pinned.  If not, and if that OID was generated during initdb, then
 -- perhaps initdb forgot to scan that catalog for pinnable entries.
@@ -82,6 +79,8 @@ NOTICE:  pg_foreign_data_wrapper contains unpinned initdb-created object(s)
 NOTICE:  pg_foreign_server contains unpinned initdb-created object(s)
 NOTICE:  pg_rewrite contains unpinned initdb-created object(s)
 NOTICE:  pg_tablespace contains unpinned initdb-created object(s)
+=======
+>>>>>>> REL_16_9
 -- **************** pg_class ****************
 -- Look for system tables with varlena columns but no toast table. All
 -- system tables with toastable columns should have toast tables, with

@@ -3,9 +3,13 @@
  * explain.c
  *	  Explain query execution plans
  *
+<<<<<<< HEAD
  * Portions Copyright (c) 2005-2010, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+=======
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
+>>>>>>> REL_16_9
  * Portions Copyright (c) 1994-5, Regents of the University of California
  *
  * IDENTIFICATION
@@ -137,6 +141,7 @@ static void show_windowagg_keys(WindowAggState *waggstate, List *ancestors, Expl
 static void show_incremental_sort_info(IncrementalSortState *incrsortstate,
 									   ExplainState *es);
 static void show_hash_info(HashState *hashstate, ExplainState *es);
+<<<<<<< HEAD
 static void show_runtime_filter_info(RuntimeFilterState *rfstate,
 									 ExplainState *es);
 static void show_pushdown_runtime_filter_info(const char *qlabel,
@@ -145,6 +150,11 @@ static void show_pushdown_runtime_filter_info(const char *qlabel,
 static void show_memoize_info(MemoizeState *mstate, List *ancestors,
 							  ExplainState *es);
 static void show_hashagg_info(AggState *hashstate, ExplainState *es);
+=======
+static void show_memoize_info(MemoizeState *mstate, List *ancestors,
+							  ExplainState *es);
+static void show_hashagg_info(AggState *aggstate, ExplainState *es);
+>>>>>>> REL_16_9
 static void show_tidbitmap_info(BitmapHeapScanState *planstate,
 								ExplainState *es);
 static void show_instrumentation_count(const char *qlabel, int which,
@@ -234,6 +244,8 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 			es->wal = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "settings") == 0)
 			es->settings = defGetBoolean(opt);
+		else if (strcmp(opt->defname, "generic_plan") == 0)
+			es->generic = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "timing") == 0)
 		{
 			timing_set = true;
@@ -275,6 +287,7 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 					 parser_errposition(pstate, opt->location)));
 	}
 
+	/* check that WAL is used with EXPLAIN ANALYZE */
 	if (es->wal && !es->analyze)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -289,6 +302,12 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("EXPLAIN option TIMING requires ANALYZE")));
 
+	/* check that GENERIC_PLAN is not used with EXPLAIN ANALYZE */
+	if (es->generic && es->analyze)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("EXPLAIN options ANALYZE and GENERIC_PLAN cannot be used together")));
+
 	/* if the summary was not set explicitly, set default value */
 	es->summary = (summary_set) ? es->summary : es->analyze;
 
@@ -297,7 +316,7 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 
 	query = castNode(Query, stmt->query);
 	if (IsQueryIdEnabled())
-		jstate = JumbleQuery(query, pstate->p_sourcetext);
+		jstate = JumbleQuery(query);
 
 	if (post_parse_analyze_hook)
 		(*post_parse_analyze_hook) (pstate, query, jstate);
@@ -753,6 +772,8 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		eflags = 0;				/* default run-to-completion flags */
 	else
 		eflags = EXEC_FLAG_EXPLAIN_ONLY;
+	if (es->generic)
+		eflags |= EXEC_FLAG_EXPLAIN_GENERIC;
 	if (into)
 		eflags |= GetIntoRelEFlags(into);
 
@@ -775,7 +796,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 			dir = ForwardScanDirection;
 
 		/* run the plan */
-		ExecutorRun(queryDesc, dir, 0L, true);
+		ExecutorRun(queryDesc, dir, 0, true);
 
 		/* run cleanup too */
 		ExecutorFinish(queryDesc);
@@ -807,6 +828,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	/* Create textual dump of plan tree */
 	ExplainPrintPlan(es, queryDesc);
 
+<<<<<<< HEAD
 	if (cursorOptions & CURSOR_OPT_PARALLEL_RETRIEVE)
 		ExplainParallelRetrieveCursor(es, queryDesc);
 
@@ -826,6 +848,8 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 							   plannedstmt->queryId, es);
 	}
 
+=======
+>>>>>>> REL_16_9
 	/* Show buffer usage in planning */
 	if (bufusage)
 	{
@@ -1029,8 +1053,8 @@ ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc)
 	/*
 	 * Sometimes we mark a Gather node as "invisible", which means that it's
 	 * not to be displayed in EXPLAIN output.  The purpose of this is to allow
-	 * running regression tests with force_parallel_mode=regress to get the
-	 * same results as running the same tests with force_parallel_mode=off.
+	 * running regression tests with debug_parallel_query=regress to get the
+	 * same results as running the same tests with debug_parallel_query=off.
 	 * Such marking is currently only supported on a Gather at the top of the
 	 * plan.  We skip that node, and we must also hide per-worker detail data
 	 * further down in the plan tree.
@@ -1047,6 +1071,7 @@ ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc)
 	 * If requested, include information about GUC parameters with values that
 	 * don't match the built-in defaults.
 	 */
+<<<<<<< HEAD
 	ExplainPrintSettings(es, queryDesc->plannedstmt->planGen);
 }
 
@@ -1114,6 +1139,25 @@ ExplainPrintSliceTable(ExplainState *es, QueryDesc *queryDesc)
 	}
 
 	ExplainCloseGroup("Slice Table", "Slice Table", false, es);
+=======
+	ExplainPrintSettings(es);
+
+	/*
+	 * COMPUTE_QUERY_ID_REGRESS means COMPUTE_QUERY_ID_AUTO, but we don't show
+	 * the queryid in any of the EXPLAIN plans to keep stable the results
+	 * generated by regression test suites.
+	 */
+	if (es->verbose && queryDesc->plannedstmt->queryId != UINT64CONST(0) &&
+		compute_query_id != COMPUTE_QUERY_ID_REGRESS)
+	{
+		/*
+		 * Output the queryid as an int64 rather than a uint64 so we match
+		 * what would be seen in the BIGINT pg_stat_statements.queryid column.
+		 */
+		ExplainPropertyInteger("Query Identifier", NULL, (int64)
+							   queryDesc->plannedstmt->queryId, es);
+	}
+>>>>>>> REL_16_9
 }
 
 /*
@@ -1293,6 +1337,28 @@ ExplainQueryText(ExplainState *es, QueryDesc *queryDesc)
 {
 	if (queryDesc->sourceText)
 		ExplainPropertyText("Query Text", queryDesc->sourceText, es);
+}
+
+/*
+ * ExplainQueryParameters -
+ *	  add a "Query Parameters" node that describes the parameters of the query
+ *
+ * The caller should have set up the options fields of *es, as well as
+ * initializing the output buffer es->str.
+ *
+ */
+void
+ExplainQueryParameters(ExplainState *es, ParamListInfo params, int maxlen)
+{
+	char	   *str;
+
+	/* This check is consistent with errdetail_params() */
+	if (params == NULL || params->numParams <= 0 || maxlen == 0)
+		return;
+
+	str = BuildParamLogString(params, NULL, maxlen);
+	if (str && str[0] != '\0')
+		ExplainPropertyText("Query Parameters", str, es);
 }
 
 /*
@@ -1481,7 +1547,7 @@ ExplainPreScanNode(PlanState *planstate, Bitmapset **rels_used)
 		case T_ForeignScan:
 		case T_DynamicForeignScan:
 			*rels_used = bms_add_members(*rels_used,
-										 ((ForeignScan *) plan)->fs_relids);
+										 ((ForeignScan *) plan)->fs_base_relids);
 			break;
 		case T_CustomScan:
 			*rels_used = bms_add_members(*rels_used,
@@ -1608,6 +1674,9 @@ ExplainNode(PlanState *planstate, List *ancestors,
 					break;
 				case CMD_DELETE:
 					pname = operation = "Delete";
+					break;
+				case CMD_MERGE:
+					pname = operation = "Merge";
 					break;
 				default:
 					pname = "???";
@@ -2060,7 +2129,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			{
 				BitmapIndexScan *bitmapindexscan = (BitmapIndexScan *) plan;
 				const char *indexname =
-				explain_get_index_name(bitmapindexscan->indexid);
+					explain_get_index_name(bitmapindexscan->indexid);
 
 				if (es->format == EXPLAIN_FORMAT_TEXT)
 					appendStringInfo(es->str, " on %s",
@@ -2141,8 +2210,13 @@ ExplainNode(PlanState *planstate, List *ancestors,
 					case JOIN_ANTI:
 						jointype = "Anti";
 						break;
+<<<<<<< HEAD
 					case JOIN_LASJ_NOTIN:
 						jointype = "Left Anti Semi (Not-In)";
+=======
+					case JOIN_RIGHT_ANTI:
+						jointype = "Right Anti";
+>>>>>>> REL_16_9
 						break;
 					default:
 						jointype = "???";
@@ -2742,7 +2816,18 @@ ExplainNode(PlanState *planstate, List *ancestors,
 				show_instrumentation_count("Rows Removed by Filter", 1,
 										   planstate, es);
 			break;
+<<<<<<< HEAD
 #if 0 /* Group node has been disabled in GPDB */
+=======
+		case T_WindowAgg:
+			show_upper_qual(plan->qual, "Filter", planstate, ancestors, es);
+			if (plan->qual)
+				show_instrumentation_count("Rows Removed by Filter", 1,
+										   planstate, es);
+			show_upper_qual(((WindowAgg *) plan)->runConditionOrig,
+							"Run Condition", planstate, ancestors, es);
+			break;
+>>>>>>> REL_16_9
 		case T_Group:
 			show_group_keys(castNode(GroupState, planstate), ancestors, es);
 			show_upper_qual(plan->qual, "Filter", planstate, ancestors, es);
@@ -2795,6 +2880,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		case T_Hash:
 			show_hash_info(castNode(HashState, planstate), es);
 			break;
+<<<<<<< HEAD
 		case T_RuntimeFilter:
 			show_runtime_filter_info(castNode(RuntimeFilterState, planstate),
 									 es);
@@ -2826,6 +2912,8 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		case T_Append:
 			show_join_pruning_info(((Append *) plan)->join_prune_paramids, es);
 			break;
+=======
+>>>>>>> REL_16_9
 		case T_Memoize:
 			show_memoize_info(castNode(MemoizeState, planstate), ancestors,
 							  es);
@@ -3905,7 +3993,7 @@ show_incremental_sort_info(IncrementalSortState *incrsortstate,
 		for (n = 0; n < incrsortstate->shared_info->num_workers; n++)
 		{
 			IncrementalSortInfo *incsort_info =
-			&incrsortstate->shared_info->sinfo[n];
+				&incrsortstate->shared_info->sinfo[n];
 
 			/*
 			 * If a worker hasn't processed any sort groups at all, then
@@ -4057,7 +4145,7 @@ show_memoize_info(MemoizeState *mstate, List *ancestors, ExplainState *es)
 	ListCell   *lc;
 	List	   *context;
 	StringInfoData keystr;
-	char	   *seperator = "";
+	char	   *separator = "";
 	bool		useprefix;
 	int64		memPeakKb;
 
@@ -4078,11 +4166,11 @@ show_memoize_info(MemoizeState *mstate, List *ancestors, ExplainState *es)
 	{
 		Node	   *expr = (Node *) lfirst(lc);
 
-		appendStringInfoString(&keystr, seperator);
+		appendStringInfoString(&keystr, separator);
 
 		appendStringInfoString(&keystr, deparse_expression(expr, context,
 														   useprefix, false));
-		seperator = ", ";
+		separator = ", ";
 	}
 
 	if (es->format != EXPLAIN_FORMAT_TEXT)
@@ -4206,7 +4294,6 @@ show_hashagg_info(AggState *aggstate, ExplainState *es)
 
 	if (es->format != EXPLAIN_FORMAT_TEXT)
 	{
-
 		if (es->costs)
 			ExplainPropertyInteger("Planned Partitions", NULL,
 								   aggstate->hash_planned_partitions, es);
@@ -4247,7 +4334,7 @@ show_hashagg_info(AggState *aggstate, ExplainState *es)
 			if (!gotone)
 				ExplainIndentText(es);
 			else
-				appendStringInfoString(es->str, "  ");
+				appendStringInfoSpaces(es->str, 2);
 
 			appendStringInfo(es->str, "Batches: %d  Memory Usage: " INT64_FORMAT "kB",
 							 aggstate->hash_batches_used, memPeakKb);
@@ -4504,8 +4591,11 @@ show_buffer_usage(ExplainState *es, const BufferUsage *usage, bool planning)
 								usage->temp_blks_written > 0);
 		bool		has_timing = (!INSTR_TIME_IS_ZERO(usage->blk_read_time) ||
 								  !INSTR_TIME_IS_ZERO(usage->blk_write_time));
+		bool		has_temp_timing = (!INSTR_TIME_IS_ZERO(usage->temp_blk_read_time) ||
+									   !INSTR_TIME_IS_ZERO(usage->temp_blk_write_time));
 		bool		show_planning = (planning && (has_shared ||
-												  has_local || has_temp || has_timing));
+												  has_local || has_temp || has_timing ||
+												  has_temp_timing));
 
 		if (show_planning)
 		{
@@ -4570,16 +4660,33 @@ show_buffer_usage(ExplainState *es, const BufferUsage *usage, bool planning)
 		}
 
 		/* As above, show only positive counter values. */
-		if (has_timing)
+		if (has_timing || has_temp_timing)
 		{
 			ExplainIndentText(es);
 			appendStringInfoString(es->str, "I/O Timings:");
-			if (!INSTR_TIME_IS_ZERO(usage->blk_read_time))
-				appendStringInfo(es->str, " read=%0.3f",
-								 INSTR_TIME_GET_MILLISEC(usage->blk_read_time));
-			if (!INSTR_TIME_IS_ZERO(usage->blk_write_time))
-				appendStringInfo(es->str, " write=%0.3f",
-								 INSTR_TIME_GET_MILLISEC(usage->blk_write_time));
+
+			if (has_timing)
+			{
+				appendStringInfoString(es->str, " shared");
+				if (!INSTR_TIME_IS_ZERO(usage->blk_read_time))
+					appendStringInfo(es->str, " read=%0.3f",
+									 INSTR_TIME_GET_MILLISEC(usage->blk_read_time));
+				if (!INSTR_TIME_IS_ZERO(usage->blk_write_time))
+					appendStringInfo(es->str, " write=%0.3f",
+									 INSTR_TIME_GET_MILLISEC(usage->blk_write_time));
+				if (has_temp_timing)
+					appendStringInfoChar(es->str, ',');
+			}
+			if (has_temp_timing)
+			{
+				appendStringInfoString(es->str, " temp");
+				if (!INSTR_TIME_IS_ZERO(usage->temp_blk_read_time))
+					appendStringInfo(es->str, " read=%0.3f",
+									 INSTR_TIME_GET_MILLISEC(usage->temp_blk_read_time));
+				if (!INSTR_TIME_IS_ZERO(usage->temp_blk_write_time))
+					appendStringInfo(es->str, " write=%0.3f",
+									 INSTR_TIME_GET_MILLISEC(usage->temp_blk_write_time));
+			}
 			appendStringInfoChar(es->str, '\n');
 		}
 
@@ -4615,6 +4722,12 @@ show_buffer_usage(ExplainState *es, const BufferUsage *usage, bool planning)
 								 3, es);
 			ExplainPropertyFloat("I/O Write Time", "ms",
 								 INSTR_TIME_GET_MILLISEC(usage->blk_write_time),
+								 3, es);
+			ExplainPropertyFloat("Temp I/O Read Time", "ms",
+								 INSTR_TIME_GET_MILLISEC(usage->temp_blk_read_time),
+								 3, es);
+			ExplainPropertyFloat("Temp I/O Write Time", "ms",
+								 INSTR_TIME_GET_MILLISEC(usage->temp_blk_write_time),
 								 3, es);
 		}
 	}
@@ -4681,9 +4794,6 @@ ExplainIndexScanDetails(Oid indexid, ScanDirection indexorderdir,
 		{
 			case BackwardScanDirection:
 				scandir = "Backward";
-				break;
-			case NoMovementScanDirection:
-				scandir = "NoMovement";
 				break;
 			case ForwardScanDirection:
 				scandir = "Forward";
@@ -4758,7 +4868,7 @@ ExplainTargetRel(Plan *plan, Index rti, ExplainState *es)
 			Assert(rte->rtekind == RTE_RELATION);
 			objectname = get_rel_name(rte->relid);
 			if (es->verbose)
-				namespace = get_namespace_name(get_rel_namespace(rte->relid));
+				namespace = get_namespace_name_or_temp(get_rel_namespace(rte->relid));
 			objecttag = "Relation Name";
 			break;
 		case T_FunctionScan:
@@ -4785,8 +4895,7 @@ ExplainTargetRel(Plan *plan, Index rti, ExplainState *es)
 
 						objectname = get_func_name(funcid);
 						if (es->verbose)
-							namespace =
-								get_namespace_name(get_func_namespace(funcid));
+							namespace = get_namespace_name_or_temp(get_func_namespace(funcid));
 					}
 				}
 				objecttag = "Function Name";
@@ -4916,6 +5025,11 @@ show_modifytable_info(ModifyTableState *mtstate, List *ancestors,
 			operation = "Delete";
 			foperation = "Foreign Delete";
 			break;
+		case CMD_MERGE:
+			operation = "Merge";
+			/* XXX unsupported for now, but avoid compiler noise */
+			foperation = "Foreign Merge";
+			break;
 		default:
 			operation = "???";
 			foperation = "Foreign ???";
@@ -5036,6 +5150,53 @@ show_modifytable_info(ModifyTableState *mtstate, List *ancestors,
 								 insert_path, 0, es);
 			ExplainPropertyFloat("Conflicting Tuples", NULL,
 								 other_path, 0, es);
+		}
+	}
+	else if (node->operation == CMD_MERGE)
+	{
+		/* EXPLAIN ANALYZE display of tuples processed */
+		if (es->analyze && mtstate->ps.instrument)
+		{
+			double		total;
+			double		insert_path;
+			double		update_path;
+			double		delete_path;
+			double		skipped_path;
+
+			InstrEndLoop(outerPlanState(mtstate)->instrument);
+
+			/* count the number of source rows */
+			total = outerPlanState(mtstate)->instrument->ntuples;
+			insert_path = mtstate->mt_merge_inserted;
+			update_path = mtstate->mt_merge_updated;
+			delete_path = mtstate->mt_merge_deleted;
+			skipped_path = total - insert_path - update_path - delete_path;
+			Assert(skipped_path >= 0);
+
+			if (es->format == EXPLAIN_FORMAT_TEXT)
+			{
+				if (total > 0)
+				{
+					ExplainIndentText(es);
+					appendStringInfoString(es->str, "Tuples:");
+					if (insert_path > 0)
+						appendStringInfo(es->str, " inserted=%.0f", insert_path);
+					if (update_path > 0)
+						appendStringInfo(es->str, " updated=%.0f", update_path);
+					if (delete_path > 0)
+						appendStringInfo(es->str, " deleted=%.0f", delete_path);
+					if (skipped_path > 0)
+						appendStringInfo(es->str, " skipped=%.0f", skipped_path);
+					appendStringInfoChar(es->str, '\n');
+				}
+			}
+			else
+			{
+				ExplainPropertyFloat("Tuples Inserted", NULL, insert_path, 0, es);
+				ExplainPropertyFloat("Tuples Updated", NULL, update_path, 0, es);
+				ExplainPropertyFloat("Tuples Deleted", NULL, delete_path, 0, es);
+				ExplainPropertyFloat("Tuples Skipped", NULL, skipped_path, 0, es);
+			}
 		}
 	}
 
@@ -5159,7 +5320,7 @@ ExplainCustomChildren(CustomScanState *css, List *ancestors, ExplainState *es)
 {
 	ListCell   *cell;
 	const char *label =
-	(list_length(css->custom_ps) != 1 ? "children" : "child");
+		(list_length(css->custom_ps) != 1 ? "children" : "child");
 
 	foreach(cell, css->custom_ps)
 		ExplainNode((PlanState *) lfirst(cell), ancestors, label, NULL, es);

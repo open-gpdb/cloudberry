@@ -17,15 +17,19 @@ from pg_buffercache_summary();
  t        | t        | t
 (1 row)
 
+<<<<<<< HEAD
 -- Check that the functions / views can't be accessed by default. To avoid
 -- having to create a dedicated user, use the pg_database_owner pseudo-role.
 SET ROLE pg_database_owner;
+=======
+>>>>>>> REL_16_9
 SELECT count(*) > 0 FROM pg_buffercache_usage_counts() WHERE buffers >= 0;
  ?column? 
 ----------
  t
 (1 row)
 
+<<<<<<< HEAD
 -- Test GPDB functions/views
 SELECT count(*) = (select setting::bigint
                    from pg_settings
@@ -74,12 +78,18 @@ SELECT count(*) > 0 FROM gp_buffercache_usage_counts_aggregated WHERE buffers >=
 -- Check that the functions / views can't be accessed by default.
 CREATE ROLE buffercache_test;
 SET ROLE buffercache_test;
+=======
+-- Check that the functions / views can't be accessed by default. To avoid
+-- having to create a dedicated user, use the pg_database_owner pseudo-role.
+SET ROLE pg_database_owner;
+>>>>>>> REL_16_9
 SELECT * FROM pg_buffercache;
 ERROR:  permission denied for view pg_buffercache
 SELECT * FROM pg_buffercache_pages() AS p (wrong int);
 ERROR:  permission denied for function pg_buffercache_pages
 SELECT * FROM pg_buffercache_summary();
 ERROR:  permission denied for function pg_buffercache_summary
+<<<<<<< HEAD
 RESET role;
 SELECT * FROM pg_buffercache_usage_counts();
 ERROR:  permission denied for function pg_buffercache_usage_counts
@@ -99,6 +109,11 @@ ERROR:  permission denied for view gp_buffercache_summary_aggregated
 SELECT * FROM gp_buffercache_usage_counts_aggregated;
 ERROR:  permission denied for view gp_buffercache_usage_counts_aggregated
 RESET ROLE;
+=======
+SELECT * FROM pg_buffercache_usage_counts();
+ERROR:  permission denied for function pg_buffercache_usage_counts
+RESET role;
+>>>>>>> REL_16_9
 -- Check that pg_monitor is allowed to query view / function
 SET ROLE pg_monitor;
 SELECT count(*) > 0 FROM pg_buffercache;
@@ -119,6 +134,7 @@ SELECT count(*) > 0 FROM pg_buffercache_usage_counts();
  t
 (1 row)
 
+<<<<<<< HEAD
 -- GPDB
 SELECT count(*) > 0 FROM pg_buffercache_summary;
  ?column? 
@@ -167,3 +183,5 @@ SELECT count(*) > 0 FROM gp_buffercache_usage_counts_aggregated;
 
 RESET ROLE;
 DROP ROLE buffercache_test;
+=======
+>>>>>>> REL_16_9

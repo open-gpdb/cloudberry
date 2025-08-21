@@ -3,7 +3,7 @@
 # GNUmakefile--
 #    Makefile for src/test/regress (the regression tests)
 #
-# Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+# Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
 # Portions Copyright (c) 1994, Regents of the University of California
 #
 # src/test/regress/GNUmakefile
@@ -31,8 +31,7 @@ endif
 
 # stuff to pass into build of pg_regress
 EXTRADEFS = '-DHOST_TUPLE="$(host_tuple)"' \
-	'-DSHELLPROG="$(SHELL)"' \
-	'-DDLSUFFIX="$(DLSUFFIX)"'
+	'-DSHELLPROG="$(SHELL)"'
 
 ##
 ## Prepare for tests
@@ -106,20 +105,28 @@ all: all-lib
 # Ensure parallel safety if a build is started in this directory
 $(OBJS): | submake-libpgport submake-generated-headers
 
+<<<<<<< HEAD
 # Test input and expected files.  These are created by pg_regress itself, so we
 # don't have a rule to create them.  We do need rules to clean them however.
 input_files = $(patsubst $(srcdir)/input/%.source,sql/%.sql, $(wildcard $(srcdir)/input/*.source))
 output_files := $(patsubst $(srcdir)/output/%.source,expected/%.out, $(wildcard $(srcdir)/output/*.source))
+=======
+>>>>>>> REL_16_9
 
 # not installed by default
 
 regress_data_files = \
+<<<<<<< HEAD
 	$(filter-out $(addprefix $(srcdir)/,$(output_files)),$(wildcard $(srcdir)/expected/*.out)) \
 	$(wildcard $(srcdir)/input/*.source) \
 	$(wildcard $(srcdir)/output/*.source) \
 	$(wildcard $(srcdir)/output/uao_dml/*.source) \
 	$(wildcard $(srcdir)/output/uao_ddl/*.source) \
 	$(filter-out $(addprefix $(srcdir)/,$(input_files)),$(wildcard $(srcdir)/sql/*.sql)) \
+=======
+	$(wildcard $(srcdir)/sql/*.sql) \
+	$(wildcard $(srcdir)/expected/*.out) \
+>>>>>>> REL_16_9
 	$(wildcard $(srcdir)/data/*.data) \
 	$(srcdir)/parallel_schedule $(srcdir)/resultmap
 
@@ -189,7 +196,11 @@ query_info_hook_test:
 ## Run tests
 ##
 
+<<<<<<< HEAD
 REGRESS_OPTS = --dlpath=. --max-concurrent-tests=24 --init-file=$(srcdir)/init_file --make-testtablespace-dir \
+=======
+REGRESS_OPTS = --dlpath=. --max-concurrent-tests=20 \
+>>>>>>> REL_16_9
 	$(EXTRA_REGRESS_OPTS)
 
 check: all
@@ -224,6 +235,7 @@ installcheck-cbdb-parallel: all tablespace-setup twophase_pqexecparams
 installcheck-tests: all
 	$(pg_regress_installcheck) $(REGRESS_OPTS) $(TESTS) $(EXTRA_TESTS)
 
+<<<<<<< HEAD
 installcheck-fixme: all
 	$(pg_regress_installcheck) $(REGRESS_OPTS) --schedule=$(srcdir)/fixme_schedule $(EXTRA_TESTS)
 
@@ -239,6 +251,8 @@ endif
 standbycheck: all
 	$(pg_regress_installcheck) $(REGRESS_OPTS) --schedule=$(srcdir)/standby_schedule  $(EXTRA_TESTS)
 
+=======
+>>>>>>> REL_16_9
 # old interfaces follow...
 
 runcheck: check
@@ -264,8 +278,11 @@ clean maintainer-clean: clean-lib
 	$(MAKE) -C hooktest/ clean
 	$(MAKE) -C query_info_hook_test/ clean
 # things created by various check targets
+<<<<<<< HEAD
 	rm -f $(output_files) $(input_files)
 	rm -rf ./testtablespace ./testtablespace_*
+=======
+>>>>>>> REL_16_9
 	rm -rf $(pg_regress_clean_files)
 
 distclean: clean

@@ -36,6 +36,7 @@ SELECT pg_read_file('test_file1');
 
 -- disallowed file paths for non-superusers and users who are
 -- not members of pg_write_server_files
+<<<<<<< HEAD
 CREATE ROLE regress_user1;
 NOTICE:  resource queue required -- using default resource queue "pg_default"
 GRANT pg_read_all_settings TO regress_user1;
@@ -43,16 +44,28 @@ GRANT EXECUTE ON FUNCTION pg_file_write(text,text,bool) TO regress_user1;
 SET ROLE regress_user1;
 SELECT pg_file_write('../test_file0', 'test0', false);
 ERROR:  only superuser may access generic file functions
+=======
+CREATE ROLE regress_adminpack_user1;
+GRANT pg_read_all_settings TO regress_adminpack_user1;
+GRANT EXECUTE ON FUNCTION pg_file_write(text,text,bool) TO regress_adminpack_user1;
+SET ROLE regress_adminpack_user1;
+SELECT pg_file_write('../test_file0', 'test0', false);
+ERROR:  path must be in or below the data directory
+>>>>>>> REL_16_9
 SELECT pg_file_write('/tmp/test_file0', 'test0', false);
 ERROR:  only superuser may access generic file functions
 SELECT pg_file_write(current_setting('data_directory') || '/test_file4', 'test4', false);
 ERROR:  only superuser may access generic file functions
 SELECT pg_file_write(current_setting('data_directory') || '/../test_file4', 'test4', false);
+<<<<<<< HEAD
 ERROR:  only superuser may access generic file functions
+=======
+ERROR:  absolute path not allowed
+>>>>>>> REL_16_9
 RESET ROLE;
-REVOKE EXECUTE ON FUNCTION pg_file_write(text,text,bool) FROM regress_user1;
-REVOKE pg_read_all_settings FROM regress_user1;
-DROP ROLE regress_user1;
+REVOKE EXECUTE ON FUNCTION pg_file_write(text,text,bool) FROM regress_adminpack_user1;
+REVOKE pg_read_all_settings FROM regress_adminpack_user1;
+DROP ROLE regress_adminpack_user1;
 -- sync
 SELECT pg_file_sync('test_file1'); -- sync file
  pg_file_sync 
@@ -150,9 +163,14 @@ SELECT pg_file_unlink('test_file4');
 (1 row)
 
 -- superuser checks
+<<<<<<< HEAD
 CREATE USER regress_user1;
 NOTICE:  resource queue required -- using default resource queue "pg_default"
 SET ROLE regress_user1;
+=======
+CREATE USER regress_adminpack_user1;
+SET ROLE regress_adminpack_user1;
+>>>>>>> REL_16_9
 SELECT pg_file_write('test_file0', 'test0', false);
 ERROR:  permission denied for function pg_file_write
 SELECT pg_file_sync('test_file0');
@@ -165,6 +183,7 @@ ERROR:  permission denied for function pg_file_unlink
 SELECT pg_logdir_ls();
 ERROR:  permission denied for function pg_logdir_ls
 RESET ROLE;
+<<<<<<< HEAD
 DROP USER regress_user1;
 -- allowed file paths for superuser test
 CREATE ROLE regress_superuser1 SUPERUSER;
@@ -223,5 +242,8 @@ RESET ROLE;
 REVOKE EXECUTE ON FUNCTION pg_file_write(text,text,bool) FROM regress_superuser1;
 REVOKE pg_read_all_settings FROM regress_superuser1;
 DROP ROLE regress_superuser1;
+=======
+DROP USER regress_adminpack_user1;
+>>>>>>> REL_16_9
 -- no further tests for pg_logdir_ls() because it depends on the
 -- server's logging setup

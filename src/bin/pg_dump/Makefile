@@ -2,7 +2,7 @@
 #
 # Makefile for src/bin/pg_dump
 #
-# Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+# Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
 # Portions Copyright (c) 1994, Regents of the University of California
 #
 # src/bin/pg_dump/Makefile
@@ -16,19 +16,30 @@ subdir = src/bin/pg_dump
 top_builddir = ../../..
 include $(top_builddir)/src/Makefile.global
 
+<<<<<<< HEAD
 # the use of tempnam in pg_backup_tar.c causes a warning when using newer versions of GCC
 override CPPFLAGS := -Wno-deprecated-declarations -I$(libpq_srcdir) $(CPPFLAGS)
 
 ifeq ($(PORTNAME),openbsd)
 override CFLAGS += -pthread
 endif
+=======
+export GZIP_PROGRAM=$(GZIP)
+export LZ4
+export ZSTD
+export with_icu
+>>>>>>> REL_16_9
 
 override CPPFLAGS := -I$(libpq_srcdir) $(CPPFLAGS)
 LDFLAGS_INTERNAL += -L$(top_builddir)/src/fe_utils -lpgfeutils $(libpq_pgport)
 
 OBJS = \
 	$(WIN32RES) \
+	compress_gzip.o \
 	compress_io.o \
+	compress_lz4.o \
+	compress_none.o \
+	compress_zstd.o \
 	dumputils.o \
 	parallel.o \
 	pg_backup_archiver.o \

@@ -3,7 +3,7 @@
  * heap_surgery.c
  *	  Functions to perform surgery on the damaged heap table.
  *
- * Copyright (c) 2020-2021, PostgreSQL Global Development Group
+ * Copyright (c) 2020-2023, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  contrib/pg_surgery/heap_surgery.c
@@ -14,11 +14,13 @@
 
 #include "access/heapam.h"
 #include "access/visibilitymap.h"
+#include "access/xloginsert.h"
 #include "catalog/pg_am_d.h"
 #include "catalog/pg_proc_d.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
 #include "utils/acl.h"
+#include "utils/array.h"
 #include "utils/rel.h"
 
 PG_MODULE_MAGIC;
@@ -37,7 +39,6 @@ static int32 tidcmp(const void *a, const void *b);
 static Datum heap_force_common(FunctionCallInfo fcinfo,
 							   HeapTupleForceOption heap_force_opt);
 static void sanity_check_tid_array(ArrayType *ta, int *ntids);
-static void sanity_check_relation(Relation rel);
 static BlockNumber find_tids_one_page(ItemPointer tids, int ntids,
 									  OffsetNumber *next_start_ptr);
 
@@ -101,8 +102,26 @@ heap_force_common(FunctionCallInfo fcinfo, HeapTupleForceOption heap_force_opt)
 
 	rel = relation_open(relid, RowExclusiveLock);
 
-	/* Check target relation. */
-	sanity_check_relation(rel);
+	/*
+	 * Check target relation.
+	 */
+	if (!RELKIND_HAS_TABLE_AM(rel->rd_rel->relkind))
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("cannot operate on relation \"%s\"",
+						RelationGetRelationName(rel)),
+				 errdetail_relkind_not_supported(rel->rd_rel->relkind)));
+
+	if (rel->rd_rel->relam != HEAP_TABLE_AM_OID)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("only heap AM is supported")));
+
+	/* Must be owner of the table or superuser. */
+	if (!object_ownercheck(RelationRelationId, RelationGetRelid(rel), GetUserId()))
+		aclcheck_error(ACLCHECK_NOT_OWNER,
+					   get_relkind_objtype(rel->rd_rel->relkind),
+					   RelationGetRelationName(rel));
 
 	tids = ((ItemPointer) ARR_DATA_PTR(ta));
 
@@ -112,7 +131,7 @@ heap_force_common(FunctionCallInfo fcinfo, HeapTupleForceOption heap_force_opt)
 	 * array.
 	 */
 	if (ntids > 1)
-		qsort((void *) tids, ntids, sizeof(ItemPointerData), tidcmp);
+		qsort(tids, ntids, sizeof(ItemPointerData), tidcmp);
 
 	curr_start_ptr = next_start_ptr = 0;
 	nblocks = RelationGetNumberOfBlocks(rel);
@@ -364,6 +383,7 @@ sanity_check_tid_array(ArrayType *ta, int *ntids)
 }
 
 /*-------------------------------------------------------------------------
+<<<<<<< HEAD
  * sanity_check_relation()
  *
  * Perform sanity checks on the given relation.
@@ -394,6 +414,8 @@ sanity_check_relation(Relation rel)
 }
 
 /*-------------------------------------------------------------------------
+=======
+>>>>>>> REL_16_9
  * find_tids_one_page()
  *
  * Find all the tids residing in the same page as tids[next_start_ptr], and

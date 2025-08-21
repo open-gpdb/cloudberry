@@ -4,9 +4,13 @@
  *	  prototypes for plancat.c.
  *
  *
+<<<<<<< HEAD
  * Portions Copyright (c) 2006-2009, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+=======
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
+>>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/optimizer/plancat.h
@@ -95,9 +99,14 @@ extern bool has_row_triggers(PlannerInfo *root, Index rti, CmdType event);
 
 extern bool has_stored_generated_columns(PlannerInfo *root, Index rti);
 
+<<<<<<< HEAD
 #define DEFAULT_EXTERNAL_TABLE_PAGES 1000
 #define DEFAULT_EXTERNAL_TABLE_TUPLES 1000000
 
 #define DEFAULT_INTERNAL_TABLE_PAGES 100
+=======
+extern Bitmapset *get_dependent_generated_columns(PlannerInfo *root, Index rti,
+												  Bitmapset *target_cols);
+>>>>>>> REL_16_9
 
 #endif							/* PLANCAT_H */

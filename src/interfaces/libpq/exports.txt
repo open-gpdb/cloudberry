@@ -186,3 +186,7 @@ PQpipelineStatus          183
 PQsetTraceFlags           184
 PQmblenBounded            185
 PQsendFlushRequest        186
+<<<<<<< HEAD
+=======
+PQconnectionUsedGSSAPI    187
+>>>>>>> REL_16_9

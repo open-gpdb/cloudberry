@@ -3,6 +3,7 @@
  * analyze.c
  *	  the Postgres statistics generator
  *
+<<<<<<< HEAD
  *
  * There are a few things in Cloudberry that make this more complicated
  * than in upstream:
@@ -54,6 +55,9 @@
  * TODO: explain how this works.
  *
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+=======
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
+>>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -89,6 +93,7 @@
 #include "commands/progress.h"
 #include "commands/tablecmds.h"
 #include "commands/vacuum.h"
+#include "common/pg_prng.h"
 #include "executor/executor.h"
 #include "foreign/fdwapi.h"
 #include "miscadmin.h"
@@ -182,8 +187,17 @@ static void compute_index_stats(Relation onerel, double totalrows,
 								HeapTuple *rows, int numrows,
 								MemoryContext col_context);
 static VacAttrStats *examine_attribute(Relation onerel, int attnum,
+<<<<<<< HEAD
 									   Node *index_expr, int elevel);
 static int acquire_sample_rows_dispatcher(Relation onerel, bool inh, int elevel,
+=======
+									   Node *index_expr);
+static int	acquire_sample_rows(Relation onerel, int elevel,
+								HeapTuple *rows, int targrows,
+								double *totalrows, double *totaldeadrows);
+static int	compare_rows(const void *a, const void *b, void *arg);
+static int	acquire_inherited_sample_rows(Relation onerel, int elevel,
+>>>>>>> REL_16_9
 										  HeapTuple *rows, int targrows,
 										  double *totalrows, double *totaldeadrows);
 static BlockNumber acquire_index_number_of_blocks(Relation indexrel, Relation tablerel);
@@ -546,8 +560,7 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 		}
 
 		pg_rusage_init(&ru0);
-		if (params->log_min_duration >= 0)
-			starttime = GetCurrentTimestamp();
+		starttime = GetCurrentTimestamp();
 	}
 
 	/*
@@ -615,7 +628,11 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 	 */
 	if (onerel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 	{
+<<<<<<< HEAD
 		List *idxs = RelationGetIndexList(onerel);
+=======
+		List	   *idxs = RelationGetIndexList(onerel);
+>>>>>>> REL_16_9
 
 		Irel = NULL;
 		nindexes = 0;
@@ -997,11 +1014,14 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 			MemoryContextResetAndDeleteChildren(col_context);
 		}
 
+<<<<<<< HEAD
 		/*
 		 * Datums exceeding WIDTH_THRESHOLD are masked as NULL in the sample, and
 		 * are used as is to evaluate index statistics. It is less likely to have
 		 * indexes on very wide columns, so the effect will be minimal.
 		 */
+=======
+>>>>>>> REL_16_9
 		if (nindexes > 0)
 			compute_index_stats(onerel, totalrows,
 								indexdata, nindexes,
@@ -1027,6 +1047,7 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 							thisdata->attr_cnt, thisdata->vacattrstats);
 		}
 
+<<<<<<< HEAD
 		/*
 		 * Should we build extended statistics for this relation?
 		 *
@@ -1051,6 +1072,11 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 		if (build_ext_stats)
 			BuildRelationExtStatistics(onerel, totalrows, numrows, rows,
 									   attr_cnt, vacattrstats);
+=======
+		/* Build extended statistics (if there are any). */
+		BuildRelationExtStatistics(onerel, inh, totalrows, numrows, rows,
+								   attr_cnt, vacattrstats);
+>>>>>>> REL_16_9
 	}
 
 	pgstat_progress_update_param(PROGRESS_ANALYZE_PHASE,
@@ -1081,7 +1107,11 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 		else
             		relallvisible = AcquireNumberOfAllVisibleBlocks(onerel);
 
-		/* Update pg_class for table relation */
+		/*
+		 * Update pg_class for table relation.  CCI first, in case acquirefunc
+		 * updated pg_class.
+		 */
+		CommandCounterIncrement();
 		vac_update_relstats(onerel,
 							relpages,
 							totalrows,
@@ -1089,6 +1119,7 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 							hasindex,
 							InvalidTransactionId,
 							InvalidMultiXactId,
+<<<<<<< HEAD
 							in_outer_xact,
 							false /* isVacuum */);
 
@@ -1121,6 +1152,10 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 			}
 			ReleaseSysCache(aotup);
 		}
+=======
+							NULL, NULL,
+							in_outer_xact);
+>>>>>>> REL_16_9
 
 		/* Same for indexes */
 		for (ind = 0; ind < nindexes; ind++)
@@ -1160,8 +1195,13 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 								false,
 								InvalidTransactionId,
 								InvalidMultiXactId,
+<<<<<<< HEAD
 								in_outer_xact,
 								false /* isVacuum */);
+=======
+								NULL, NULL,
+								in_outer_xact);
+>>>>>>> REL_16_9
 		}
 	}
 	else if (onerel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
@@ -1170,18 +1210,24 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 		 * Partitioned tables don't have storage, so we don't set any fields
 		 * in their pg_class entries except for reltuples and relhasindex.
 		 */
+		CommandCounterIncrement();
 		vac_update_relstats(onerel, -1, totalrows,
 							0, hasindex, InvalidTransactionId,
 							InvalidMultiXactId,
+<<<<<<< HEAD
 							in_outer_xact,
 							false /* isVacuum */);
+=======
+							NULL, NULL,
+							in_outer_xact);
+>>>>>>> REL_16_9
 	}
 
 	/*
-	 * Now report ANALYZE to the stats collector.  For regular tables, we do
-	 * it only if not doing inherited stats.  For partitioned tables, we only
-	 * do it for inherited stats. (We're never called for not-inherited stats
-	 * on partitioned tables anyway.)
+	 * Now report ANALYZE to the cumulative stats system.  For regular tables,
+	 * we do it only if not doing inherited stats.  For partitioned tables, we
+	 * only do it for inherited stats. (We're never called for not-inherited
+	 * stats on partitioned tables anyway.)
 	 *
 	 * Reset the changes_since_analyze counter only if we analyzed all
 	 * columns; otherwise, there is still work for auto-analyze to do.
@@ -1207,6 +1253,7 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 			IndexVacuumInfo ivinfo;
 
 			ivinfo.index = Irel[ind];
+			ivinfo.heaprel = onerel;
 			ivinfo.analyze_only = true;
 			ivinfo.estimated_count = true;
 			ivinfo.message_level = elevel;
@@ -1657,7 +1704,7 @@ acquire_sample_rows(Relation onerel, int elevel,
 	double		liverows = 0;	/* # live rows seen */
 	double		deadrows = 0;	/* # dead rows seen */
 	double		rowstoskip = -1;	/* -1 means not set yet */
-	long		randseed;		/* Seed for block sampler(s) */
+	uint32		randseed;		/* Seed for block sampler(s) */
 	BlockNumber totalblocks;
 	TransactionId OldestXmin;
 	BlockSamplerData bs;
@@ -1714,10 +1761,11 @@ acquire_sample_rows(Relation onerel, int elevel,
 	OldestXmin = GetOldestNonRemovableTransactionId(onerel);
 
 	/* Prepare for sampling block numbers */
-	randseed = random();
+	randseed = pg_prng_uint32(&pg_global_prng_state);
 	nblocks = BlockSampler_Init(&bs, totalblocks, targrows, randseed);
 
 #ifdef USE_PREFETCH
+<<<<<<< HEAD
 	/*
 	 * GPDB_14_MERGE_FIXME: pre-fetching is introduced in PG14.
 	 * It's not suitable for AO tables, will get error when PrefetchBuffer
@@ -1735,6 +1783,12 @@ acquire_sample_rows(Relation onerel, int elevel,
 		if (prefetch_maximum)
 			(void) BlockSampler_Init(&prefetch_bs, totalblocks, targrows, randseed);
 	}
+=======
+	prefetch_maximum = get_tablespace_maintenance_io_concurrency(onerel->rd_rel->reltablespace);
+	/* Create another BlockSampler, using the same seed, for prefetching */
+	if (prefetch_maximum)
+		(void) BlockSampler_Init(&prefetch_bs, totalblocks, targrows, randseed);
+>>>>>>> REL_16_9
 #endif
 
 	/* Report sampling block numbers */
@@ -1844,7 +1898,7 @@ acquire_sample_rows(Relation onerel, int elevel,
 					 * Found a suitable tuple, so save it, replacing one old
 					 * tuple at random
 					 */
-					int			k = (int) (targrows * sampler_random_fract(rstate.randstate));
+					int			k = (int) (targrows * sampler_random_fract(&rstate.randstate));
 
 					Assert(k >= 0 && k < targrows);
 					heap_freetuple(rows[k]);
@@ -1873,7 +1927,8 @@ acquire_sample_rows(Relation onerel, int elevel,
 	 * tuples are already sorted.
 	 */
 	if (numrows == targrows)
-		qsort((void *) rows, numrows, sizeof(HeapTuple), compare_rows);
+		qsort_interruptible(rows, numrows, sizeof(HeapTuple),
+							compare_rows, NULL);
 
 	/*
 	 * Estimate total numbers of live and dead rows in relation, extrapolating
@@ -1909,10 +1964,10 @@ acquire_sample_rows(Relation onerel, int elevel,
 }
 
 /*
- * qsort comparator for sorting rows[] array
+ * Comparator for sorting rows[] array
  */
 static int
-compare_rows(const void *a, const void *b)
+compare_rows(const void *a, const void *b, void *arg)
 {
 	HeapTuple	ha = *(const HeapTuple *) a;
 	HeapTuple	hb = *(const HeapTuple *) b;
@@ -1973,6 +2028,10 @@ acquire_inherited_sample_rows(Relation onerel, int elevel,
 				i;
 	ListCell   *lc;
 	bool		has_child;
+
+	/* Initialize output parameters to zero now, in case we exit early */
+	*totalrows = 0;
+	*totaldeadrows = 0;
 
 	/*
 	 * Find all members of inheritance set.  We only need AccessShareLock on
@@ -2133,16 +2192,31 @@ acquire_inherited_sample_rows(Relation onerel, int elevel,
 	pgstat_progress_update_param(PROGRESS_ANALYZE_CHILD_TABLES_TOTAL,
 								 nrels);
 	numrows = 0;
-	*totalrows = 0;
-	*totaldeadrows = 0;
 	for (i = 0; i < nrels; i++)
 	{
 		Relation	childrel = rels[i];
 		AcquireSampleRowsFunc acquirefunc = acquirefuncs[i];
 		double		childblocks = relblocks[i];
 
-		pgstat_progress_update_param(PROGRESS_ANALYZE_CURRENT_CHILD_TABLE_RELID,
-									 RelationGetRelid(childrel));
+		/*
+		 * Report progress.  The sampling function will normally report blocks
+		 * done/total, but we need to reset them to 0 here, so that they don't
+		 * show an old value until that.
+		 */
+		{
+			const int	progress_index[] = {
+				PROGRESS_ANALYZE_CURRENT_CHILD_TABLE_RELID,
+				PROGRESS_ANALYZE_BLOCKS_DONE,
+				PROGRESS_ANALYZE_BLOCKS_TOTAL
+			};
+			const int64 progress_vals[] = {
+				RelationGetRelid(childrel),
+				0,
+				0,
+			};
+
+			pgstat_progress_update_multi_param(3, progress_index, progress_vals);
+		}
 
 		if (childblocks > 0)
 		{
@@ -3043,6 +3117,7 @@ update_attstats(Oid relid, bool inh, int natts, VacAttrStats **vacattrstats)
 {
 	Relation	sd;
 	int			attno;
+	CatalogIndexState indstate = NULL;
 
 	if (natts <= 0)
 		return;					/* nothing to do */
@@ -3107,10 +3182,7 @@ update_attstats(Oid relid, bool inh, int natts, VacAttrStats **vacattrstats)
 
 				for (n = 0; n < nnum; n++)
 					numdatums[n] = Float4GetDatum(stats->stanumbers[k][n]);
-				/* XXX knows more than it should about type float4: */
-				arry = construct_array(numdatums, nnum,
-									   FLOAT4OID,
-									   sizeof(float4), true, TYPALIGN_INT);
+				arry = construct_array_builtin(numdatums, nnum, FLOAT4OID);
 				values[i++] = PointerGetDatum(arry);	/* stanumbersN */
 			}
 			else
@@ -3147,6 +3219,10 @@ update_attstats(Oid relid, bool inh, int natts, VacAttrStats **vacattrstats)
 								 Int16GetDatum(stats->attr->attnum),
 								 BoolGetDatum(inh));
 
+		/* Open index information when we know we need it */
+		if (indstate == NULL)
+			indstate = CatalogOpenIndexes(sd);
+
 		if (HeapTupleIsValid(oldtup))
 		{
 			/* Yes, replace it */
@@ -3156,18 +3232,20 @@ update_attstats(Oid relid, bool inh, int natts, VacAttrStats **vacattrstats)
 									 nulls,
 									 replaces);
 			ReleaseSysCache(oldtup);
-			CatalogTupleUpdate(sd, &stup->t_self, stup);
+			CatalogTupleUpdateWithInfo(sd, &stup->t_self, stup, indstate);
 		}
 		else
 		{
 			/* No, insert new tuple */
 			stup = heap_form_tuple(RelationGetDescr(sd), values, nulls);
-			CatalogTupleInsert(sd, stup);
+			CatalogTupleInsertWithInfo(sd, stup, indstate);
 		}
 
 		heap_freetuple(stup);
 	}
 
+	if (indstate != NULL)
+		CatalogCloseIndexes(indstate);
 	table_close(sd, RowExclusiveLock);
 }
 
@@ -3256,7 +3334,7 @@ static void merge_leaf_stats(VacAttrStatsP stats,
 								 int samplerows,
 								 double totalrows);
 static int	compare_scalars(const void *a, const void *b, void *arg);
-static int	compare_mcvs(const void *a, const void *b);
+static int	compare_mcvs(const void *a, const void *b, void *arg);
 static int	analyze_mcv_list(int *mcv_counts,
 							 int num_mcv,
 							 double stadistinct,
@@ -3926,8 +4004,8 @@ compute_scalar_stats(VacAttrStatsP stats,
 		/* Sort the collected values */
 		cxt.ssup = &ssup;
 		cxt.tupnoLink = tupnoLink;
-		qsort_arg((void *) values, values_cnt, sizeof(ScalarItem),
-				  compare_scalars, (void *) &cxt);
+		qsort_interruptible(values, values_cnt, sizeof(ScalarItem),
+							compare_scalars, &cxt);
 
 		/*
 		 * Now scan the values in order, find the most common ones, and also
@@ -4194,8 +4272,8 @@ compute_scalar_stats(VacAttrStatsP stats,
 						deltafrac;
 
 			/* Sort the MCV items into position order to speed next loop */
-			qsort((void *) track, num_mcv,
-				  sizeof(ScalarMCVItem), compare_mcvs);
+			qsort_interruptible(track, num_mcv, sizeof(ScalarMCVItem),
+								compare_mcvs, NULL);
 
 			/*
 			 * Collapse out the MCV items from the values[] array.
@@ -4390,6 +4468,7 @@ compute_scalar_stats(VacAttrStatsP stats,
 }
 
 /*
+<<<<<<< HEAD
  *	merge_leaf_stats() -- merge leaf stats for the root
  *
  *	We use this when we can find "=" and "<" operators for the datatype.
@@ -4896,6 +4975,9 @@ merge_leaf_stats(VacAttrStatsP stats,
 
 /*
  * qsort_arg comparator for sorting ScalarItems
+=======
+ * Comparator for sorting ScalarItems
+>>>>>>> REL_16_9
  *
  * Aside from sorting the items, we update the tupnoLink[] array
  * whenever two ScalarItems are found to contain equal datums.  The array
@@ -4932,10 +5014,10 @@ compare_scalars(const void *a, const void *b, void *arg)
 }
 
 /*
- * qsort comparator for sorting ScalarMCVItems by position
+ * Comparator for sorting ScalarMCVItems by position
  */
 static int
-compare_mcvs(const void *a, const void *b)
+compare_mcvs(const void *a, const void *b, void *arg)
 {
 	int			da = ((const ScalarMCVItem *) a)->first;
 	int			db = ((const ScalarMCVItem *) b)->first;

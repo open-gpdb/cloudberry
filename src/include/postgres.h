@@ -7,7 +7,7 @@
  * Client-side code should include postgres_fe.h instead.
  *
  *
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1995, Regents of the University of California
  *
  * src/include/postgres.h
@@ -23,8 +23,8 @@
  *
  *	  section	description
  *	  -------	------------------------------------------------
- *		1)		variable-length datatypes (TOAST support)
- *		2)		Datum type + support macros
+ *		1)		Datum type + support functions
+ *		2)		miscellaneous
  *
  *	 NOTES
  *
@@ -35,8 +35,7 @@
  *	postgres_fe.h.  We do that since those type definitions are needed by
  *	frontend modules that want to deal with binary data transmission to or
  *	from the backend.  Type definitions in this file should be for
- *	representations that never escape the backend, such as Datum or
- *	TOASTed varlena objects.
+ *	representations that never escape the backend, such as Datum.
  *
  *----------------------------------------------------------------
  */
@@ -49,6 +48,7 @@
 #include "storage/itemptr.h"
 
 /* ----------------------------------------------------------------
+<<<<<<< HEAD
  *				Section 1:	variable-length datatypes (TOAST support)
  * ----------------------------------------------------------------
  */
@@ -411,6 +411,9 @@ typedef struct
 
 /* ----------------------------------------------------------------
  *				Section 2:	Datum type + support macros
+=======
+ *				Section 1:	Datum type + support functions
+>>>>>>> REL_16_9
  * ----------------------------------------------------------------
  */
 
@@ -420,6 +423,7 @@ typedef struct
  *
  * sizeof(Datum) == sizeof(void *) == 4 or 8
  *
+<<<<<<< HEAD
  *  Cloudberry CDB:
  *     Datum is always 8 bytes, regardless if it is 32bit or 64bit machine.
  *  so may be > sizeof(void *). To align with postgres, which defines Datum as
@@ -429,6 +433,9 @@ typedef struct
  *  Although it is unclear why did GPDB had that restriction at the beginning.
  *
  * The macros below and the analogous macros for other types should be used to
+=======
+ * The functions below and the analogous functions for other types should be used to
+>>>>>>> REL_16_9
  * convert between a Datum and the appropriate C type.
  */
 
@@ -473,6 +480,7 @@ StaticAssertDecl(SIZEOF_DATUM == 8, "sizeof datum is not 8");
  *
  * Note: any nonzero value will be considered true.
  */
+<<<<<<< HEAD
 static inline bool DatumGetBool(Datum d) { return (bool)(d != 0); }
 static inline Datum BoolGetDatum(bool b) { return (b ? 1 : 0); } 
 
@@ -500,19 +508,346 @@ static inline Datum UInt32GetDatum(uint32 ui32) { return (Datum) ui32; }
 static inline int64 DatumGetInt64(Datum d) { return (int64) d; } 
 static inline Datum Int64GetDatum(int64 i64) { return (Datum) i64; } 
 static inline Datum Int64GetDatumFast(int64 x) { return Int64GetDatum(x); } 
+=======
+static inline bool
+DatumGetBool(Datum X)
+{
+	return (X != 0);
+}
+
+/*
+ * BoolGetDatum
+ *		Returns datum representation for a boolean.
+ *
+ * Note: any nonzero value will be considered true.
+ */
+static inline Datum
+BoolGetDatum(bool X)
+{
+	return (Datum) (X ? 1 : 0);
+}
+
+/*
+ * DatumGetChar
+ *		Returns character value of a datum.
+ */
+static inline char
+DatumGetChar(Datum X)
+{
+	return (char) X;
+}
+
+/*
+ * CharGetDatum
+ *		Returns datum representation for a character.
+ */
+static inline Datum
+CharGetDatum(char X)
+{
+	return (Datum) X;
+}
+
+/*
+ * Int8GetDatum
+ *		Returns datum representation for an 8-bit integer.
+ */
+static inline Datum
+Int8GetDatum(int8 X)
+{
+	return (Datum) X;
+}
+
+/*
+ * DatumGetUInt8
+ *		Returns 8-bit unsigned integer value of a datum.
+ */
+static inline uint8
+DatumGetUInt8(Datum X)
+{
+	return (uint8) X;
+}
+
+/*
+ * UInt8GetDatum
+ *		Returns datum representation for an 8-bit unsigned integer.
+ */
+static inline Datum
+UInt8GetDatum(uint8 X)
+{
+	return (Datum) X;
+}
+
+/*
+ * DatumGetInt16
+ *		Returns 16-bit integer value of a datum.
+ */
+static inline int16
+DatumGetInt16(Datum X)
+{
+	return (int16) X;
+}
+
+/*
+ * Int16GetDatum
+ *		Returns datum representation for a 16-bit integer.
+ */
+static inline Datum
+Int16GetDatum(int16 X)
+{
+	return (Datum) X;
+}
+
+/*
+ * DatumGetUInt16
+ *		Returns 16-bit unsigned integer value of a datum.
+ */
+static inline uint16
+DatumGetUInt16(Datum X)
+{
+	return (uint16) X;
+}
+
+/*
+ * UInt16GetDatum
+ *		Returns datum representation for a 16-bit unsigned integer.
+ */
+static inline Datum
+UInt16GetDatum(uint16 X)
+{
+	return (Datum) X;
+}
+
+/*
+ * DatumGetInt32
+ *		Returns 32-bit integer value of a datum.
+ */
+static inline int32
+DatumGetInt32(Datum X)
+{
+	return (int32) X;
+}
+
+/*
+ * Int32GetDatum
+ *		Returns datum representation for a 32-bit integer.
+ */
+static inline Datum
+Int32GetDatum(int32 X)
+{
+	return (Datum) X;
+}
+
+/*
+ * DatumGetUInt32
+ *		Returns 32-bit unsigned integer value of a datum.
+ */
+static inline uint32
+DatumGetUInt32(Datum X)
+{
+	return (uint32) X;
+}
+
+/*
+ * UInt32GetDatum
+ *		Returns datum representation for a 32-bit unsigned integer.
+ */
+static inline Datum
+UInt32GetDatum(uint32 X)
+{
+	return (Datum) X;
+}
+
+/*
+ * DatumGetObjectId
+ *		Returns object identifier value of a datum.
+ */
+static inline Oid
+DatumGetObjectId(Datum X)
+{
+	return (Oid) X;
+}
+
+/*
+ * ObjectIdGetDatum
+ *		Returns datum representation for an object identifier.
+ */
+static inline Datum
+ObjectIdGetDatum(Oid X)
+{
+	return (Datum) X;
+}
+
+/*
+ * DatumGetTransactionId
+ *		Returns transaction identifier value of a datum.
+ */
+static inline TransactionId
+DatumGetTransactionId(Datum X)
+{
+	return (TransactionId) X;
+}
+
+/*
+ * TransactionIdGetDatum
+ *		Returns datum representation for a transaction identifier.
+ */
+static inline Datum
+TransactionIdGetDatum(TransactionId X)
+{
+	return (Datum) X;
+}
+
+/*
+ * MultiXactIdGetDatum
+ *		Returns datum representation for a multixact identifier.
+ */
+static inline Datum
+MultiXactIdGetDatum(MultiXactId X)
+{
+	return (Datum) X;
+}
+
+/*
+ * DatumGetCommandId
+ *		Returns command identifier value of a datum.
+ */
+static inline CommandId
+DatumGetCommandId(Datum X)
+{
+	return (CommandId) X;
+}
+
+/*
+ * CommandIdGetDatum
+ *		Returns datum representation for a command identifier.
+ */
+static inline Datum
+CommandIdGetDatum(CommandId X)
+{
+	return (Datum) X;
+}
+
+/*
+ * DatumGetPointer
+ *		Returns pointer value of a datum.
+ */
+static inline Pointer
+DatumGetPointer(Datum X)
+{
+	return (Pointer) X;
+}
+
+/*
+ * PointerGetDatum
+ *		Returns datum representation for a pointer.
+ */
+static inline Datum
+PointerGetDatum(const void *X)
+{
+	return (Datum) X;
+}
+
+/*
+ * DatumGetCString
+ *		Returns C string (null-terminated string) value of a datum.
+ *
+ * Note: C string is not a full-fledged Postgres type at present,
+ * but type input functions use this conversion for their inputs.
+ */
+static inline char *
+DatumGetCString(Datum X)
+{
+	return (char *) DatumGetPointer(X);
+}
+
+/*
+ * CStringGetDatum
+ *		Returns datum representation for a C string (null-terminated string).
+ *
+ * Note: C string is not a full-fledged Postgres type at present,
+ * but type output functions use this conversion for their outputs.
+ * Note: CString is pass-by-reference; caller must ensure the pointed-to
+ * value has adequate lifetime.
+ */
+static inline Datum
+CStringGetDatum(const char *X)
+{
+	return PointerGetDatum(X);
+}
+
+/*
+ * DatumGetName
+ *		Returns name value of a datum.
+ */
+static inline Name
+DatumGetName(Datum X)
+{
+	return (Name) DatumGetPointer(X);
+}
+
+/*
+ * NameGetDatum
+ *		Returns datum representation for a name.
+ *
+ * Note: Name is pass-by-reference; caller must ensure the pointed-to
+ * value has adequate lifetime.
+ */
+static inline Datum
+NameGetDatum(const NameData *X)
+{
+	return CStringGetDatum(NameStr(*X));
+}
+
+/*
+ * DatumGetInt64
+ *		Returns 64-bit integer value of a datum.
+ *
+ * Note: this function hides whether int64 is pass by value or by reference.
+ */
+static inline int64
+DatumGetInt64(Datum X)
+{
+#ifdef USE_FLOAT8_BYVAL
+	return (int64) X;
+#else
+	return *((int64 *) DatumGetPointer(X));
+#endif
+}
+
+/*
+ * Int64GetDatum
+ *		Returns datum representation for a 64-bit integer.
+ *
+ * Note: if int64 is pass by reference, this function returns a reference
+ * to palloc'd space.
+ */
+#ifdef USE_FLOAT8_BYVAL
+static inline Datum
+Int64GetDatum(int64 X)
+{
+	return (Datum) X;
+}
+#else
+extern Datum Int64GetDatum(int64 X);
+#endif
+>>>>>>> REL_16_9
+
 
 /*
  * DatumGetUInt64
  *		Returns 64-bit unsigned integer value of a datum.
  *
- * Note: this macro hides whether int64 is pass by value or by reference.
+ * Note: this function hides whether int64 is pass by value or by reference.
  */
-
+static inline uint64
+DatumGetUInt64(Datum X)
+{
 #ifdef USE_FLOAT8_BYVAL
-#define DatumGetUInt64(X) ((uint64) (X))
+	return (uint64) X;
 #else
-#define DatumGetUInt64(X) (* ((uint64 *) DatumGetPointer(X)))
+	return *((uint64 *) DatumGetPointer(X));
 #endif
+}
 
 /*
  * UInt64GetDatum
@@ -521,12 +856,15 @@ static inline Datum Int64GetDatumFast(int64 x) { return Int64GetDatum(x); }
  * Note: if int64 is pass by reference, this function returns a reference
  * to palloc'd space.
  */
-
+static inline Datum
+UInt64GetDatum(uint64 X)
+{
 #ifdef USE_FLOAT8_BYVAL
-#define UInt64GetDatum(X) ((Datum) (X))
+	return (Datum) X;
 #else
-#define UInt64GetDatum(X) Int64GetDatum((int64) (X))
+	return Int64GetDatum((int64) X);
 #endif
+}
 
 static inline Oid DatumGetObjectId(Datum d) { return (Oid) d; } 
 static inline Datum ObjectIdGetDatum(Oid oid) { return (Datum) oid; } 
@@ -549,6 +887,7 @@ static inline Datum CommandIdGetDatum(CommandId cid) { return (Datum) cid; }
 #define DatumGetPointer(X) ((Pointer) (X))
 
 /*
+<<<<<<< HEAD
  * PointerGetDatum
  *		Returns datum representation for a pointer.
  */
@@ -567,8 +906,48 @@ static inline Datum Float4GetDatum(float4 f) { Datum_U du; du.d = 0; du.f4[0] = 
 #else
 static inline float4 DatumGetFloat4(Datum d) { Datum_U du; du.d = d; return du.f4[1]; } 
 static inline Datum Float4GetDatum(float4 f) { Datum_U du; du.d = 0; du.f4[1] = f; return du.d; } 
-#endif
+=======
+ * Float4GetDatum
+ *		Returns datum representation for a 4-byte floating point number.
+ */
+static inline Datum
+Float4GetDatum(float4 X)
+{
+	union
+	{
+		float4		value;
+		int32		retval;
+	}			myunion;
 
+	myunion.value = X;
+	return Int32GetDatum(myunion.retval);
+}
+
+/*
+ * DatumGetFloat8
+ *		Returns 8-byte floating point value of a datum.
+ *
+ * Note: this function hides whether float8 is pass by value or by reference.
+ */
+static inline float8
+DatumGetFloat8(Datum X)
+{
+#ifdef USE_FLOAT8_BYVAL
+	union
+	{
+		int64		value;
+		float8		retval;
+	}			myunion;
+
+	myunion.value = DatumGetInt64(X);
+	return myunion.retval;
+#else
+	return *((float8 *) DatumGetPointer(X));
+>>>>>>> REL_16_9
+#endif
+}
+
+<<<<<<< HEAD
 static inline float8 DatumGetFloat8(Datum d) { Datum_U du; du.d = d; return du.f8; } 
 static inline Datum Float8GetDatum(float8 f) { Datum_U du; du.f8 = f; return du.d; }
 static inline Datum Float8GetDatumFast(float8 f) { return Float8GetDatum(f); }
@@ -578,11 +957,24 @@ static inline Datum ItemPointerGetDatum(ItemPointer i) { return PointerGetDatum(
 
 
 static inline bool IsAligned(void *p, int align)
+=======
+/*
+ * Float8GetDatum
+ *		Returns datum representation for an 8-byte floating point number.
+ *
+ * Note: if float8 is pass by reference, this function returns a reference
+ * to palloc'd space.
+ */
+#ifdef USE_FLOAT8_BYVAL
+static inline Datum
+Float8GetDatum(float8 X)
+>>>>>>> REL_16_9
 {
         int64 i = (int64) PointerGetDatum(p);
         return ((i & (align-1)) == 0);
 }
 
+<<<<<<< HEAD
 /* ----------------------------------------------------------------
  *				Section 3:	exception handling backend support
  * ----------------------------------------------------------------
@@ -599,5 +991,51 @@ static inline bool IsAligned(void *p, int align)
 extern void ExceptionalCondition(const char *conditionName,
 					 const char *errorType,
 			   const char *fileName, int lineNumber) pg_attribute_noreturn();
+=======
+
+/*
+ * Int64GetDatumFast
+ * Float8GetDatumFast
+ *
+ * These macros are intended to allow writing code that does not depend on
+ * whether int64 and float8 are pass-by-reference types, while not
+ * sacrificing performance when they are.  The argument must be a variable
+ * that will exist and have the same value for as long as the Datum is needed.
+ * In the pass-by-ref case, the address of the variable is taken to use as
+ * the Datum.  In the pass-by-val case, these are the same as the non-Fast
+ * functions, except for asserting that the variable is of the correct type.
+ */
+
+#ifdef USE_FLOAT8_BYVAL
+#define Int64GetDatumFast(X) \
+	(AssertVariableIsOfTypeMacro(X, int64), Int64GetDatum(X))
+#define Float8GetDatumFast(X) \
+	(AssertVariableIsOfTypeMacro(X, double), Float8GetDatum(X))
+#else
+#define Int64GetDatumFast(X) \
+	(AssertVariableIsOfTypeMacro(X, int64), PointerGetDatum(&(X)))
+#define Float8GetDatumFast(X) \
+	(AssertVariableIsOfTypeMacro(X, double), PointerGetDatum(&(X)))
+#endif
+
+
+/* ----------------------------------------------------------------
+ *				Section 2:	miscellaneous
+ * ----------------------------------------------------------------
+ */
+
+/*
+ * NON_EXEC_STATIC: It's sometimes useful to define a variable or function
+ * that is normally static but extern when using EXEC_BACKEND (see
+ * pg_config_manual.h).  There would then typically be some code in
+ * postmaster.c that uses those extern symbols to transfer state between
+ * processes or do whatever other things it needs to do in EXEC_BACKEND mode.
+ */
+#ifdef EXEC_BACKEND
+#define NON_EXEC_STATIC
+#else
+#define NON_EXEC_STATIC static
+#endif
+>>>>>>> REL_16_9
 
 #endif							/* POSTGRES_H */

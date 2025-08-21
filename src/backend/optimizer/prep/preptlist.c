@@ -12,7 +12,7 @@
  * For UPDATE and DELETE queries, the targetlist must also contain "junk"
  * tlist entries needed to allow the executor to identify the rows to be
  * updated or deleted; for example, the ctid of a heap row.  (The planner
- * adds these; they're not in what we receive from the planner/rewriter.)
+ * adds these; they're not in what we receive from the parser/rewriter.)
  *
  * For all query types, there can be additional junk tlist entries, such as
  * sort keys, Vars needed for a RETURNING list, and row ID information needed
@@ -25,9 +25,13 @@
  * rewriter's work is more concerned with SQL semantics.
  *
  *
+<<<<<<< HEAD
  * Portions Copyright (c) 2006-2008, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+=======
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
+>>>>>>> REL_16_9
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -46,8 +50,10 @@
 #include "optimizer/tlist.h"
 #include "parser/parse_coerce.h"
 #include "parser/parsetree.h"
+#include "utils/lsyscache.h"
 #include "utils/rel.h"
 
+<<<<<<< HEAD
 #include "catalog/gp_distribution_policy.h"     /* CDB: POLICYTYPE_PARTITIONED */
 #include "catalog/pg_inherits.h"
 #include "optimizer/plancat.h"
@@ -61,6 +67,10 @@ static List *supplement_simply_updatable_targetlist(PlannerInfo *root,
 
 static List *expand_insert_targetlist(List *tlist, Relation rel, Index split_update_result_relation);
 
+=======
+static List *expand_insert_targetlist(PlannerInfo *root, List *tlist,
+									  Relation rel);
+>>>>>>> REL_16_9
 
 
 /*
@@ -116,7 +126,11 @@ preprocess_targetlist(PlannerInfo *root)
 	 */
 	tlist = parse->targetList;
 	if (command_type == CMD_INSERT)
+<<<<<<< HEAD
 		tlist = expand_insert_targetlist(tlist, target_relation, 0);
+=======
+		tlist = expand_insert_targetlist(root, tlist, target_relation);
+>>>>>>> REL_16_9
 	else if (command_type == CMD_UPDATE)
 	{
 		/*
@@ -142,14 +156,15 @@ preprocess_targetlist(PlannerInfo *root)
 	}
 
 	/*
-	 * For non-inherited UPDATE/DELETE, register any junk column(s) needed to
-	 * allow the executor to identify the rows to be updated or deleted.  In
-	 * the inheritance case, we do nothing now, leaving this to be dealt with
-	 * when expand_inherited_rtentry() makes the leaf target relations.  (But
-	 * there might not be any leaf target relations, in which case we must do
-	 * this in distribute_row_identity_vars().)
+	 * For non-inherited UPDATE/DELETE/MERGE, register any junk column(s)
+	 * needed to allow the executor to identify the rows to be updated or
+	 * deleted.  In the inheritance case, we do nothing now, leaving this to
+	 * be dealt with when expand_inherited_rtentry() makes the leaf target
+	 * relations.  (But there might not be any leaf target relations, in which
+	 * case we must do this in distribute_row_identity_vars().)
 	 */
-	if ((command_type == CMD_UPDATE || command_type == CMD_DELETE) &&
+	if ((command_type == CMD_UPDATE || command_type == CMD_DELETE ||
+		 command_type == CMD_MERGE) &&
 		!target_rte->inh)
 	{
 		/* row-identity logic expects to add stuff to processed_tlist */
@@ -162,6 +177,66 @@ preprocess_targetlist(PlannerInfo *root)
 	/* simply updatable cursors */
 	if (root->glob->simplyUpdatableRel != InvalidOid)
 		tlist = supplement_simply_updatable_targetlist(root, range_table, tlist);
+
+	/*
+	 * For MERGE we also need to handle the target list for each INSERT and
+	 * UPDATE action separately.  In addition, we examine the qual of each
+	 * action and add any Vars there (other than those of the target rel) to
+	 * the subplan targetlist.
+	 */
+	if (command_type == CMD_MERGE)
+	{
+		ListCell   *l;
+
+		/*
+		 * For MERGE, handle targetlist of each MergeAction separately. Give
+		 * the same treatment to MergeAction->targetList as we would have
+		 * given to a regular INSERT.  For UPDATE, collect the column numbers
+		 * being modified.
+		 */
+		foreach(l, parse->mergeActionList)
+		{
+			MergeAction *action = (MergeAction *) lfirst(l);
+			List	   *vars;
+			ListCell   *l2;
+
+			if (action->commandType == CMD_INSERT)
+				action->targetList = expand_insert_targetlist(root,
+															  action->targetList,
+															  target_relation);
+			else if (action->commandType == CMD_UPDATE)
+				action->updateColnos =
+					extract_update_targetlist_colnos(action->targetList);
+
+			/*
+			 * Add resjunk entries for any Vars and PlaceHolderVars used in
+			 * each action's targetlist and WHEN condition that belong to
+			 * relations other than the target.  We don't expect to see any
+			 * aggregates or window functions here.
+			 */
+			vars = pull_var_clause((Node *)
+								   list_concat_copy((List *) action->qual,
+													action->targetList),
+								   PVC_INCLUDE_PLACEHOLDERS);
+			foreach(l2, vars)
+			{
+				Var		   *var = (Var *) lfirst(l2);
+				TargetEntry *tle;
+
+				if (IsA(var, Var) && var->varno == result_relation)
+					continue;	/* don't need it */
+
+				if (tlist_member((Expr *) var, tlist))
+					continue;	/* already got it */
+
+				tle = makeTargetEntry((Expr *) var,
+									  list_length(tlist) + 1,
+									  NULL, true);
+				tlist = lappend(tlist, tle);
+			}
+			list_free(vars);
+		}
+	}
 
 	/*
 	 * Add necessary junk columns for rowmarked rels.  These values are needed
@@ -335,7 +410,11 @@ extract_update_targetlist_colnos(List *tlist, bool reorder_resno)
  * but now this code is only applied to INSERT targetlists.
  */
 static List *
+<<<<<<< HEAD
 expand_insert_targetlist(List *tlist, Relation rel, Index split_update_result_relation)
+=======
+expand_insert_targetlist(PlannerInfo *root, List *tlist, Relation rel)
+>>>>>>> REL_16_9
 {
 	List	   *new_tlist = NIL;
 	ListCell   *tlist_item;
@@ -376,9 +455,8 @@ expand_insert_targetlist(List *tlist, Relation rel, Index split_update_result_re
 			 *
 			 * INSERTs should insert NULL in this case.  (We assume the
 			 * rewriter would have inserted any available non-NULL default
-			 * value.)  Also, if the column isn't dropped, apply any domain
-			 * constraints that might exist --- this is to catch domain NOT
-			 * NULL.
+			 * value.)  Also, normally we must apply any domain constraints
+			 * that might exist --- this is to catch domain NOT NULL.
 			 *
 			 * When generating a NULL constant for a dropped column, we label
 			 * it INT4 (any other guaranteed-to-exist datatype would do as
@@ -388,11 +466,17 @@ expand_insert_targetlist(List *tlist, Relation rel, Index split_update_result_re
 			 * representation is datatype-independent.  This could perhaps
 			 * confuse code comparing the finished plan to the target
 			 * relation, however.
+			 *
+			 * Another exception is that if the column is generated, the value
+			 * we produce here will be ignored, and we don't want to risk
+			 * throwing an error.  So in that case we *don't* want to apply
+			 * domain constraints, so we must produce a NULL of the base type.
+			 * Again, code comparing the finished plan to the target relation
+			 * must account for this.
 			 */
-			Oid			atttype = att_tup->atttypid;
-			Oid			attcollation = att_tup->attcollation;
 			Node	   *new_expr;
 
+<<<<<<< HEAD
 			if (!att_tup->attisdropped)
 			{
 				if (split_update_result_relation)
@@ -423,6 +507,9 @@ expand_insert_targetlist(List *tlist, Relation rel, Index split_update_result_re
 				}
 			}
 			else
+=======
+			if (att_tup->attisdropped)
+>>>>>>> REL_16_9
 			{
 				/* Insert NULL for dropped column */
 				new_expr = (Node *) makeConst(INT4OID,
@@ -432,6 +519,33 @@ expand_insert_targetlist(List *tlist, Relation rel, Index split_update_result_re
 											  (Datum) 0,
 											  true, /* isnull */
 											  true /* byval */ );
+			}
+			else if (att_tup->attgenerated)
+			{
+				/* Generated column, insert a NULL of the base type */
+				Oid			baseTypeId = att_tup->atttypid;
+				int32		baseTypeMod = att_tup->atttypmod;
+
+				baseTypeId = getBaseTypeAndTypmod(baseTypeId, &baseTypeMod);
+				new_expr = (Node *) makeConst(baseTypeId,
+											  baseTypeMod,
+											  att_tup->attcollation,
+											  att_tup->attlen,
+											  (Datum) 0,
+											  true, /* isnull */
+											  att_tup->attbyval);
+			}
+			else
+			{
+				/* Normal column, insert a NULL of the column datatype */
+				new_expr = coerce_null_to_domain(att_tup->atttypid,
+												 att_tup->atttypmod,
+												 att_tup->attcollation,
+												 att_tup->attlen,
+												 att_tup->attbyval);
+				/* Must run expression preprocessing on any non-const nodes */
+				if (!IsA(new_expr, Const))
+					new_expr = eval_const_expressions(root, new_expr);
 			}
 
 			new_tle = makeTargetEntry((Expr *) new_expr,

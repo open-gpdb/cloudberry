@@ -3,7 +3,7 @@
  * copyto.c
  *		COPY <table> TO file/program/client
  *
- * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -52,12 +52,60 @@
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
 
+<<<<<<< HEAD
 #include "cdb/cdbdisp_query.h"
 #include "cdb/cdbvars.h"
+=======
+/*
+ * Represents the different dest cases we need to worry about at
+ * the bottom level
+ */
+typedef enum CopyDest
+{
+	COPY_FILE,					/* to file (or a piped program) */
+	COPY_FRONTEND,				/* to frontend */
+	COPY_CALLBACK				/* to callback function */
+} CopyDest;
+>>>>>>> REL_16_9
 
 #define EXEC_DATA_P 0
 
+<<<<<<< HEAD
 extern CopyStmt *glob_copystmt;
+=======
+	int			file_encoding;	/* file or remote side's character encoding */
+	bool		need_transcoding;	/* file encoding diff from server? */
+	bool		encoding_embeds_ascii;	/* ASCII can be non-first byte? */
+
+	/* parameters from the COPY command */
+	Relation	rel;			/* relation to copy to */
+	QueryDesc  *queryDesc;		/* executable query to copy from */
+	List	   *attnumlist;		/* integer list of attnums to copy */
+	char	   *filename;		/* filename, or NULL for STDOUT */
+	bool		is_program;		/* is 'filename' a program to popen? */
+	copy_data_dest_cb data_dest_cb; /* function for writing data */
+
+	CopyFormatOptions opts;
+	Node	   *whereClause;	/* WHERE condition (or NULL) */
+
+	/*
+	 * Working state
+	 */
+	MemoryContext copycontext;	/* per-copy execution context */
+
+	FmgrInfo   *out_functions;	/* lookup info for output functions */
+	MemoryContext rowcontext;	/* per-row evaluation context */
+	uint64		bytes_processed;	/* number of bytes processed so far */
+} CopyToStateData;
+
+/* DestReceiver for COPY (query) TO */
+typedef struct
+{
+	DestReceiver pub;			/* publicly-known function pointers */
+	CopyToState cstate;			/* CopyToStateData for the command */
+	uint64		processed;		/* # of tuples processed */
+} DR_copy;
+>>>>>>> REL_16_9
 
 /* NOTE: there's a copy of this in copyfromparse.c */
 static const char BinarySignature[11] = "PGCOPY\n\377\r\n\0";
@@ -65,8 +113,15 @@ static const char BinarySignature[11] = "PGCOPY\n\377\r\n\0";
 
 /* non-export function prototypes */
 static void EndCopy(CopyToState cstate);
+<<<<<<< HEAD
 static void CopyAttributeOutText(CopyToState cstate, char *string);
 static void CopyAttributeOutCSV(CopyToState cstate, char *string,
+=======
+static void ClosePipeToProgram(CopyToState cstate);
+static void CopyOneRowTo(CopyToState cstate, TupleTableSlot *slot);
+static void CopyAttributeOutText(CopyToState cstate, const char *string);
+static void CopyAttributeOutCSV(CopyToState cstate, const char *string,
+>>>>>>> REL_16_9
 								bool use_quote, bool single_attr);
 static uint64 CopyToDispatch(CopyToState cstate);
 static void CopyToDispatchFlush(CopyToState cstate);
@@ -200,6 +255,7 @@ void CopySendEndOfRow(CopyToState cstate)
 			(void) pq_putmessage('d', fe_msgbuf->data, fe_msgbuf->len);
 			break;
 		case COPY_CALLBACK:
+<<<<<<< HEAD
 			/* we don't actually do the write here, we let the caller do it */
 #ifndef WIN32
 			CopySendChar(cstate, '\n');
@@ -208,6 +264,10 @@ void CopySendEndOfRow(CopyToState cstate)
 #endif
 			return; /* don't want to reset msgbuf quite yet */
 
+=======
+			cstate->data_dest_cb(fe_msgbuf->data, fe_msgbuf->len);
+			break;
+>>>>>>> REL_16_9
 	}
 
 	/* Update the progress */
@@ -247,6 +307,17 @@ CopySendInt16(CopyToState cstate, int16 val)
 
 /*
  * Setup CopyToState to read tuples from a table or a query for COPY TO.
+ *
+ * 'rel': Relation to be copied
+ * 'raw_query': Query whose results are to be copied
+ * 'queryRelId': OID of base relation to convert to a query (for RLS)
+ * 'filename': Name of server-local file to write, NULL for STDOUT
+ * 'is_program': true if 'filename' is program to execute
+ * 'data_dest_cb': Callback that processes the output data
+ * 'attnamelist': List of char *, columns to include. NIL selects all cols.
+ * 'options': List of DefElem. See copy_opt_item in gram.y for selections.
+ *
+ * Returns a CopyToState, to be passed to DoCopyTo() and related functions.
  */
 CopyToState
 BeginCopyTo(ParseState *pstate,
@@ -255,11 +326,18 @@ BeginCopyTo(ParseState *pstate,
 			Oid queryRelId,
 			const char *filename,
 			bool is_program,
+			copy_data_dest_cb data_dest_cb,
 			List *attnamelist,
 			List *options)
 {
 	CopyToState cstate;
+<<<<<<< HEAD
 	bool		pipe;
+=======
+	bool		pipe = (filename == NULL && data_dest_cb == NULL);
+	TupleDesc	tupDesc;
+	int			num_phys_attrs;
+>>>>>>> REL_16_9
 	MemoryContext oldcontext;
 	const int	progress_cols[] = {
 		PROGRESS_COPY_COMMAND,
@@ -1147,9 +1225,15 @@ BeginCopy(ParseState *pstate,
 		 * function and is executed repeatedly.  (See also the same hack in
 		 * DECLARE CURSOR and PREPARE.)  XXX FIXME someday.
 		 */
+<<<<<<< HEAD
 		rewritten = pg_analyze_and_rewrite(copyObject(raw_query),
 										   pstate->p_sourcetext, NULL, 0,
 										   NULL);
+=======
+		rewritten = pg_analyze_and_rewrite_fixedparams(raw_query,
+													   pstate->p_sourcetext, NULL, 0,
+													   NULL);
+>>>>>>> REL_16_9
 
 		/* check that we got back something we can work with */
 		if (rewritten == NIL)
@@ -1174,7 +1258,7 @@ BeginCopy(ParseState *pstate,
 				if (q->querySource == QSRC_NON_INSTEAD_RULE)
 					ereport(ERROR,
 							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-							 errmsg("DO ALSO rules are not supported for the COPY")));
+							 errmsg("DO ALSO rules are not supported for COPY")));
 			}
 
 			ereport(ERROR,
@@ -1196,7 +1280,11 @@ BeginCopy(ParseState *pstate,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("COPY (SELECT INTO) is not supported")));
 
-		Assert(query->utilityStmt == NULL);
+		/* The only other utility command we could see is NOTIFY */
+		if (query->utilityStmt != NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("COPY query must not be a utility command")));
 
 		/*
 		 * Similarly the grammar doesn't enforce the presence of a RETURNING
@@ -1226,8 +1314,8 @@ BeginCopy(ParseState *pstate,
 		/*
 		 * With row level security and a user using "COPY relation TO", we
 		 * have to convert the "COPY relation TO" to a query-based COPY (eg:
-		 * "COPY (SELECT * FROM relation) TO"), to allow the rewriter to add
-		 * in any RLS clauses.
+		 * "COPY (SELECT * FROM ONLY relation) TO"), to allow the rewriter to
+		 * add in any RLS clauses.
 		 *
 		 * When this happens, we are passed in the relid of the originally
 		 * found relation (which we have locked).  As the planner will look up
@@ -1319,52 +1407,6 @@ BeginCopy(ParseState *pstate,
 		}
 	}
 
-	/* Convert FORCE_NOT_NULL name list to per-column flags, check validity */
-	cstate->opts.force_notnull_flags = (bool *) palloc0(num_phys_attrs * sizeof(bool));
-	if (cstate->opts.force_notnull)
-	{
-		List	   *attnums;
-		ListCell   *cur;
-
-		attnums = CopyGetAttnums(tupDesc, cstate->rel, cstate->opts.force_notnull);
-
-		foreach(cur, attnums)
-		{
-			int			attnum = lfirst_int(cur);
-			Form_pg_attribute attr = TupleDescAttr(tupDesc, attnum - 1);
-
-			if (!list_member_int(cstate->attnumlist, attnum))
-				ereport(ERROR,
-						(errcode(ERRCODE_INVALID_COLUMN_REFERENCE),
-						 errmsg("FORCE_NOT_NULL column \"%s\" not referenced by COPY",
-								NameStr(attr->attname))));
-			cstate->opts.force_notnull_flags[attnum - 1] = true;
-		}
-	}
-
-	/* Convert FORCE_NULL name list to per-column flags, check validity */
-	cstate->opts.force_null_flags = (bool *) palloc0(num_phys_attrs * sizeof(bool));
-	if (cstate->opts.force_null)
-	{
-		List	   *attnums;
-		ListCell   *cur;
-
-		attnums = CopyGetAttnums(tupDesc, cstate->rel, cstate->opts.force_null);
-
-		foreach(cur, attnums)
-		{
-			int			attnum = lfirst_int(cur);
-			Form_pg_attribute attr = TupleDescAttr(tupDesc, attnum - 1);
-
-			if (!list_member_int(cstate->attnumlist, attnum))
-				ereport(ERROR,
-						(errcode(ERRCODE_INVALID_COLUMN_REFERENCE),
-						 errmsg("FORCE_NULL column \"%s\" not referenced by COPY",
-								NameStr(attr->attname))));
-			cstate->opts.force_null_flags[attnum - 1] = true;
-		}
-	}
-
 	/* Use client encoding when ENCODING option is not specified. */
 	if (cstate->file_encoding < 0)
 		cstate->file_encoding = pg_get_client_encoding();
@@ -1393,10 +1435,22 @@ BeginCopy(ParseState *pstate,
 
 	cstate->copy_dest = COPY_FILE;	/* default */
 
+<<<<<<< HEAD
 	MemoryContextSwitchTo(oldcontext);
 
 	return cstate;
 }
+=======
+	if (data_dest_cb)
+	{
+		progress_vals[1] = PROGRESS_COPY_TYPE_CALLBACK;
+		cstate->copy_dest = COPY_CALLBACK;
+		cstate->data_dest_cb = data_dest_cb;
+	}
+	else if (pipe)
+	{
+		progress_vals[1] = PROGRESS_COPY_TYPE_PIPE;
+>>>>>>> REL_16_9
 
 CopyToState
 BeginCopyToOnSegment(QueryDesc *queryDesc)
@@ -1885,10 +1939,17 @@ CopyToDispatchDirectoryTable(CopyToState cstate)
 
 /*
  * Copy from relation or query TO file.
+ *
+ * Returns the number of rows processed.
  */
 static uint64
 CopyTo(CopyToState cstate)
 {
+<<<<<<< HEAD
+=======
+	bool		pipe = (cstate->filename == NULL && cstate->data_dest_cb == NULL);
+	bool		fe_copy = (pipe && whereToSendOutput == DestRemote);
+>>>>>>> REL_16_9
 	TupleDesc	tupDesc;
 	int			num_phys_attrs;
 	ListCell   *cur;
@@ -1984,8 +2045,11 @@ CopyTo(CopyToState cstate)
 
 				colname = NameStr(TupleDescAttr(tupDesc, attnum - 1)->attname);
 
-				CopyAttributeOutCSV(cstate, colname, false,
-									list_length(cstate->attnumlist) == 1);
+				if (cstate->opts.csv_mode)
+					CopyAttributeOutCSV(cstate, colname, false,
+										list_length(cstate->attnumlist) == 1);
+				else
+					CopyAttributeOutText(cstate, colname);
 			}
 
 			CopySendEndOfRow(cstate);
@@ -2027,7 +2091,7 @@ CopyTo(CopyToState cstate)
 		Assert(Gp_role != GP_ROLE_EXECUTE);
 
 		/* run the plan --- the dest receiver will send tuples */
-		ExecutorRun(cstate->queryDesc, ForwardScanDirection, 0L, true);
+		ExecutorRun(cstate->queryDesc, ForwardScanDirection, 0, true);
 		processed = ((DR_copy *) cstate->queryDesc->dest)->processed;
 	}
 
@@ -2413,3 +2477,315 @@ BeginCopyToDirectoryTable(ParseState *pstate,
 	return cstate;
 }
 
+<<<<<<< HEAD
+=======
+/*
+ * Send text representation of one attribute, with conversion and escaping
+ */
+#define DUMPSOFAR() \
+	do { \
+		if (ptr > start) \
+			CopySendData(cstate, start, ptr - start); \
+	} while (0)
+
+static void
+CopyAttributeOutText(CopyToState cstate, const char *string)
+{
+	const char *ptr;
+	const char *start;
+	char		c;
+	char		delimc = cstate->opts.delim[0];
+
+	if (cstate->need_transcoding)
+		ptr = pg_server_to_any(string, strlen(string), cstate->file_encoding);
+	else
+		ptr = string;
+
+	/*
+	 * We have to grovel through the string searching for control characters
+	 * and instances of the delimiter character.  In most cases, though, these
+	 * are infrequent.  To avoid overhead from calling CopySendData once per
+	 * character, we dump out all characters between escaped characters in a
+	 * single call.  The loop invariant is that the data from "start" to "ptr"
+	 * can be sent literally, but hasn't yet been.
+	 *
+	 * We can skip pg_encoding_mblen() overhead when encoding is safe, because
+	 * in valid backend encodings, extra bytes of a multibyte character never
+	 * look like ASCII.  This loop is sufficiently performance-critical that
+	 * it's worth making two copies of it to get the IS_HIGHBIT_SET() test out
+	 * of the normal safe-encoding path.
+	 */
+	if (cstate->encoding_embeds_ascii)
+	{
+		start = ptr;
+		while ((c = *ptr) != '\0')
+		{
+			if ((unsigned char) c < (unsigned char) 0x20)
+			{
+				/*
+				 * \r and \n must be escaped, the others are traditional. We
+				 * prefer to dump these using the C-like notation, rather than
+				 * a backslash and the literal character, because it makes the
+				 * dump file a bit more proof against Microsoftish data
+				 * mangling.
+				 */
+				switch (c)
+				{
+					case '\b':
+						c = 'b';
+						break;
+					case '\f':
+						c = 'f';
+						break;
+					case '\n':
+						c = 'n';
+						break;
+					case '\r':
+						c = 'r';
+						break;
+					case '\t':
+						c = 't';
+						break;
+					case '\v':
+						c = 'v';
+						break;
+					default:
+						/* If it's the delimiter, must backslash it */
+						if (c == delimc)
+							break;
+						/* All ASCII control chars are length 1 */
+						ptr++;
+						continue;	/* fall to end of loop */
+				}
+				/* if we get here, we need to convert the control char */
+				DUMPSOFAR();
+				CopySendChar(cstate, '\\');
+				CopySendChar(cstate, c);
+				start = ++ptr;	/* do not include char in next run */
+			}
+			else if (c == '\\' || c == delimc)
+			{
+				DUMPSOFAR();
+				CopySendChar(cstate, '\\');
+				start = ptr++;	/* we include char in next run */
+			}
+			else if (IS_HIGHBIT_SET(c))
+				ptr += pg_encoding_mblen(cstate->file_encoding, ptr);
+			else
+				ptr++;
+		}
+	}
+	else
+	{
+		start = ptr;
+		while ((c = *ptr) != '\0')
+		{
+			if ((unsigned char) c < (unsigned char) 0x20)
+			{
+				/*
+				 * \r and \n must be escaped, the others are traditional. We
+				 * prefer to dump these using the C-like notation, rather than
+				 * a backslash and the literal character, because it makes the
+				 * dump file a bit more proof against Microsoftish data
+				 * mangling.
+				 */
+				switch (c)
+				{
+					case '\b':
+						c = 'b';
+						break;
+					case '\f':
+						c = 'f';
+						break;
+					case '\n':
+						c = 'n';
+						break;
+					case '\r':
+						c = 'r';
+						break;
+					case '\t':
+						c = 't';
+						break;
+					case '\v':
+						c = 'v';
+						break;
+					default:
+						/* If it's the delimiter, must backslash it */
+						if (c == delimc)
+							break;
+						/* All ASCII control chars are length 1 */
+						ptr++;
+						continue;	/* fall to end of loop */
+				}
+				/* if we get here, we need to convert the control char */
+				DUMPSOFAR();
+				CopySendChar(cstate, '\\');
+				CopySendChar(cstate, c);
+				start = ++ptr;	/* do not include char in next run */
+			}
+			else if (c == '\\' || c == delimc)
+			{
+				DUMPSOFAR();
+				CopySendChar(cstate, '\\');
+				start = ptr++;	/* we include char in next run */
+			}
+			else
+				ptr++;
+		}
+	}
+
+	DUMPSOFAR();
+}
+
+/*
+ * Send text representation of one attribute, with conversion and
+ * CSV-style escaping
+ */
+static void
+CopyAttributeOutCSV(CopyToState cstate, const char *string,
+					bool use_quote, bool single_attr)
+{
+	const char *ptr;
+	const char *start;
+	char		c;
+	char		delimc = cstate->opts.delim[0];
+	char		quotec = cstate->opts.quote[0];
+	char		escapec = cstate->opts.escape[0];
+
+	/* force quoting if it matches null_print (before conversion!) */
+	if (!use_quote && strcmp(string, cstate->opts.null_print) == 0)
+		use_quote = true;
+
+	if (cstate->need_transcoding)
+		ptr = pg_server_to_any(string, strlen(string), cstate->file_encoding);
+	else
+		ptr = string;
+
+	/*
+	 * Make a preliminary pass to discover if it needs quoting
+	 */
+	if (!use_quote)
+	{
+		/*
+		 * Because '\.' can be a data value, quote it if it appears alone on a
+		 * line so it is not interpreted as the end-of-data marker.
+		 */
+		if (single_attr && strcmp(ptr, "\\.") == 0)
+			use_quote = true;
+		else
+		{
+			const char *tptr = ptr;
+
+			while ((c = *tptr) != '\0')
+			{
+				if (c == delimc || c == quotec || c == '\n' || c == '\r')
+				{
+					use_quote = true;
+					break;
+				}
+				if (IS_HIGHBIT_SET(c) && cstate->encoding_embeds_ascii)
+					tptr += pg_encoding_mblen(cstate->file_encoding, tptr);
+				else
+					tptr++;
+			}
+		}
+	}
+
+	if (use_quote)
+	{
+		CopySendChar(cstate, quotec);
+
+		/*
+		 * We adopt the same optimization strategy as in CopyAttributeOutText
+		 */
+		start = ptr;
+		while ((c = *ptr) != '\0')
+		{
+			if (c == quotec || c == escapec)
+			{
+				DUMPSOFAR();
+				CopySendChar(cstate, escapec);
+				start = ptr;	/* we include char in next run */
+			}
+			if (IS_HIGHBIT_SET(c) && cstate->encoding_embeds_ascii)
+				ptr += pg_encoding_mblen(cstate->file_encoding, ptr);
+			else
+				ptr++;
+		}
+		DUMPSOFAR();
+
+		CopySendChar(cstate, quotec);
+	}
+	else
+	{
+		/* If it doesn't need quoting, we can just dump it as-is */
+		CopySendString(cstate, ptr);
+	}
+}
+
+/*
+ * copy_dest_startup --- executor startup
+ */
+static void
+copy_dest_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
+{
+	/* no-op */
+}
+
+/*
+ * copy_dest_receive --- receive one tuple
+ */
+static bool
+copy_dest_receive(TupleTableSlot *slot, DestReceiver *self)
+{
+	DR_copy    *myState = (DR_copy *) self;
+	CopyToState cstate = myState->cstate;
+
+	/* Send the data */
+	CopyOneRowTo(cstate, slot);
+
+	/* Increment the number of processed tuples, and report the progress */
+	pgstat_progress_update_param(PROGRESS_COPY_TUPLES_PROCESSED,
+								 ++myState->processed);
+
+	return true;
+}
+
+/*
+ * copy_dest_shutdown --- executor end
+ */
+static void
+copy_dest_shutdown(DestReceiver *self)
+{
+	/* no-op */
+}
+
+/*
+ * copy_dest_destroy --- release DestReceiver object
+ */
+static void
+copy_dest_destroy(DestReceiver *self)
+{
+	pfree(self);
+}
+
+/*
+ * CreateCopyDestReceiver -- create a suitable DestReceiver object
+ */
+DestReceiver *
+CreateCopyDestReceiver(void)
+{
+	DR_copy    *self = (DR_copy *) palloc(sizeof(DR_copy));
+
+	self->pub.receiveSlot = copy_dest_receive;
+	self->pub.rStartup = copy_dest_startup;
+	self->pub.rShutdown = copy_dest_shutdown;
+	self->pub.rDestroy = copy_dest_destroy;
+	self->pub.mydest = DestCopyOut;
+
+	self->cstate = NULL;		/* will be set later */
+	self->processed = 0;
+
+	return (DestReceiver *) self;
+}
+>>>>>>> REL_16_9
