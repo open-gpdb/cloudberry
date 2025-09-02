@@ -1241,6 +1241,10 @@ code or new licensing patterns.
             <exclude>aclocal.m4</exclude>
             <exclude>python-dependencies.txt</exclude>
 
+	    <!-- Exclude ubuntu debian packaging files since they do not support comments
+            -->
+	    <exclude>devops/build/packaging/deb/ubuntu22.04/**</exclude>
+
            <!-- Exclude python requirements files, since they are just a list of packages and do not support any comments
             -->
 
