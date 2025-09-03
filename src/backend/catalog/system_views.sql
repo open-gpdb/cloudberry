@@ -424,8 +424,7 @@ CREATE VIEW pg_prepared_xacts AS
          LEFT JOIN pg_database D ON P.dbid = D.oid;
 
 CREATE VIEW pg_prepared_statements AS
-    SELECT pg_catalog.gp_execution_segment() AS gp_segment_id, *
-      FROM pg_prepared_statement() AS P;
+    SELECT * FROM pg_prepared_statement() AS P;
 
 CREATE VIEW pg_seclabels AS
 SELECT
@@ -649,8 +648,7 @@ REVOKE ALL ON pg_shmem_allocations FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION pg_get_shmem_allocations() FROM PUBLIC;
 
 CREATE VIEW pg_backend_memory_contexts AS
-    SELECT pg_catalog.gp_execution_segment() AS gp_segment_id, *
-      FROM pg_get_backend_memory_contexts();
+    SELECT * FROM pg_get_backend_memory_contexts();
 
 REVOKE ALL ON pg_backend_memory_contexts FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION pg_get_backend_memory_contexts() FROM PUBLIC;
@@ -719,7 +717,7 @@ CREATE VIEW pg_stat_sys_tables AS
 -- since we don't have segments.
 -- We create a new view for single node mode.
 CREATE VIEW pg_stat_sys_tables_single_node AS
-    SELECT * FROM pg_stat_all_tables_internal
+    SELECT * FROM pg_stat_all_tables
     WHERE schemaname IN ('pg_catalog', 'information_schema') OR
           schemaname ~ '^pg_toast';
 
@@ -954,15 +952,6 @@ CREATE VIEW pg_stat_replication AS
         JOIN pg_stat_get_wal_senders() AS W ON (S.pid = W.pid)
         LEFT JOIN pg_authid AS U ON (S.usesysid = U.oid);
 
--- FIXME: remove it after 0d0fdc75ae5b72d42be549e234a29546efe07ca2
-CREATE VIEW gp_stat_activity AS 
-    SELECT gp_execution_segment() as gp_segment_id, * FROM gp_dist_random('pg_stat_activity') 
-    UNION ALL SELECT -1 as gp_segment_id, * from pg_stat_activity;
-
-CREATE VIEW gp_settings AS 
-    SELECT gp_execution_segment() as gp_segment_id, * FROM gp_dist_random('pg_settings') 
-    UNION ALL SELECT -1 as gp_segment_id, * from pg_settings;
-
 CREATE FUNCTION gp_stat_get_master_replication() RETURNS SETOF RECORD AS
 $$
     SELECT pg_catalog.gp_execution_segment() AS gp_segment_id, *
@@ -1114,7 +1103,6 @@ CREATE VIEW pg_replication_slots AS
 
 CREATE VIEW pg_stat_replication_slots AS
     SELECT
-            pg_catalog.gp_execution_segment() AS gp_segment_id,
             s.slot_name,
             s.spill_txns,
             s.spill_count,
@@ -1131,7 +1119,6 @@ CREATE VIEW pg_stat_replication_slots AS
 
 CREATE VIEW pg_stat_database AS
     SELECT
-            pg_catalog.gp_execution_segment() AS gp_segment_id,
             D.oid AS datid,
             D.datname AS datname,
                 CASE
@@ -1172,7 +1159,6 @@ CREATE VIEW pg_stat_database AS
 
 CREATE VIEW pg_stat_resqueues AS
     SELECT
-        pg_catalog.gp_execution_segment() AS gp_segment_id,
         Q.oid AS queueid,
         Q.rsqname AS queuename,
         pg_stat_get_queue_num_exec(Q.oid) AS n_queries_exec,
@@ -1472,9 +1458,8 @@ CREATE VIEW pg_stat_bgwriter AS
 
 CREATE VIEW pg_stat_wal AS
     SELECT
-        pg_catalog.gp_execution_segment() AS gp_segment_id,
         w.wal_records,
-        w.wal_fpi,
+        w.wal_fpi as wal_fpw,
         w.wal_bytes,
         w.wal_buffers_full,
         w.wal_write,
@@ -1486,7 +1471,6 @@ CREATE VIEW pg_stat_wal AS
 
 CREATE VIEW pg_stat_progress_analyze AS
     SELECT
-        pg_catalog.gp_execution_segment() AS gp_segment_id,
         S.pid AS pid, S.datid AS datid, D.datname AS datname,
         CAST(S.relid AS oid) AS relid,
         CASE S.param1 WHEN 0 THEN 'initializing'
@@ -1508,7 +1492,6 @@ CREATE VIEW pg_stat_progress_analyze AS
 
 CREATE VIEW pg_stat_progress_vacuum AS
     SELECT
-        pg_catalog.gp_execution_segment() AS gp_segment_id,
         S.pid AS pid, S.datid AS datid, D.datname AS datname,
         S.relid AS relid,
         CASE S.param1 WHEN 0 THEN 'initializing'
@@ -1530,7 +1513,6 @@ CREATE VIEW pg_stat_progress_vacuum AS
 
 CREATE VIEW pg_stat_progress_cluster AS
     SELECT
-        pg_catalog.gp_execution_segment() AS gp_segment_id,
         S.pid AS pid,
         S.datid AS datid,
         D.datname AS datname,
@@ -1558,7 +1540,6 @@ CREATE VIEW pg_stat_progress_cluster AS
 
 CREATE VIEW pg_stat_progress_create_index AS
     SELECT
-        pg_catalog.gp_execution_segment() AS gp_segment_id,
         S.pid AS pid, S.datid AS datid, D.datname AS datname,
         S.relid AS relid,
         CAST(S.param7 AS oid) AS index_relid,
@@ -1594,7 +1575,6 @@ CREATE VIEW pg_stat_progress_create_index AS
 
 CREATE VIEW pg_stat_progress_basebackup AS
     SELECT
-        pg_catalog.gp_execution_segment() AS gp_segment_id,
         S.pid AS pid,
         CASE S.param1 WHEN 0 THEN 'initializing'
                       WHEN 1 THEN 'waiting for checkpoint to finish'
@@ -1612,7 +1592,6 @@ CREATE VIEW pg_stat_progress_basebackup AS
 
 CREATE VIEW pg_stat_progress_copy AS
     SELECT
-        pg_catalog.gp_execution_segment() AS gp_segment_id,
         S.pid AS pid, S.datid AS datid, D.datname AS datname,
         S.relid AS relid,
         CASE S.param5 WHEN 1 THEN 'COPY FROM'
