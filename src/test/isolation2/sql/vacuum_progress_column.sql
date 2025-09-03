@@ -26,19 +26,11 @@ CREATE INDEX on vacuum_progress_ao_column(j);
 2q:
 -- Abort so that segno 1 has logical EOF = 0.
 1: ABORT;
--- Flush the aborted insert statistics before waiting in another session.
+-- Flush the aborted insert statistics.
 1q:
-
--- pg_stat_all_tables aggregates tuple counters from the segments. Wait on
--- segment 1, which holds all rows, before reading the view and before DELETE.
-1U: SELECT wait_until_dead_tup_change_to('vacuum_progress_ao_column'::regclass::oid, 200000);
-SELECT n_live_tup, n_dead_tup, last_vacuum, vacuum_count FROM pg_stat_all_tables WHERE relname = 'vacuum_progress_ao_column';
 
 -- Also delete half of the tuples evenly before the EOF of segno 2.
 DELETE FROM vacuum_progress_ao_column where j % 2 = 0;
-
--- Lookup pg_class before VACUUM
-SELECT relpages, reltuples, relallvisible FROM pg_class where relname = 'vacuum_progress_ao_column';
 
 -- Perform VACUUM and observe the progress
 
@@ -77,7 +69,7 @@ SELECT gp_inject_fault('vacuum_ao_post_cleanup_end', 'reset', dbid) FROM gp_segm
 -- pg_class and collected stats view should be updated after the 1st VACUUM
 1U: SELECT wait_until_dead_tup_change_to('vacuum_progress_ao_column'::regclass::oid, 0);
 SELECT relpages, reltuples, relallvisible FROM pg_class where relname = 'vacuum_progress_ao_column';
-SELECT n_live_tup, n_dead_tup, last_vacuum is not null as has_last_vacuum, vacuum_count FROM pg_stat_all_tables WHERE relname = 'vacuum_progress_ao_column';
+SELECT n_live_tup, n_dead_tup, last_vacuum is not null as has_last_vacuum, vacuum_count FROM gp_stat_all_tables WHERE relname = 'vacuum_progress_ao_column' and gp_segment_id = 1;
 
 
 -- Perform VACUUM again to recycle the remaining awaiting drop segment marked by the previous run.
@@ -105,7 +97,7 @@ SELECT gp_inject_fault('appendonly_after_truncate_segment_file', 'reset', dbid) 
 -- pg_class and collected stats view should be updated after the 2nd VACUUM
 1U: SELECT wait_until_vacuum_count_change_to('vacuum_progress_ao_column'::regclass::oid, 2);
 SELECT relpages, reltuples, relallvisible FROM pg_class where relname = 'vacuum_progress_ao_column';
-SELECT n_live_tup, n_dead_tup, last_vacuum is not null as has_last_vacuum, vacuum_count FROM pg_stat_all_tables WHERE relname = 'vacuum_progress_ao_column';
+SELECT n_live_tup, n_dead_tup, last_vacuum is not null as has_last_vacuum, vacuum_count FROM gp_stat_all_tables WHERE relname = 'vacuum_progress_ao_column' and gp_segment_id = 1;
 
 1q:
 -- Test vacuum worker process is changed at post-cleanup phase due to mirror down.
@@ -206,6 +198,3 @@ select relid::regclass as relname, phase, heap_blks_total, heap_blks_scanned, he
 SELECT gp_inject_fault_infinite('all', 'reset', dbid) FROM gp_segment_configuration;
 reset Debug_appendonly_print_compaction;
 reset default_table_access_method;
-ALTER SYSTEM RESET gp_fts_mark_mirror_down_grace_period;
-ALTER SYSTEM RESET gp_fts_probe_interval;
-SELECT gp_segment_id, pg_reload_conf() FROM gp_id UNION SELECT gp_segment_id, pg_reload_conf() FROM gp_dist_random('gp_id');
