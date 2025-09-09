@@ -24,7 +24,8 @@ gpinstall:
 override_dh_auto_install: gpinstall
 	# the staging directory for creating a debian is NOT the right GPHOME.
 	# change GPHOME to point to the post-install target install directory.
-	sed -i "s#GPHOME=.*#GPHOME=${CBDB_BIN_PATH}#g" ${DEBIAN_DESTINATION}/cloudberry-env.sh
+	# sed -i "s#GPHOME=.*#GPHOME=${CBDB_BIN_PATH}#g" ${DEBIAN_DESTINATION}/cloudberry-env.sh
+	sed -i "s#GPHOME=.*#GPHOME=${CBDB_BIN_PATH}#g" ${DEBIAN_DESTINATION}/greenplum_path.sh
 
 override_dh_auto_build:
 	echo "Skipping build"
