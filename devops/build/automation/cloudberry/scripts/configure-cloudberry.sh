@@ -134,7 +134,7 @@ fi
 
 CONFIGURE_MDBLOCALES_OPTS="--without-mdblocales"
 if [ "${ENABLE_MDBLOCALES:-false}" = "true" ]; then
-    CONFIGURE_MDBLOCALES_OPTS=""
+    CONFIGURE_MDBLOCALES_OPTS="--with-mdblocales"
 fi
 
 # Configure build
