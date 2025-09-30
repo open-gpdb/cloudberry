@@ -5149,7 +5149,7 @@ mdb_admin_allow_bypass_owner_checks(Oid userId,  Oid ownerId)
 		return false;
 	}
 
-	mdb_admin_roleoid = get_role_oid("mdb_admin", true /* superuser suggested to be mdb_admin*/);
+	mdb_admin_roleoid = get_role_oid("mdb_admin", true /*if nodoby created mdb_admin role in this database*/);
 	/* Is userId actually member of mdb admin? */
 	if (!is_member_of_role(userId, mdb_admin_roleoid)) {
 		/* if no, disallow. */
@@ -5162,23 +5162,11 @@ mdb_admin_allow_bypass_owner_checks(Oid userId,  Oid ownerId)
 	*
 	* For now, we check that ownerId does not have
 	* priviledge to execute server program or/and
-	* read/write server files.
+	* read/write server files, or/and pg read/write all data
 	*/
 
-	if (has_privs_of_role(ownerId, ROLE_PG_READ_SERVER_FILES)) {
-		return false;
-	}
-
-	if (has_privs_of_role(ownerId, ROLE_PG_WRITE_SERVER_FILES)) {
-		return false;
-	}
-
-	if (has_privs_of_role(ownerId, ROLE_PG_EXECUTE_SERVER_PROGRAM)) {
-		return false;
-	}
-
 	/* All checks passed, hope will not be hacked here (again) */
-	return true;
+	return !has_privs_of_unwanted_system_role(ownerId);
 }
 
 // -- non-upstream patch end
@@ -5227,7 +5215,7 @@ check_is_member_of_role(Oid member, Oid role)
  * check_mdb_admin_is_member_of_role
  *		is_member_of_role with a standard permission-violation error if not in usual case
  * Is case `member` in mdb_admin we check that role is neither of superuser, pg_read/write 
- * server files nor pg_execute_server_program
+ * server files nor pg_execute_server_program or pg_read/write all data
  */
 void
 check_mdb_admin_is_member_of_role(Oid member, Oid role)
@@ -5238,9 +5226,10 @@ check_mdb_admin_is_member_of_role(Oid member, Oid role)
 		return;
 	}
 
-	mdb_admin_roleoid = get_role_oid("mdb_admin", true /* superuser suggested to be mdb_admin*/);
+	mdb_admin_roleoid = get_role_oid("mdb_admin", true /*if nodoby created mdb_admin role in this database*/);
 	/* Is userId actually member of mdb admin? */
 	if (is_member_of_role(member, mdb_admin_roleoid)) {
+
 		/* role is mdb admin */
 		if (superuser_arg(role)) {
 			ereport(ERROR,
@@ -5249,22 +5238,10 @@ check_mdb_admin_is_member_of_role(Oid member, Oid role)
 							GetUserNameFromId(role, false))));
 		}
 
-		if (has_privs_of_role(role, ROLE_PG_READ_SERVER_FILES)) {
+		if (has_privs_of_unwanted_system_role(role)) {			
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-					errmsg("cannot transfer ownership to pg_read_server_files role in Cloud")));
-		}
-
-		if (has_privs_of_role(role, ROLE_PG_WRITE_SERVER_FILES)) {
-			ereport(ERROR,
-					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-					errmsg("cannot transfer ownership to pg_write_server_files role in Cloud")));
-		}
-
-		if (has_privs_of_role(role, ROLE_PG_EXECUTE_SERVER_PROGRAM)) {
-			ereport(ERROR,
-					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-					errmsg("cannot transfer ownership to pg_execute_server_program role in Cloud")));
+					errmsg("forbidden to transfer ownership to this system role in Cloud")));
 		}
 	} else {
 		/* if no, check membership transfer in usual way. */
