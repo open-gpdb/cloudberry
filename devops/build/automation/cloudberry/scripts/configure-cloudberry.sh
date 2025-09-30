@@ -132,6 +132,11 @@ if [ "${ENABLE_DEBUG:-false}" = "true" ]; then
                           --enable-debug-extensions"
 fi
 
+CONFIGURE_MDBLOCALES_OPTS="--without-mdblocales"
+if [ "${ENABLE_MDBLOCALES:-false}" = "true" ]; then
+    CONFIGURE_MDBLOCALES_OPTS=""
+fi
+
 # Configure build
 log_section "Configure"
 execute_cmd ./configure --prefix=${BUILD_DESTINATION} \
@@ -159,6 +164,7 @@ execute_cmd ./configure --prefix=${BUILD_DESTINATION} \
             --with-openssl \
             --with-uuid=e2fs \
             --with-includes=/usr/local/xerces-c/include \
+	    ${CONFIGURE_MDBLOCALES_OPTS} \
             --with-libraries=${BUILD_DESTINATION}/lib || exit 4
 log_section_end "Configure"
 
