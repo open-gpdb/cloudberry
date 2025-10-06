@@ -224,11 +224,17 @@ jobs:
             "include": [
               {"test":"ic-good-opt-off",
                "make_configs":["src/test/regress:installcheck-good"],
-               "pg_settings":{"optimizer":"off"}
+               "pg_settings":{
+                 "optimizer":"off",
+                 "archive_command":"/bin/true"
+                }
               },
               {"test":"ic-good-opt-on",
                "make_configs":["src/test/regress:installcheck-good"],
-               "pg_settings":{"optimizer":"on"}
+               "pg_settings":{
+                 "optimizer":"on",
+                 "archive_command":"/bin/true"
+                }
               },
               {"test":"pax-ic-good-opt-off",
                "make_configs":[
@@ -320,7 +326,8 @@ jobs:
                "make_configs":["src/test/isolation2:installcheck-parallel-retrieve-cursor"]
               },
               {"test":"ic-cbdb-parallel",
-               "make_configs":["src/test/regress:installcheck-cbdb-parallel"]
+               "make_configs":["src/test/regress:installcheck-cbdb-parallel"],
+               "pg_settings":{"archive_command":"/bin/true"}
               }
             ]
           }'
