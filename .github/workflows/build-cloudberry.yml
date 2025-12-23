@@ -1710,6 +1710,15 @@ jobs:
             build-logs/
           retention-days: ${{ env.LOG_RETENTION_DAYS }}
 
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs-${{ matrix.test }}-${{ needs.build.outputs.build_timestamp }}
+          path: |
+            src/bin/*/tmp_check/*
+          retention-days: ${{ env.LOG_RETENTION_DAYS }}
+
       - name: Upload Test Metadata
         if: always()
         uses: actions/upload-artifact@v4
