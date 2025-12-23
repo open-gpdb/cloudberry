@@ -670,6 +670,15 @@ jobs:
             build-logs/
           retention-days: ${{ env.LOG_RETENTION_DAYS }}
 
+      - name: Upload build logs TAP
+        if: needs.check-skip.outputs.should_skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-TAP-${{ env.BUILD_TIMESTAMP }}
+          path: |
+            src/bin/*/tmp_check/*
+          retention-days: ${{ env.LOG_RETENTION_DAYS }}
+
       - name: Upload Cloudberry RPM build artifacts
         if: needs.check-skip.outputs.should_skip != 'true'
         uses: actions/upload-artifact@v4
