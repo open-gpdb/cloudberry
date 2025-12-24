@@ -228,7 +228,7 @@ jobs:
           ALL_TESTS='{
             "include": [
               {"test":"ic-check-bin-opt-off",
-               "make_configs":["src/bin:check"],
+               "make_configs":["src/bin:installcheck"],
                "pg_settings":{"optimizer":"off"}
               },
               {"test":"ic-good-opt-off",
