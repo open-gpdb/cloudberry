@@ -374,7 +374,7 @@ CTranslatorExprToDXL::CreateDXLNode(CExpression *pexpr,
 	}
 	else if (COperator::EopPhysicalParallelAppendTableScan == ulOpId && m_isSet)
 	{
-		CDXLNode *dxlnode = PdxlnAppendTableScan(
+		CDXLNode *dxlnode = PdxlnParallelAppendTableScan(
 			pexpr, colref_array, pdrgpdsBaseTables, pulNonGatherMotions, pfDML);
 
 		return dxlnode;
