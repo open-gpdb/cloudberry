@@ -48,6 +48,8 @@ ifeq "$(with_gp_stats_collector)" "yes"
 endif
 ifeq "$(with_yezzey)" "yes"
         recurse_targets += yezzey
+ifeq "$(with_yagp_hooks_collector)" "yes"
+	recurse_targets += yagp_hooks_collector
 endif
 ifeq "$(with_zstd)" "yes"
 	recurse_targets += zstd
