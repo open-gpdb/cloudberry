@@ -100,6 +100,7 @@ RUN sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
   python3-psutil \
   python-yaml \
   zlib1g-dev \
+  rsync \
 && sudo apt install -y libhyperic-sigar-java libaprutil1-dev libuv1-dev
 
 RUN sudo mkdir /usr/local/gpdb \
