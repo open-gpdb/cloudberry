@@ -55,14 +55,15 @@ gpconfig -c shared_preload_libraries -v yezzey
 
 gpstop -a -i && gpstart -a
 
+createdb $USER
+
+
 gpconfig -c yezzey.yproxy_socket -v "'/tmp/yproxy.sock'"
 psql -c "ALTER SYSTEM SET yezzey.use_gpg_crypto TO false"
 gpconfig -c yezzey.use_otm_feature -v "true"
 gpconfig -c yezzey.use_gpg_crypto -v "false"
 
 gpstop -a -i && gpstart -a
-
-createdb $USER
 
 #run yproxy in daemon mode
 /usr/bin/yproxy -c /tmp/yproxy.yaml -ldebug > yproxy.log 2>&1 &
