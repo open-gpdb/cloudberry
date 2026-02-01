@@ -53,10 +53,12 @@ source gpAux/gpdemo/gpdemo-env.sh
 
 gpconfig -c shared_preload_libraries -v yezzey
 
+gpstop -a -i && gpstart -a
+
 gpconfig -c yezzey.yproxy_socket -v "'/tmp/yproxy.sock'"
+psql -c "ALTER SYSTEM SET yezzey.use_gpg_crypto TO false"
 gpconfig -c yezzey.use_otm_feature -v "true"
 gpconfig -c yezzey.use_gpg_crypto -v "false"
-gpconfig -c yezzey.use_otm_feature -v "true"
 
 gpstop -a -i && gpstart -a
 
