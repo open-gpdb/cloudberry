@@ -98,6 +98,7 @@ RUN sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
   python3-dev \
   python3-pip \
   python3-psutil \
+  python3-pygresql \
   python-yaml \
   zlib1g-dev \
   rsync \
