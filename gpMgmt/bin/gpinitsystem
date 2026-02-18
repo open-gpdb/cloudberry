@@ -1272,6 +1272,7 @@ CREATE_QD_DB () {
 		if [ x"$HEAP_CHECKSUM" == x"on" ]; then
 			cmd="$cmd --data-checksums"
 		fi
+		cmd="$cmd --allow-group-access"
 		LOG_MSG "[INFO]:-Commencing local $cmd"
 		$cmd >> $LOG_FILE 2>&1
 		RETVAL=$?
