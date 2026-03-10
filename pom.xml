@@ -159,6 +159,7 @@ code or new licensing patterns.
             <exclude>gpcontrib/yagp_hooks_collector/protos/yagpcc_metrics.proto</exclude>
             <exclude>gpcontrib/yagp_hooks_collector/.clang-format</exclude>
             <exclude>gpcontrib/yagp_hooks_collector/Makefile</exclude>
+            <exclude>gpcontrib/diskquota/**</exclude>
 
             <exclude>getversion</exclude>
             <exclude>.git-blame-ignore-revs</exclude>
