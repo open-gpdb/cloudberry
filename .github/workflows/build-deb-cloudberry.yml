@@ -1346,6 +1346,7 @@ jobs:
         if: success() && needs.check-skip.outputs.should_skip != 'true'
         env:
           SRC_DIR: ${{ github.workspace }}
+          BUILD_DESTINATION: ${{ github.workspace }}/debian/build
         shell: bash {0}
         run: |
           set -o pipefail
