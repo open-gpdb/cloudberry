@@ -17,30 +17,27 @@
  * specific language governing permissions and limitations
  * under the License.
  *
- * LogOps.h
+ * pg_stat_statements_ya_parser.h
  *
  * IDENTIFICATION
- *	  gpcontrib/yagp_hooks_collector/src/log/LogOps.h
+ *	  gpcontrib/gp_stats_collector/src/stat_statements_parser/pg_stat_statements_ya_parser.h
  *
  *-------------------------------------------------------------------------
  */
 
 #pragma once
 
-#include <string>
+#ifdef __cplusplus
+extern "C"
+{
+#endif
 
-extern "C" {
-#include "postgres.h"
-#include "fmgr.h"
+extern void stat_statements_parser_init(void);
+extern void stat_statements_parser_deinit(void);
+
+StringInfo gen_normplan(const char *executionPlan);
+char *gen_normquery(const char *query);
+
+#ifdef __cplusplus
 }
-
-extern "C" {
-/* CREATE TABLE yagpcc.__log (...); */
-void init_log();
-
-/* TRUNCATE yagpcc.__log */
-void truncate_log();
-}
-
-/* INSERT INTO yagpcc.__log VALUES (...) */
-void insert_log(const yagpcc::SetQueryReq &req, bool utility);
+#endif

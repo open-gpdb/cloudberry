@@ -1,5 +1,5 @@
-CREATE EXTENSION yagp_hooks_collector;
-CREATE OR REPLACE FUNCTION yagp_status_order(status text)
+CREATE EXTENSION gp_stats_collector;
+CREATE OR REPLACE FUNCTION gpsc_status_order(status text)
 RETURNS integer
 AS $$
 BEGIN
@@ -12,12 +12,12 @@ BEGIN
     END;
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;
-SET yagpcc.ignored_users_list TO '';
-SET yagpcc.enable TO TRUE;
-SET yagpcc.report_nested_queries TO TRUE;
-SET yagpcc.enable_utility TO FALSE;
+SET gpsc.ignored_users_list TO '';
+SET gpsc.enable TO TRUE;
+SET gpsc.report_nested_queries TO TRUE;
+SET gpsc.enable_utility TO FALSE;
 -- Basic SELECT tests
-SET yagpcc.logging_mode to 'TBL';
+SET gpsc.logging_mode to 'TBL';
 SELECT 1;
  ?column? 
 ----------
@@ -30,8 +30,8 @@ SELECT COUNT(*) FROM generate_series(1,10);
     10
 (1 row)
 
-RESET yagpcc.logging_mode;
-SELECT segid, query_text, query_status FROM yagpcc.log ORDER BY segid, ccnt, yagp_status_order(query_status) ASC;
+RESET gpsc.logging_mode;
+SELECT segid, query_text, query_status FROM gpsc.log ORDER BY segid, ccnt, gpsc_status_order(query_status) ASC;
  segid |                 query_text                  |    query_status     
 -------+---------------------------------------------+---------------------
     -1 | SELECT 1;                                   | QUERY_STATUS_SUBMIT
@@ -44,13 +44,13 @@ SELECT segid, query_text, query_status FROM yagpcc.log ORDER BY segid, ccnt, yag
     -1 | SELECT COUNT(*) FROM generate_series(1,10); | QUERY_STATUS_DONE
 (8 rows)
 
-SELECT yagpcc.truncate_log() IS NOT NULL AS t;
+SELECT gpsc.truncate_log() IS NOT NULL AS t;
  t 
 ---
 (0 rows)
 
 -- Transaction test
-SET yagpcc.logging_mode to 'TBL';
+SET gpsc.logging_mode to 'TBL';
 BEGIN;
 SELECT 1;
  ?column? 
@@ -59,8 +59,8 @@ SELECT 1;
 (1 row)
 
 COMMIT;
-RESET yagpcc.logging_mode;
-SELECT segid, query_text, query_status FROM yagpcc.log ORDER BY segid, ccnt, yagp_status_order(query_status) ASC;
+RESET gpsc.logging_mode;
+SELECT segid, query_text, query_status FROM gpsc.log ORDER BY segid, ccnt, gpsc_status_order(query_status) ASC;
  segid | query_text |    query_status     
 -------+------------+---------------------
     -1 | SELECT 1;  | QUERY_STATUS_SUBMIT
@@ -69,13 +69,13 @@ SELECT segid, query_text, query_status FROM yagpcc.log ORDER BY segid, ccnt, yag
     -1 | SELECT 1;  | QUERY_STATUS_DONE
 (4 rows)
 
-SELECT yagpcc.truncate_log() IS NOT NULL AS t;
+SELECT gpsc.truncate_log() IS NOT NULL AS t;
  t 
 ---
 (0 rows)
 
 -- CTE test
-SET yagpcc.logging_mode to 'TBL';
+SET gpsc.logging_mode to 'TBL';
 WITH t AS (VALUES (1), (2))
 SELECT * FROM t;
  column1 
@@ -84,8 +84,8 @@ SELECT * FROM t;
        2
 (2 rows)
 
-RESET yagpcc.logging_mode;
-SELECT segid, query_text, query_status FROM yagpcc.log ORDER BY segid, ccnt, yagp_status_order(query_status) ASC;
+RESET gpsc.logging_mode;
+SELECT segid, query_text, query_status FROM gpsc.log ORDER BY segid, ccnt, gpsc_status_order(query_status) ASC;
  segid |         query_text          |    query_status     
 -------+-----------------------------+---------------------
     -1 | WITH t AS (VALUES (1), (2))+| QUERY_STATUS_SUBMIT
@@ -98,13 +98,13 @@ SELECT segid, query_text, query_status FROM yagpcc.log ORDER BY segid, ccnt, yag
        | SELECT * FROM t;            | 
 (4 rows)
 
-SELECT yagpcc.truncate_log() IS NOT NULL AS t;
+SELECT gpsc.truncate_log() IS NOT NULL AS t;
  t 
 ---
 (0 rows)
 
 -- Prepared statement test
-SET yagpcc.logging_mode to 'TBL';
+SET gpsc.logging_mode to 'TBL';
 PREPARE test_stmt AS SELECT 1;
 EXECUTE test_stmt;
  ?column? 
@@ -113,8 +113,8 @@ EXECUTE test_stmt;
 (1 row)
 
 DEALLOCATE test_stmt;
-RESET yagpcc.logging_mode;
-SELECT segid, query_text, query_status FROM yagpcc.log ORDER BY segid, ccnt, yagp_status_order(query_status) ASC;
+RESET gpsc.logging_mode;
+SELECT segid, query_text, query_status FROM gpsc.log ORDER BY segid, ccnt, gpsc_status_order(query_status) ASC;
  segid |           query_text           |    query_status     
 -------+--------------------------------+---------------------
     -1 | PREPARE test_stmt AS SELECT 1; | QUERY_STATUS_SUBMIT
@@ -123,14 +123,14 @@ SELECT segid, query_text, query_status FROM yagpcc.log ORDER BY segid, ccnt, yag
     -1 | PREPARE test_stmt AS SELECT 1; | QUERY_STATUS_DONE
 (4 rows)
 
-SELECT yagpcc.truncate_log() IS NOT NULL AS t;
+SELECT gpsc.truncate_log() IS NOT NULL AS t;
  t 
 ---
 (0 rows)
 
-DROP FUNCTION yagp_status_order(text);
-DROP EXTENSION yagp_hooks_collector;
-RESET yagpcc.enable;
-RESET yagpcc.report_nested_queries;
-RESET yagpcc.enable_utility;
-RESET yagpcc.ignored_users_list;
+DROP FUNCTION gpsc_status_order(text);
+DROP EXTENSION gp_stats_collector;
+RESET gpsc.enable;
+RESET gpsc.report_nested_queries;
+RESET gpsc.enable_utility;
+RESET gpsc.ignored_users_list;

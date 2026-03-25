@@ -1,5 +1,5 @@
-CREATE EXTENSION yagp_hooks_collector;
-CREATE OR REPLACE FUNCTION yagp_status_order(status text)
+CREATE EXTENSION gp_stats_collector;
+CREATE OR REPLACE FUNCTION gpsc_status_order(status text)
 RETURNS integer
 AS $$
 BEGIN
@@ -12,19 +12,19 @@ BEGIN
     END;
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;
-SET yagpcc.ignored_users_list TO '';
-SET yagpcc.enable TO TRUE;
-SET yagpcc.enable_utility TO TRUE;
-SET yagpcc.report_nested_queries TO TRUE;
-SET yagpcc.logging_mode to 'TBL';
+SET gpsc.ignored_users_list TO '';
+SET gpsc.enable TO TRUE;
+SET gpsc.enable_utility TO TRUE;
+SET gpsc.report_nested_queries TO TRUE;
+SET gpsc.logging_mode to 'TBL';
 CREATE TABLE test_table (a int, b text);
 NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'a' as the Apache Cloudberry data distribution key for this table.
 HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
 CREATE INDEX test_idx ON test_table(a);
 ALTER TABLE test_table ADD COLUMN c int DEFAULT 1;
 DROP TABLE test_table;
-RESET yagpcc.logging_mode;
-SELECT segid, query_text, query_status FROM yagpcc.log WHERE segid = -1 AND utility = true ORDER BY segid, ccnt, yagp_status_order(query_status) ASC;
+RESET gpsc.logging_mode;
+SELECT segid, query_text, query_status FROM gpsc.log WHERE segid = -1 AND utility = true ORDER BY segid, ccnt, gpsc_status_order(query_status) ASC;
  segid |                     query_text                     |    query_status     
 -------+----------------------------------------------------+---------------------
     -1 | CREATE TABLE test_table (a int, b text);           | QUERY_STATUS_SUBMIT
@@ -35,24 +35,24 @@ SELECT segid, query_text, query_status FROM yagpcc.log WHERE segid = -1 AND util
     -1 | ALTER TABLE test_table ADD COLUMN c int DEFAULT 1; | QUERY_STATUS_DONE
     -1 | DROP TABLE test_table;                             | QUERY_STATUS_SUBMIT
     -1 | DROP TABLE test_table;                             | QUERY_STATUS_DONE
-    -1 | RESET yagpcc.logging_mode;                         | QUERY_STATUS_SUBMIT
-    -1 | RESET yagpcc.logging_mode;                         | QUERY_STATUS_DONE
+    -1 | RESET gpsc.logging_mode;                           | QUERY_STATUS_SUBMIT
+    -1 | RESET gpsc.logging_mode;                           | QUERY_STATUS_DONE
 (10 rows)
 
-SELECT yagpcc.truncate_log() IS NOT NULL AS t;
+SELECT gpsc.truncate_log() IS NOT NULL AS t;
  t 
 ---
 (0 rows)
 
 -- Partitioning
-SET yagpcc.logging_mode to 'TBL';
+SET gpsc.logging_mode to 'TBL';
 CREATE TABLE pt_test (a int, b int)
 DISTRIBUTED BY (a)
 PARTITION BY RANGE (a)
 (START (0) END (100) EVERY (50));
 DROP TABLE pt_test;
-RESET yagpcc.logging_mode;
-SELECT segid, query_text, query_status FROM yagpcc.log WHERE segid = -1 AND utility = true ORDER BY segid, ccnt, yagp_status_order(query_status) ASC;
+RESET gpsc.logging_mode;
+SELECT segid, query_text, query_status FROM gpsc.log WHERE segid = -1 AND utility = true ORDER BY segid, ccnt, gpsc_status_order(query_status) ASC;
  segid |             query_text              |    query_status     
 -------+-------------------------------------+---------------------
     -1 | CREATE TABLE pt_test (a int, b int)+| QUERY_STATUS_SUBMIT
@@ -65,23 +65,23 @@ SELECT segid, query_text, query_status FROM yagpcc.log WHERE segid = -1 AND util
        | (START (0) END (100) EVERY (50));   | 
     -1 | DROP TABLE pt_test;                 | QUERY_STATUS_SUBMIT
     -1 | DROP TABLE pt_test;                 | QUERY_STATUS_DONE
-    -1 | RESET yagpcc.logging_mode;          | QUERY_STATUS_SUBMIT
-    -1 | RESET yagpcc.logging_mode;          | QUERY_STATUS_DONE
+    -1 | RESET gpsc.logging_mode;            | QUERY_STATUS_SUBMIT
+    -1 | RESET gpsc.logging_mode;            | QUERY_STATUS_DONE
 (6 rows)
 
-SELECT yagpcc.truncate_log() IS NOT NULL AS t;
+SELECT gpsc.truncate_log() IS NOT NULL AS t;
  t 
 ---
 (0 rows)
 
 -- Views and Functions
-SET yagpcc.logging_mode to 'TBL';
+SET gpsc.logging_mode to 'TBL';
 CREATE VIEW test_view AS SELECT 1 AS a;
 CREATE FUNCTION test_func(i int) RETURNS int AS $$ SELECT $1 + 1; $$ LANGUAGE SQL;
 DROP VIEW test_view;
 DROP FUNCTION test_func(int);
-RESET yagpcc.logging_mode;
-SELECT segid, query_text, query_status FROM yagpcc.log WHERE segid = -1 AND utility = true ORDER BY segid, ccnt, yagp_status_order(query_status) ASC;
+RESET gpsc.logging_mode;
+SELECT segid, query_text, query_status FROM gpsc.log WHERE segid = -1 AND utility = true ORDER BY segid, ccnt, gpsc_status_order(query_status) ASC;
  segid |                                     query_text                                     |    query_status     
 -------+------------------------------------------------------------------------------------+---------------------
     -1 | CREATE VIEW test_view AS SELECT 1 AS a;                                            | QUERY_STATUS_SUBMIT
@@ -92,17 +92,17 @@ SELECT segid, query_text, query_status FROM yagpcc.log WHERE segid = -1 AND util
     -1 | DROP VIEW test_view;                                                               | QUERY_STATUS_DONE
     -1 | DROP FUNCTION test_func(int);                                                      | QUERY_STATUS_SUBMIT
     -1 | DROP FUNCTION test_func(int);                                                      | QUERY_STATUS_DONE
-    -1 | RESET yagpcc.logging_mode;                                                         | QUERY_STATUS_SUBMIT
-    -1 | RESET yagpcc.logging_mode;                                                         | QUERY_STATUS_DONE
+    -1 | RESET gpsc.logging_mode;                                                           | QUERY_STATUS_SUBMIT
+    -1 | RESET gpsc.logging_mode;                                                           | QUERY_STATUS_DONE
 (10 rows)
 
-SELECT yagpcc.truncate_log() IS NOT NULL AS t;
+SELECT gpsc.truncate_log() IS NOT NULL AS t;
  t 
 ---
 (0 rows)
 
 -- Transaction Operations
-SET yagpcc.logging_mode to 'TBL';
+SET gpsc.logging_mode to 'TBL';
 BEGIN;
 SAVEPOINT sp1;
 ROLLBACK TO sp1;
@@ -112,37 +112,37 @@ SAVEPOINT sp2;
 ABORT;
 BEGIN;
 ROLLBACK;
-RESET yagpcc.logging_mode;
-SELECT segid, query_text, query_status FROM yagpcc.log WHERE segid = -1 AND utility = true ORDER BY segid, ccnt, yagp_status_order(query_status) ASC;
- segid |         query_text         |    query_status     
--------+----------------------------+---------------------
-    -1 | BEGIN;                     | QUERY_STATUS_SUBMIT
-    -1 | BEGIN;                     | QUERY_STATUS_DONE
-    -1 | SAVEPOINT sp1;             | QUERY_STATUS_SUBMIT
-    -1 | ROLLBACK TO sp1;           | QUERY_STATUS_SUBMIT
-    -1 | ROLLBACK TO sp1;           | QUERY_STATUS_DONE
-    -1 | COMMIT;                    | QUERY_STATUS_SUBMIT
-    -1 | COMMIT;                    | QUERY_STATUS_DONE
-    -1 | BEGIN;                     | QUERY_STATUS_SUBMIT
-    -1 | BEGIN;                     | QUERY_STATUS_DONE
-    -1 | SAVEPOINT sp2;             | QUERY_STATUS_SUBMIT
-    -1 | ABORT;                     | QUERY_STATUS_SUBMIT
-    -1 | ABORT;                     | QUERY_STATUS_DONE
-    -1 | BEGIN;                     | QUERY_STATUS_SUBMIT
-    -1 | BEGIN;                     | QUERY_STATUS_DONE
-    -1 | ROLLBACK;                  | QUERY_STATUS_SUBMIT
-    -1 | ROLLBACK;                  | QUERY_STATUS_DONE
-    -1 | RESET yagpcc.logging_mode; | QUERY_STATUS_SUBMIT
-    -1 | RESET yagpcc.logging_mode; | QUERY_STATUS_DONE
+RESET gpsc.logging_mode;
+SELECT segid, query_text, query_status FROM gpsc.log WHERE segid = -1 AND utility = true ORDER BY segid, ccnt, gpsc_status_order(query_status) ASC;
+ segid |        query_text        |    query_status     
+-------+--------------------------+---------------------
+    -1 | BEGIN;                   | QUERY_STATUS_SUBMIT
+    -1 | BEGIN;                   | QUERY_STATUS_DONE
+    -1 | SAVEPOINT sp1;           | QUERY_STATUS_SUBMIT
+    -1 | ROLLBACK TO sp1;         | QUERY_STATUS_SUBMIT
+    -1 | ROLLBACK TO sp1;         | QUERY_STATUS_DONE
+    -1 | COMMIT;                  | QUERY_STATUS_SUBMIT
+    -1 | COMMIT;                  | QUERY_STATUS_DONE
+    -1 | BEGIN;                   | QUERY_STATUS_SUBMIT
+    -1 | BEGIN;                   | QUERY_STATUS_DONE
+    -1 | SAVEPOINT sp2;           | QUERY_STATUS_SUBMIT
+    -1 | ABORT;                   | QUERY_STATUS_SUBMIT
+    -1 | ABORT;                   | QUERY_STATUS_DONE
+    -1 | BEGIN;                   | QUERY_STATUS_SUBMIT
+    -1 | BEGIN;                   | QUERY_STATUS_DONE
+    -1 | ROLLBACK;                | QUERY_STATUS_SUBMIT
+    -1 | ROLLBACK;                | QUERY_STATUS_DONE
+    -1 | RESET gpsc.logging_mode; | QUERY_STATUS_SUBMIT
+    -1 | RESET gpsc.logging_mode; | QUERY_STATUS_DONE
 (18 rows)
 
-SELECT yagpcc.truncate_log() IS NOT NULL AS t;
+SELECT gpsc.truncate_log() IS NOT NULL AS t;
  t 
 ---
 (0 rows)
 
 -- DML Operations
-SET yagpcc.logging_mode to 'TBL';
+SET gpsc.logging_mode to 'TBL';
 CREATE TABLE dml_test (a int, b text);
 NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'a' as the Apache Cloudberry data distribution key for this table.
 HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
@@ -150,33 +150,33 @@ INSERT INTO dml_test VALUES (1, 'test');
 UPDATE dml_test SET b = 'updated' WHERE a = 1;
 DELETE FROM dml_test WHERE a = 1;
 DROP TABLE dml_test;
-RESET yagpcc.logging_mode;
-SELECT segid, query_text, query_status FROM yagpcc.log WHERE segid = -1 AND utility = true ORDER BY segid, ccnt, yagp_status_order(query_status) ASC;
+RESET gpsc.logging_mode;
+SELECT segid, query_text, query_status FROM gpsc.log WHERE segid = -1 AND utility = true ORDER BY segid, ccnt, gpsc_status_order(query_status) ASC;
  segid |               query_text               |    query_status     
 -------+----------------------------------------+---------------------
     -1 | CREATE TABLE dml_test (a int, b text); | QUERY_STATUS_SUBMIT
     -1 | CREATE TABLE dml_test (a int, b text); | QUERY_STATUS_DONE
     -1 | DROP TABLE dml_test;                   | QUERY_STATUS_SUBMIT
     -1 | DROP TABLE dml_test;                   | QUERY_STATUS_DONE
-    -1 | RESET yagpcc.logging_mode;             | QUERY_STATUS_SUBMIT
-    -1 | RESET yagpcc.logging_mode;             | QUERY_STATUS_DONE
+    -1 | RESET gpsc.logging_mode;               | QUERY_STATUS_SUBMIT
+    -1 | RESET gpsc.logging_mode;               | QUERY_STATUS_DONE
 (6 rows)
 
-SELECT yagpcc.truncate_log() IS NOT NULL AS t;
+SELECT gpsc.truncate_log() IS NOT NULL AS t;
  t 
 ---
 (0 rows)
 
 -- COPY Operations
-SET yagpcc.logging_mode to 'TBL';
+SET gpsc.logging_mode to 'TBL';
 CREATE TABLE copy_test (a int);
 NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'a' as the Apache Cloudberry data distribution key for this table.
 HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
 COPY (SELECT 1) TO STDOUT;
 1
 DROP TABLE copy_test;
-RESET yagpcc.logging_mode;
-SELECT segid, query_text, query_status FROM yagpcc.log WHERE segid = -1 AND utility = true ORDER BY segid, ccnt, yagp_status_order(query_status) ASC;
+RESET gpsc.logging_mode;
+SELECT segid, query_text, query_status FROM gpsc.log WHERE segid = -1 AND utility = true ORDER BY segid, ccnt, gpsc_status_order(query_status) ASC;
  segid |           query_text            |    query_status     
 -------+---------------------------------+---------------------
     -1 | CREATE TABLE copy_test (a int); | QUERY_STATUS_SUBMIT
@@ -185,23 +185,23 @@ SELECT segid, query_text, query_status FROM yagpcc.log WHERE segid = -1 AND util
     -1 | COPY (SELECT 1) TO STDOUT;      | QUERY_STATUS_DONE
     -1 | DROP TABLE copy_test;           | QUERY_STATUS_SUBMIT
     -1 | DROP TABLE copy_test;           | QUERY_STATUS_DONE
-    -1 | RESET yagpcc.logging_mode;      | QUERY_STATUS_SUBMIT
-    -1 | RESET yagpcc.logging_mode;      | QUERY_STATUS_DONE
+    -1 | RESET gpsc.logging_mode;        | QUERY_STATUS_SUBMIT
+    -1 | RESET gpsc.logging_mode;        | QUERY_STATUS_DONE
 (8 rows)
 
-SELECT yagpcc.truncate_log() IS NOT NULL AS t;
+SELECT gpsc.truncate_log() IS NOT NULL AS t;
  t 
 ---
 (0 rows)
 
 -- Prepared Statements and error during execute
-SET yagpcc.logging_mode to 'TBL';
+SET gpsc.logging_mode to 'TBL';
 PREPARE test_prep(int) AS SELECT $1/0 AS value;
 EXECUTE test_prep(0::int);
 ERROR:  division by zero
 DEALLOCATE test_prep;
-RESET yagpcc.logging_mode;
-SELECT segid, query_text, query_status FROM yagpcc.log WHERE segid = -1 AND utility = true ORDER BY segid, ccnt, yagp_status_order(query_status) ASC;
+RESET gpsc.logging_mode;
+SELECT segid, query_text, query_status FROM gpsc.log WHERE segid = -1 AND utility = true ORDER BY segid, ccnt, gpsc_status_order(query_status) ASC;
  segid |                   query_text                    |    query_status     
 -------+-------------------------------------------------+---------------------
     -1 | PREPARE test_prep(int) AS SELECT $1/0 AS value; | QUERY_STATUS_SUBMIT
@@ -210,39 +210,39 @@ SELECT segid, query_text, query_status FROM yagpcc.log WHERE segid = -1 AND util
     -1 | EXECUTE test_prep(0::int);                      | QUERY_STATUS_ERROR
     -1 | DEALLOCATE test_prep;                           | QUERY_STATUS_SUBMIT
     -1 | DEALLOCATE test_prep;                           | QUERY_STATUS_DONE
-    -1 | RESET yagpcc.logging_mode;                      | QUERY_STATUS_SUBMIT
-    -1 | RESET yagpcc.logging_mode;                      | QUERY_STATUS_DONE
+    -1 | RESET gpsc.logging_mode;                        | QUERY_STATUS_SUBMIT
+    -1 | RESET gpsc.logging_mode;                        | QUERY_STATUS_DONE
 (8 rows)
 
-SELECT yagpcc.truncate_log() IS NOT NULL AS t;
+SELECT gpsc.truncate_log() IS NOT NULL AS t;
  t 
 ---
 (0 rows)
 
 -- GUC Settings
-SET yagpcc.logging_mode to 'TBL';
-SET yagpcc.report_nested_queries TO FALSE;
-RESET yagpcc.report_nested_queries;
-RESET yagpcc.logging_mode;
-SELECT segid, query_text, query_status FROM yagpcc.log WHERE segid = -1 AND utility = true ORDER BY segid, ccnt, yagp_status_order(query_status) ASC;
- segid |                 query_text                 |    query_status     
--------+--------------------------------------------+---------------------
-    -1 | SET yagpcc.report_nested_queries TO FALSE; | QUERY_STATUS_SUBMIT
-    -1 | SET yagpcc.report_nested_queries TO FALSE; | QUERY_STATUS_DONE
-    -1 | RESET yagpcc.report_nested_queries;        | QUERY_STATUS_SUBMIT
-    -1 | RESET yagpcc.report_nested_queries;        | QUERY_STATUS_DONE
-    -1 | RESET yagpcc.logging_mode;                 | QUERY_STATUS_SUBMIT
-    -1 | RESET yagpcc.logging_mode;                 | QUERY_STATUS_DONE
+SET gpsc.logging_mode to 'TBL';
+SET gpsc.report_nested_queries TO FALSE;
+RESET gpsc.report_nested_queries;
+RESET gpsc.logging_mode;
+SELECT segid, query_text, query_status FROM gpsc.log WHERE segid = -1 AND utility = true ORDER BY segid, ccnt, gpsc_status_order(query_status) ASC;
+ segid |                query_text                |    query_status     
+-------+------------------------------------------+---------------------
+    -1 | SET gpsc.report_nested_queries TO FALSE; | QUERY_STATUS_SUBMIT
+    -1 | SET gpsc.report_nested_queries TO FALSE; | QUERY_STATUS_DONE
+    -1 | RESET gpsc.report_nested_queries;        | QUERY_STATUS_SUBMIT
+    -1 | RESET gpsc.report_nested_queries;        | QUERY_STATUS_DONE
+    -1 | RESET gpsc.logging_mode;                 | QUERY_STATUS_SUBMIT
+    -1 | RESET gpsc.logging_mode;                 | QUERY_STATUS_DONE
 (6 rows)
 
-SELECT yagpcc.truncate_log() IS NOT NULL AS t;
+SELECT gpsc.truncate_log() IS NOT NULL AS t;
  t 
 ---
 (0 rows)
 
-DROP FUNCTION yagp_status_order(text);
-DROP EXTENSION yagp_hooks_collector;
-RESET yagpcc.enable;
-RESET yagpcc.report_nested_queries;
-RESET yagpcc.enable_utility;
-RESET yagpcc.ignored_users_list;
+DROP FUNCTION gpsc_status_order(text);
+DROP EXTENSION gp_stats_collector;
+RESET gpsc.enable;
+RESET gpsc.report_nested_queries;
+RESET gpsc.enable_utility;
+RESET gpsc.ignored_users_list;

@@ -1392,12 +1392,6 @@ if test "$with_gp_stats_collector" = yes; then
     AC_MSG_ERROR([protoc is required for gp_stats_collector but was not found in PATH])
   fi
 fi
-# yagp_hooks_collector
-#
-PGAC_ARG_BOOL(with, yagp_hooks_collector, no,
-              [build with YAGP hooks collector extension])
-AC_SUBST(with_yagp_hooks_collector)
-
 if test "$with_zstd" = yes; then
   dnl zstd_errors.h was renamed from error_public.h in v1.4.0
   PKG_CHECK_MODULES([ZSTD], [libzstd >= 1.4.0])

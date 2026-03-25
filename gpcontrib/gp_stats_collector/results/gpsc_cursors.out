@@ -1,5 +1,5 @@
-CREATE EXTENSION yagp_hooks_collector;
-CREATE FUNCTION yagp_status_order(status text)
+CREATE EXTENSION gp_stats_collector;
+CREATE FUNCTION gpsc_status_order(status text)
 RETURNS integer
 AS $$
 BEGIN
@@ -12,18 +12,18 @@ BEGIN
     END;
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;
-SET yagpcc.ignored_users_list TO '';
-SET yagpcc.enable TO TRUE;
-SET yagpcc.enable_utility TO TRUE;
-SET yagpcc.report_nested_queries TO TRUE;
+SET gpsc.ignored_users_list TO '';
+SET gpsc.enable TO TRUE;
+SET gpsc.enable_utility TO TRUE;
+SET gpsc.report_nested_queries TO TRUE;
 -- DECLARE
-SET yagpcc.logging_mode to 'TBL';
+SET gpsc.logging_mode to 'TBL';
 BEGIN;
 DECLARE cursor_stats_0 CURSOR FOR SELECT 0;
 CLOSE cursor_stats_0;
 COMMIT;
-RESET yagpcc.logging_mode;
-SELECT segid, query_text, query_status FROM yagpcc.log WHERE segid = -1 AND utility = true ORDER BY segid, ccnt, yagp_status_order(query_status) ASC;
+RESET gpsc.logging_mode;
+SELECT segid, query_text, query_status FROM gpsc.log WHERE segid = -1 AND utility = true ORDER BY segid, ccnt, gpsc_status_order(query_status) ASC;
  segid |                 query_text                  |    query_status     
 -------+---------------------------------------------+---------------------
     -1 | BEGIN;                                      | QUERY_STATUS_SUBMIT
@@ -34,25 +34,25 @@ SELECT segid, query_text, query_status FROM yagpcc.log WHERE segid = -1 AND util
     -1 | CLOSE cursor_stats_0;                       | QUERY_STATUS_DONE
     -1 | COMMIT;                                     | QUERY_STATUS_SUBMIT
     -1 | COMMIT;                                     | QUERY_STATUS_DONE
-    -1 | RESET yagpcc.logging_mode;                  | QUERY_STATUS_SUBMIT
-    -1 | RESET yagpcc.logging_mode;                  | QUERY_STATUS_DONE
+    -1 | RESET gpsc.logging_mode;                    | QUERY_STATUS_SUBMIT
+    -1 | RESET gpsc.logging_mode;                    | QUERY_STATUS_DONE
 (10 rows)
 
-SELECT yagpcc.truncate_log() IS NOT NULL AS t;
+SELECT gpsc.truncate_log() IS NOT NULL AS t;
  t 
 ---
 (0 rows)
 
 -- DECLARE WITH HOLD
-SET yagpcc.logging_mode to 'TBL';
+SET gpsc.logging_mode to 'TBL';
 BEGIN;
 DECLARE cursor_stats_1 CURSOR WITH HOLD FOR SELECT 1;
 CLOSE cursor_stats_1;
 DECLARE cursor_stats_2 CURSOR WITH HOLD FOR SELECT 2;
 CLOSE cursor_stats_2;
 COMMIT;
-RESET yagpcc.logging_mode;
-SELECT segid, query_text, query_status FROM yagpcc.log WHERE segid = -1 AND utility = true ORDER BY segid, ccnt, yagp_status_order(query_status) ASC;
+RESET gpsc.logging_mode;
+SELECT segid, query_text, query_status FROM gpsc.log WHERE segid = -1 AND utility = true ORDER BY segid, ccnt, gpsc_status_order(query_status) ASC;
  segid |                      query_text                       |    query_status     
 -------+-------------------------------------------------------+---------------------
     -1 | BEGIN;                                                | QUERY_STATUS_SUBMIT
@@ -67,24 +67,24 @@ SELECT segid, query_text, query_status FROM yagpcc.log WHERE segid = -1 AND util
     -1 | CLOSE cursor_stats_2;                                 | QUERY_STATUS_DONE
     -1 | COMMIT;                                               | QUERY_STATUS_SUBMIT
     -1 | COMMIT;                                               | QUERY_STATUS_DONE
-    -1 | RESET yagpcc.logging_mode;                            | QUERY_STATUS_SUBMIT
-    -1 | RESET yagpcc.logging_mode;                            | QUERY_STATUS_DONE
+    -1 | RESET gpsc.logging_mode;                              | QUERY_STATUS_SUBMIT
+    -1 | RESET gpsc.logging_mode;                              | QUERY_STATUS_DONE
 (14 rows)
 
-SELECT yagpcc.truncate_log() IS NOT NULL AS t;
+SELECT gpsc.truncate_log() IS NOT NULL AS t;
  t 
 ---
 (0 rows)
 
 -- ROLLBACK
-SET yagpcc.logging_mode to 'TBL';
+SET gpsc.logging_mode to 'TBL';
 BEGIN;
 DECLARE cursor_stats_3 CURSOR FOR SELECT 1;
 CLOSE cursor_stats_3;
 DECLARE cursor_stats_4 CURSOR FOR SELECT 1;
 ROLLBACK;
-RESET yagpcc.logging_mode;
-SELECT segid, query_text, query_status FROM yagpcc.log WHERE segid = -1 AND utility = true ORDER BY segid, ccnt, yagp_status_order(query_status) ASC;
+RESET gpsc.logging_mode;
+SELECT segid, query_text, query_status FROM gpsc.log WHERE segid = -1 AND utility = true ORDER BY segid, ccnt, gpsc_status_order(query_status) ASC;
  segid |                 query_text                  |    query_status     
 -------+---------------------------------------------+---------------------
     -1 | BEGIN;                                      | QUERY_STATUS_SUBMIT
@@ -97,17 +97,17 @@ SELECT segid, query_text, query_status FROM yagpcc.log WHERE segid = -1 AND util
     -1 | DECLARE cursor_stats_4 CURSOR FOR SELECT 1; | QUERY_STATUS_DONE
     -1 | ROLLBACK;                                   | QUERY_STATUS_SUBMIT
     -1 | ROLLBACK;                                   | QUERY_STATUS_DONE
-    -1 | RESET yagpcc.logging_mode;                  | QUERY_STATUS_SUBMIT
-    -1 | RESET yagpcc.logging_mode;                  | QUERY_STATUS_DONE
+    -1 | RESET gpsc.logging_mode;                    | QUERY_STATUS_SUBMIT
+    -1 | RESET gpsc.logging_mode;                    | QUERY_STATUS_DONE
 (12 rows)
 
-SELECT yagpcc.truncate_log() IS NOT NULL AS t;
+SELECT gpsc.truncate_log() IS NOT NULL AS t;
  t 
 ---
 (0 rows)
 
 -- FETCH
-SET yagpcc.logging_mode to 'TBL';
+SET gpsc.logging_mode to 'TBL';
 BEGIN;
 DECLARE cursor_stats_5 CURSOR WITH HOLD FOR SELECT 2;
 DECLARE cursor_stats_6 CURSOR WITH HOLD FOR SELECT 3;
@@ -126,8 +126,8 @@ FETCH 1 IN cursor_stats_6;
 CLOSE cursor_stats_5;
 CLOSE cursor_stats_6;
 COMMIT;
-RESET yagpcc.logging_mode;
-SELECT segid, query_text, query_status FROM yagpcc.log WHERE segid = -1 AND utility = true ORDER BY segid, ccnt, yagp_status_order(query_status) ASC;
+RESET gpsc.logging_mode;
+SELECT segid, query_text, query_status FROM gpsc.log WHERE segid = -1 AND utility = true ORDER BY segid, ccnt, gpsc_status_order(query_status) ASC;
  segid |                      query_text                       |    query_status     
 -------+-------------------------------------------------------+---------------------
     -1 | BEGIN;                                                | QUERY_STATUS_SUBMIT
@@ -146,18 +146,18 @@ SELECT segid, query_text, query_status FROM yagpcc.log WHERE segid = -1 AND util
     -1 | CLOSE cursor_stats_6;                                 | QUERY_STATUS_DONE
     -1 | COMMIT;                                               | QUERY_STATUS_SUBMIT
     -1 | COMMIT;                                               | QUERY_STATUS_DONE
-    -1 | RESET yagpcc.logging_mode;                            | QUERY_STATUS_SUBMIT
-    -1 | RESET yagpcc.logging_mode;                            | QUERY_STATUS_DONE
+    -1 | RESET gpsc.logging_mode;                              | QUERY_STATUS_SUBMIT
+    -1 | RESET gpsc.logging_mode;                              | QUERY_STATUS_DONE
 (18 rows)
 
-SELECT yagpcc.truncate_log() IS NOT NULL AS t;
+SELECT gpsc.truncate_log() IS NOT NULL AS t;
  t 
 ---
 (0 rows)
 
-DROP FUNCTION yagp_status_order(text);
-DROP EXTENSION yagp_hooks_collector;
-RESET yagpcc.enable;
-RESET yagpcc.report_nested_queries;
-RESET yagpcc.enable_utility;
-RESET yagpcc.ignored_users_list;
+DROP FUNCTION gpsc_status_order(text);
+DROP EXTENSION gp_stats_collector;
+RESET gpsc.enable;
+RESET gpsc.report_nested_queries;
+RESET gpsc.enable_utility;
+RESET gpsc.ignored_users_list;

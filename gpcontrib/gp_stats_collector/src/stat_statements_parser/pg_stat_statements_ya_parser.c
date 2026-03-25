@@ -20,7 +20,7 @@
  * pg_stat_statements_ya_parser.c
  *
  * IDENTIFICATION
- *	  gpcontrib/yagp_hooks_collector/src/stat_statements_parser/pg_stat_statements_ya_parser.c
+ *	  gpcontrib/gp_stats_collector/src/stat_statements_parser/pg_stat_statements_ya_parser.c
  *
  *-------------------------------------------------------------------------
  */
