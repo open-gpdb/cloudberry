@@ -723,7 +723,7 @@ with_libcurl
 with_rt
 with_zstd
 with_yezzey
-with_yagp_hooks_collector
+with_gp_stats_collector
 with_libbz2
 LZ4_LIBS
 LZ4_CFLAGS
@@ -947,7 +947,6 @@ with_zstd
 with_diskquota
 with_gp_stats_collector
 with_yezzey
-with_yagp_hooks_collector
 with_rt
 with_libcurl
 with_apr_config
