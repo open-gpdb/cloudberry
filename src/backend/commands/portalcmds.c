@@ -374,10 +374,6 @@ PortalCleanup(Portal portal)
 			FreeQueryDesc(queryDesc);
 
 			CurrentResourceOwner = saveResourceOwner;
-		} else {
-			/* GPDB hook for collecting query info */
-			if (queryDesc->gpsc_query_key && query_info_collect_hook)
-				(*query_info_collect_hook)(METRICS_QUERY_ERROR, queryDesc);
 		}
 		else
 		{
