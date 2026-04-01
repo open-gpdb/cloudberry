@@ -54,7 +54,6 @@
 #
 # Optional Environment Variables:
 #   LOG_DIR - Directory for logs (defaults to ${SRC_DIR}/build-logs)
-#   CONFIGURE_EXTRA_OPTS - Args to pass to configure command
 #   ENABLE_DEBUG - Enable debug build options (true/false, defaults to
 #                  false)
 #
