@@ -144,6 +144,10 @@ if [ "${ENABLE_DEBUG:-false}" = "true" ]; then
                           --enable-debug-extensions"
 fi
 
+if [ -z "${CONFIGURE_EXTRA_OPTS}" ]; then
+    CONFIGURE_EXTRA_OPTS=""
+fi
+
 CONFIGURE_MDBLOCALES_OPTS="--without-mdblocales"
 if [ "${ENABLE_MDBLOCALES:-false}" = "true" ]; then
     CONFIGURE_MDBLOCALES_OPTS="--with-mdblocales"
