@@ -130,7 +130,7 @@ jobs:
         run: |
           set -ex pipefail
           # Download mc for Linux (amd64)
-          curl -O https://dl.min.io/client/mc/release/linux-amd64/mc
+          curl -fsSL -o mc https://dl.min.io/client/mc/release/linux-amd64/mc
           chmod +x mc
           sudo mv mc /usr/local/bin/mc  # Make mc available system-wide
 
@@ -193,7 +193,7 @@ jobs:
           set -eo pipefail
 
           chmod +x "${SRC_DIR}"/gpcontrib/yezzey/devops/scripts/prepare_test_yezzey.sh
-          if ! time su - gpadmin -c "cd ${SRC_DIR} && gpcontrib/yezzey/devops/scripts/prepare_test_yezzey.sh"; then
+          if ! time su - gpadmin -c "cd ${SRC_DIR}/gpcontrib/yezzey && devops/scripts/prepare_test_yezzey.sh"; then
             echo "::error::Config yezzey failed"
             exit 1
           fi
