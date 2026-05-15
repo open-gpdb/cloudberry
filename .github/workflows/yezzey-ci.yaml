@@ -193,7 +193,7 @@ jobs:
           set -eo pipefail
 
           chmod +x "${SRC_DIR}"/gpcontrib/yezzey/devops/scripts/prepare_test_yezzey.sh
-          if ! time su - gpadmin -c "cd ${SRC_DIR} && gpcontrib/yezzey/devops/scripts/prepare_test_yezzey.sh"; then
+          if ! time su - gpadmin -c "cd ${SRC_DIR}/gpcontrib/yezzey && devops/scripts/prepare_test_yezzey.sh"; then
             echo "::error::Config yezzey failed"
             exit 1
           fi
