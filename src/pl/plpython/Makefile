@@ -38,10 +38,7 @@ OBJS = \
 	plpy_typeio.o \
 	plpy_util.o
 
-DATA = $(NAME)u.control $(NAME)u--1.0.sql
-ifeq ($(python_majorversion),2)
-DATA += plpythonu.control plpythonu--1.0.sql
-endif
+# plpython*u extensions omitted from product build (untrusted only)
 
 # header files to install - it's not clear which of these might be needed
 # so install them all.
