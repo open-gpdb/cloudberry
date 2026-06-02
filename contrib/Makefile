@@ -22,7 +22,6 @@ SUBDIRS = \
 		dblink		\
 		dict_int	\
 		dict_xsyn	\
-		file_fdw	\
 		fuzzystrmatch	\
 		hstore		\
 		intagg		\
@@ -90,12 +89,6 @@ ifeq ($(with_perl),yes)
 SUBDIRS += bool_plperl hstore_plperl jsonb_plperl
 else
 ALWAYS_SUBDIRS += bool_plperl hstore_plperl jsonb_plperl
-endif
-
-ifeq ($(with_python),yes)
-SUBDIRS += hstore_plpython jsonb_plpython ltree_plpython
-else
-ALWAYS_SUBDIRS += hstore_plpython jsonb_plpython ltree_plpython
 endif
 
 ifeq ($(enable_pax),yes)

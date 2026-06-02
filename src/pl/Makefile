@@ -20,11 +20,7 @@ else
 ALWAYS_SUBDIRS += plperl
 endif
 
-ifeq ($(with_python), yes)
-SUBDIRS += plpython
-else
-ALWAYS_SUBDIRS += plpython
-endif
+# plpython3u is untrusted-only; omitted from product build
 
 ifeq ($(with_tcl), yes)
 SUBDIRS += tcl
