@@ -1421,6 +1421,12 @@ dumpRoles(PGconn *conn)
 		if (strcmp(PQgetvalue(res, i, i_rolconnlimit), "-1") != 0)
 			appendPQExpBuffer(buf, " CONNECTION LIMIT %s",
 							  PQgetvalue(res, i, i_rolconnlimit));
+		
+		if (!PQgetisnull(res, i, i_rolpassword))
+		{
+			appendPQExpBufferStr(buf, " PASSWORD ");
+			appendStringLiteralConn(buf, PQgetvalue(res, i, i_rolpassword), conn);
+		}
 
 		if (!PQgetisnull(res, i, i_rolvaliduntil))
 			appendPQExpBuffer(buf, " VALID UNTIL '%s'",
@@ -1481,47 +1487,44 @@ dumpRoles(PGconn *conn)
 							 "ROLE", rolename,
 							 buf);
 
-		appendPQExpBuffer(buf, "ALTER ROLE %s WITH ", fmtId(rolename));
-		appendPQExpBuffer(buf, "PROFILE %s; \n", fmtId(PQgetvalue(res, i, i_rolprofile)));
-
-		appendPQExpBuffer(buf, "SET allow_system_table_mods = true;\n");
-
-		appendPQExpBuffer(buf, "UPDATE pg_authid SET "
-				       "rolenableprofile = \'%s\', "
-				       "rolaccountstatus = %s, "
-				       "rolfailedlogins = %s",
-				  	PQgetvalue(res, i, i_rolenableprofile),
-				  	PQgetvalue(res, i, i_rolaccountstatus),
-				  	PQgetvalue(res, i, i_rolfailedlogins));
-
-		if (!PQgetisnull(res, i, i_rolpassword) && !no_role_passwords)
+		if (server_version >= 140000 && !PQgetisnull(res, i, i_rolprofile))
 		{
-			appendPQExpBuffer(buf, ", rolpassword = \'%s\'",
-					     			PQgetvalue(res, i, i_rolpassword));
-		}
+			appendPQExpBuffer(buf, "ALTER ROLE %s WITH ", fmtId(rolename));
+			appendPQExpBuffer(buf, "PROFILE %s; \n", fmtId(PQgetvalue(res, i, i_rolprofile)));
 
-		if (!PQgetisnull(res, i, i_rolpasswordsetat))
-		{
-			appendPQExpBuffer(buf, ", rolpasswordsetat = \'%s\'",
-		     						PQgetvalue(res, i, i_rolpasswordsetat));
-		}
+			appendPQExpBuffer(buf, "SET allow_system_table_mods = true;\n");
 
-		if (!PQgetisnull(res, i, i_rollockdate))
-		{
-			appendPQExpBuffer(buf, ", rollockdate = \'%s\'",
-		     						PQgetvalue(res, i, i_rollockdate));
-		}
+			appendPQExpBuffer(buf, "UPDATE pg_authid SET "
+						"rolenableprofile = \'%s\', "
+						"rolaccountstatus = %s, "
+						"rolfailedlogins = %s",
+						PQgetvalue(res, i, i_rolenableprofile),
+						PQgetvalue(res, i, i_rolaccountstatus),
+						PQgetvalue(res, i, i_rolfailedlogins));
 
-		if (!PQgetisnull(res, i, i_rolpasswordexpire))
-		{
-			appendPQExpBuffer(buf, ", rolpasswordexpire = \'%s\'",
-		     						PQgetvalue(res, i, i_rolpasswordexpire));
-		}
+			if (!PQgetisnull(res, i, i_rolpasswordsetat))
+			{
+				appendPQExpBuffer(buf, ", rolpasswordsetat = \'%s\'",
+										PQgetvalue(res, i, i_rolpasswordsetat));
+			}
 
-		appendPQExpBuffer(buf, " WHERE oid = %s; \n",
-		    						PQgetvalue(res, i, i_oid));
+			if (!PQgetisnull(res, i, i_rollockdate))
+			{
+				appendPQExpBuffer(buf, ", rollockdate = \'%s\'",
+										PQgetvalue(res, i, i_rollockdate));
+			}
 
-		appendPQExpBuffer(buf, "RESET allow_system_table_mods;\n");
+			if (!PQgetisnull(res, i, i_rolpasswordexpire))
+			{
+				appendPQExpBuffer(buf, ", rolpasswordexpire = \'%s\'",
+										PQgetvalue(res, i, i_rolpasswordexpire));
+			}
+
+			appendPQExpBuffer(buf, " WHERE oid = %s; \n",
+										PQgetvalue(res, i, i_oid));
+
+			appendPQExpBuffer(buf, "RESET allow_system_table_mods;\n");
+		}		
 
 		fprintf(OPF, "%s", buf->data);
 	}
