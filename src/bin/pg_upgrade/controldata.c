@@ -212,6 +212,12 @@ get_control_data(ClusterInfo *cluster, bool live_check)
 		got_float8_pass_by_value = true;
 	}
 
+	if (GET_MAJOR_VERSION(cluster->major_version) <= 1400)
+	{
+		cluster->controldata.file_encryption_method = DISABLED_ENCRYPTION_METHOD;
+		got_file_encryption_method = true;
+	}
+
 	/* we have the result of cmd in "output". so parse it line by line now */
 	while (fgets(bufin, sizeof(bufin), output))
 	{
