@@ -1428,6 +1428,12 @@ dumpRoles(PGconn *conn)
 			appendStringLiteralConn(buf, PQgetvalue(res, i, i_rolpassword), conn);
 		}
 
+		if (!no_role_passwords && !PQgetisnull(res, i, i_rolpassword))
+		{
+			appendPQExpBufferStr(buf, " PASSWORD ");
+			appendStringLiteralConn(buf, PQgetvalue(res, i, i_rolpassword), conn);
+		}
+
 		if (!PQgetisnull(res, i, i_rolvaliduntil))
 			appendPQExpBuffer(buf, " VALID UNTIL '%s'",
 							  PQgetvalue(res, i, i_rolvaliduntil));
@@ -1524,7 +1530,7 @@ dumpRoles(PGconn *conn)
 										PQgetvalue(res, i, i_oid));
 
 			appendPQExpBuffer(buf, "RESET allow_system_table_mods;\n");
-		}		
+		}
 
 		fprintf(OPF, "%s", buf->data);
 	}
