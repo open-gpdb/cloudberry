@@ -17917,6 +17917,140 @@ createDummyViewAsClause(Archive *fout, const TableInfo *tbinfo)
 	return result;
 }
 
+/* Read one GP6-deparsed template, ignoring SQL inside quoted values/names. */
+static bool
+readLegacyTemplate(Archive *fout, const char **sql, const char **body,
+				   const char **end, int *level)
+{
+	const char *p = *sql;
+	int			depth = 0;
+
+	while (isspace((unsigned char) *p))
+		p++;
+	if (strncmp(p, "ALTER TABLE ", 12) != 0)
+		return false;
+	*body = NULL;
+	*level = 1;
+	for (; *p; p += PQmblen(p, fout->encoding))
+	{
+		if (*p == '\'' || *p == '"')
+		{
+			char		quote = *p++;
+			bool		escape = quote == '\'' &&
+				(!fout->std_strings || p[-2] == 'E' || p[-2] == 'e');
+
+			while (*p)
+			{
+				if (*p == quote)
+				{
+					if (p[1] != quote)
+						break;
+					p += 2;
+				}
+				else if (escape && *p == '\\' && p[1])
+					p += 1 + PQmblen(p + 1, fout->encoding);
+				else
+					p += PQmblen(p, fout->encoding);
+			}
+			if (!*p)
+				return false;
+		}
+		else if (*p == '(')
+			depth++;
+		else if (*p == ')')
+		{
+			if (--depth < 0)
+				return false;
+		}
+		else if (depth == 0)
+		{
+			if (*p == ';')
+				break;
+			if (!*body && strncmp(p, "ALTER PARTITION ", 16) == 0)
+				(*level)++;
+			if (!*body && strncmp(p, "SET SUBPARTITION TEMPLATE ", 26) == 0)
+				*body = p;
+		}
+	}
+	*end = p;
+	*sql = *p == ';' ? p + 1 : p;
+	return *body != NULL && depth == 0;
+}
+
+static void
+appendLegacyTemplates(Archive *fout, const TableInfo *tbinfo, PQExpBuffer q)
+{
+	PQExpBuffer query = createPQExpBuffer();
+	PQExpBuffer templates = createPQExpBuffer();
+	PGresult   *res;
+	const char *sql = tbinfo->parttemplate;
+	const char *reason = NULL;
+	int			i;
+
+	/* Follow the same default-or-first path as GP6's template deparser. */
+	appendPQExpBuffer(query,
+		"WITH RECURSIVE first_child AS (\n"
+		"  SELECT DISTINCT ON (r.parparentrule) r.parparentrule,\n"
+		"         r.oid AS ruleoid, r.parchildrelid\n"
+		"  FROM pg_catalog.pg_partition_rule r\n"
+		"  JOIN pg_catalog.pg_partition p ON p.oid = r.paroid\n"
+		"  WHERE p.parrelid = %u AND NOT p.paristemplate\n"
+		"  ORDER BY r.parparentrule, r.parisdefault DESC, r.parruleord\n"
+		"), path AS (\n"
+		"  SELECT 0 AS depth, %u::pg_catalog.oid AS relid,\n"
+		"         0::pg_catalog.oid AS ruleoid\n"
+		"  UNION ALL\n"
+		"  SELECT path.depth + 1, c.parchildrelid, c.ruleoid\n"
+		"  FROM path JOIN first_child c ON c.parparentrule = path.ruleoid\n"
+		")\n"
+		"SELECT p.parlevel, n.nspname, c.relname\n"
+		"FROM pg_catalog.pg_partition p\n"
+		"LEFT JOIN path ON path.depth = p.parlevel - 1\n"
+		"LEFT JOIN pg_catalog.pg_class c ON c.oid = path.relid\n"
+		"LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace\n"
+		"WHERE p.parrelid = %u AND p.paristemplate\n"
+		"ORDER BY p.parlevel DESC",
+		tbinfo->dobj.catId.oid, tbinfo->dobj.catId.oid, tbinfo->dobj.catId.oid);
+	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+
+	for (i = 0; i < PQntuples(res); i++)
+	{
+		const char *body;
+		const char *end;
+		int			level;
+
+		if (!readLegacyTemplate(fout, &sql, &body, &end, &level) ||
+			level != atoi(PQgetvalue(res, i, 0)))
+		{
+			reason = "template SQL does not match catalog levels";
+			break;
+		}
+		if (PQgetisnull(res, i, 1) || PQgetisnull(res, i, 2) ||
+			strcmp(PQgetvalue(res, i, 1), tbinfo->dobj.namespace->dobj.name) != 0)
+		{
+			reason = "cannot identify the restored partition relation";
+			break;
+		}
+		appendPQExpBuffer(templates, ";\nALTER TABLE %s ",
+						  fmtQualifiedId(PQgetvalue(res, i, 1), PQgetvalue(res, i, 2)));
+		appendBinaryPQExpBuffer(templates, body, end - body);
+	}
+	while (isspace((unsigned char) *sql))
+		sql++;
+	if (!reason && *sql)
+		reason = "template SQL does not match catalog levels";
+
+	if (reason)
+		pg_log_warning("omitting subpartition templates for table %s during binary upgrade (%s): %s",
+					   fmtQualifiedDumpable(tbinfo), reason, tbinfo->parttemplate);
+	else
+		appendPQExpBufferStr(q, templates->data);
+
+	PQclear(res);
+	destroyPQExpBuffer(templates);
+	destroyPQExpBuffer(query);
+}
+
 /*
  * dumpTableSchema
  *	  write the declaration (not data) of one user-defined table or view
@@ -18429,9 +18563,13 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 		{
 			/* partition by clause */
 			appendPQExpBuffer(q, " %s", tbinfo->partclause);
-			/* subpartition template */
-			if (tbinfo->parttemplate)
-				appendPQExpBuffer(q, ";\n %s", tbinfo->parttemplate);
+			if (tbinfo->parttemplate && *tbinfo->parttemplate != '\0')
+			{
+				if (dopt->binary_upgrade)
+					appendLegacyTemplates(fout, tbinfo, q);
+				else
+					appendPQExpBuffer(q, ";\n %s", tbinfo->parttemplate);
+			}
 		} /* END MPP ADDITION */
 
 		/* Dump generic options if any */
