@@ -11663,7 +11663,19 @@ dumpType(Archive *fout, const TypeInfo *tyinfo)
 					   tyinfo->dobj.name);
 
 	if (tyinfo->typstorage && *tyinfo->typstorage != '\0')
-		dumpTypeStorageOptions(fout, tyinfo);
+	{
+		if (tyinfo->typtype == TYPTYPE_BASE)
+			dumpTypeStorageOptions(fout, tyinfo);
+		else
+		{
+			/*
+			 * FIXME: Support restoring GP6 non-base type defaults instead of
+			 * omitting them.
+			 */
+			pg_log_warning("omitting default encoding for non-base type %s: %s",
+						   fmtQualifiedDumpable(tyinfo), tyinfo->typstorage);
+		}
+	}
 
 }
 
