@@ -662,6 +662,13 @@ get_rel_infos(ClusterInfo *cluster, DbInfo *dbinfo)
 			int			j;
 
 			/*
+			 * Initialize both segment pointers up front.  The RelInfo array is
+			 * pg_malloc'd (not zeroed) and only one of these is populated below
+			 */
+			curr->aosegments = NULL;
+			curr->aocssegments = NULL;
+
+			/*
 			 * First query the catalog for the auxiliary heap relations which
 			 * describe AO{CS} relations. The segrel and visimap must exist
 			 * but the blkdirrel is created when required so it might not
