@@ -602,13 +602,31 @@ get_rel_infos(ClusterInfo *cluster, DbInfo *dbinfo)
 	 * and no old-cluster counterpart -- the old parent's real index is instead
 	 * recognized as an orphan of a 'p' parent in gen_db_file_maps().  Collecting
 	 * the partitioned index here would leave it unmatched in the new cluster.
+	 *
+	 * GPDB: collect only btree indexes for transfer.  Only btree has an on-disk
+	 * format that is binary compatible between the old GPDB cluster and the new
+	 * Cloudberry cluster; every other access method (bitmap, gin, gist, spgist,
+	 * hash, brin) must be rebuilt, and new_gpdb_invalidate_indexes() marks them
+	 * invalid with a reindex script.  Filtering by access method here -- rather
+	 * than relying on indisvalid -- is essential: the invalidation runs only on
+	 * the coordinator and is propagated to the segments via the catalog copy,
+	 * so on a segment the new-cluster index is already invalid while its
+	 * old-cluster counterpart is still valid.  Excluding by indisvalid alone
+	 * would therefore drop the index on the new side but keep it on the old
+	 * side, making gen_db_file_maps() fail with "No match found in new cluster".
+	 * Excluding by amname is symmetric across both clusters, and leaves the
+	 * (empty, correctly-formatted) index file built during restore in place
+	 * instead of linking the incompatible old file over it.
 	 */
 	snprintf(query + strlen(query), sizeof(query) - strlen(query),
 			 "  all_index (reloid, indtable, toastheap) AS ( "
 			 "  SELECT i.indexrelid, i.indrelid, 0::oid "
 			 "  FROM pg_catalog.pg_index i "
 			 "    JOIN pg_catalog.pg_class ic ON ic.oid = i.indrelid "
+			 "    JOIN pg_catalog.pg_class irc ON irc.oid = i.indexrelid "
+			 "    JOIN pg_catalog.pg_am iam ON iam.oid = irc.relam "
 			 "  WHERE i.indisvalid AND i.indisready "
+			 "    AND iam.amname = 'btree' "
 			 "    AND ic.relkind <> " CppAsString2(RELKIND_PARTITIONED_TABLE) " "
 			 "    AND i.indrelid IN "
 			 "        (SELECT reloid FROM regular_heap "

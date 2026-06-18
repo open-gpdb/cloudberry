@@ -11,6 +11,7 @@
 #include "pg_upgrade_greenplum.h"
 
 #include "access/transam.h"
+#include "fe_utils/string_utils.h"
 
 #define NUMERIC_ALLOC 100
 
@@ -256,22 +257,46 @@ old_GPDB6_check_for_unsupported_sha256_password_hashes(void)
 }
 
 /*
- * new_gpdb_invalidate_bitmap_indexes()
+ * new_gpdb_invalidate_indexes()
  *
- * GPDB_UPGRADE_FIXME: We are currently missing the support to migrate over bitmap indexes.
- * Hence, mark all bitmap indexes as invalid.
+ * pg_upgrade can only carry btree indexes over unchanged.  Every other access
+ * method has an on-disk format that differs between the old GPDB cluster and
+ * the new Cloudberry cluster: bitmap is Greenplum-specific and unmigratable,
+ * and gin/gist/spgist/hash/brin all changed format across the underlying
+ * PostgreSQL major versions (GPDB6 is 9.4-based, Cloudberry is 14-based).
+ * Their relfilenodes are transferred verbatim, so reading them on the new
+ * cluster yields garbage and crashes the backend.
+ *
+ * Mark every such index as neither ready nor valid.  Clearing indisready is
+ * what actually protects us: vac_open_indexes() (and hence autovacuum) skips
+ * indexes that are not indisready, whereas indisvalid=false indexes are still
+ * vacuumed.  Without this, the first autovacuum worker to touch a carried-over
+ * gin/bitmap index segfaults.  A reindex script is written so the user can
+ * rebuild the indexes once the upgrade has finished.
  */
 void
-new_gpdb_invalidate_bitmap_indexes(void)
+new_gpdb_invalidate_indexes(void)
 {
 	int			dbnum;
+	FILE	   *script = NULL;
+	bool		found = false;
+	char		output_path[MAXPGPATH];
 
-	prep_status("Invalidating bitmap indexes in new cluster");
+	prep_status("Invalidating non-btree indexes in new cluster");
+
+	snprintf(output_path, sizeof(output_path), "%s/%s",
+			 log_opts.basedir, "reindex_indexes.sql");
 
 	for (dbnum = 0; dbnum < new_cluster.dbarr.ndbs; dbnum++)
 	{
-		DbInfo	   *olddb = &new_cluster.dbarr.dbs[dbnum];
-		PGconn	   *conn = connectToServer(&new_cluster, olddb->db_name);
+		PGresult   *res;
+		bool		db_used = false;
+		int			ntups;
+		int			rowno;
+		int			i_nspname,
+					i_relname;
+		DbInfo	   *active_db = &new_cluster.dbarr.dbs[dbnum];
+		PGconn	   *conn = connectToServer(&new_cluster, active_db->db_name);
 
 		/*
 		 * GPDB doesn't allow hacking the catalogs without setting
@@ -279,23 +304,86 @@ new_gpdb_invalidate_bitmap_indexes(void)
 		 */
 		PQclear(executeQueryOrDie(conn, "set allow_system_table_mods=true"));
 
-		/*
-		 * check mode doesn't do much interesting for this but at least
-		 * we'll know we are allowed to change allow_system_table_mods
-		 * which is required
-		 */
+		/* find user indexes whose access method is not btree */
+		res = executeQueryOrDie(conn,
+								"SELECT n.nspname, c.relname "
+								"FROM   pg_catalog.pg_class c, "
+								"       pg_catalog.pg_index i, "
+								"       pg_catalog.pg_am a, "
+								"       pg_catalog.pg_namespace n "
+								"WHERE  i.indexrelid = c.oid AND "
+								"       c.relam = a.oid AND "
+								"       c.relnamespace = n.oid AND "
+								"       a.amname <> 'btree' AND "
+								"       c.oid >= %u",
+								FirstNormalObjectId);
+
+		ntups = PQntuples(res);
+		i_nspname = PQfnumber(res, "nspname");
+		i_relname = PQfnumber(res, "relname");
+		for (rowno = 0; rowno < ntups; rowno++)
+		{
+			found = true;
+			if (script == NULL && (script = fopen_priv(output_path, "w")) == NULL)
+				pg_fatal("could not open file \"%s\": %s\n", output_path,
+						 strerror(errno));
+			if (!db_used)
+			{
+				PQExpBufferData connectbuf;
+
+				initPQExpBuffer(&connectbuf);
+				appendPsqlMetaConnect(&connectbuf, active_db->db_name);
+				fputs(connectbuf.data, script);
+				termPQExpBuffer(&connectbuf);
+				db_used = true;
+			}
+			fprintf(script, "REINDEX INDEX %s.%s;\n",
+					quote_identifier(PQgetvalue(res, rowno, i_nspname)),
+					quote_identifier(PQgetvalue(res, rowno, i_relname)));
+		}
+
+		PQclear(res);
+
 		if (!user_opts.check)
 		{
+			/*
+			 * Clearing indisready keeps (auto)vacuum from opening the
+			 * incompatible relfilenode; clearing indisvalid keeps the planner
+			 * from using it.  REINDEX restores both.
+			 */
 			PQclear(executeQueryOrDie(conn,
-									  "UPDATE pg_index SET indisvalid = false "
-									  "  FROM pg_class c "
-									  " WHERE c.oid = indexrelid AND "
-									  "       indexrelid >= %u AND "
-									  "       relam = 3013;",
+									  "UPDATE pg_catalog.pg_index i "
+									  "SET    indisready = false, "
+									  "       indisvalid = false "
+									  "FROM   pg_catalog.pg_class c, "
+									  "       pg_catalog.pg_am a "
+									  "WHERE  i.indexrelid = c.oid AND "
+									  "       c.relam = a.oid AND "
+									  "       a.amname <> 'btree' AND "
+									  "       c.oid >= %u",
 									  FirstNormalObjectId));
 		}
+
 		PQfinish(conn);
 	}
 
-	check_ok();
+	if (script)
+		fclose(script);
+
+	if (found)
+	{
+		report_status(PG_WARNING, "warning");
+		pg_log(PG_WARNING, "\n"
+			   "Your installation contains indexes using access methods other than\n"
+			   "btree (for example bitmap or gin).  These indexes have on-disk formats\n"
+			   "that are incompatible between your old and new clusters, so they have\n"
+			   "been marked invalid and must be rebuilt with the REINDEX command.  The\n"
+			   "file\n"
+			   "    %s\n"
+			   "when executed by psql by the database superuser will recreate all\n"
+			   "invalid indexes; until then, none of these indexes will be used.\n\n",
+			   output_path);
+	}
+	else
+		check_ok();
 }

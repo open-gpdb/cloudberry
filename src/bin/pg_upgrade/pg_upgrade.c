@@ -811,8 +811,12 @@ create_new_objects(void)
 	/* update new_cluster info now that we have objects in the databases */
 	get_db_and_rel_infos(&new_cluster);
 
-	/* Bitmap indexes are not currently supported, so mark them as invalid. */
-	new_gpdb_invalidate_bitmap_indexes();
+	/*
+	 * Non-btree indexes (bitmap, gin, gist, spgist, hash, brin) have on-disk
+	 * formats that are incompatible between the old and new clusters, so mark
+	 * them invalid and emit a reindex script.
+	 */
+	new_gpdb_invalidate_indexes();
 }
 
 
