@@ -25,7 +25,8 @@ ifeq "$(enable_debug_extensions)" "yes"
                gp_toolkit \
 			   gp_url_tools \
                pg_hint_plan \
-			   uuid_cb
+			   uuid_cb \
+               reject_partition_fullscan
 else
 	recurse_targets = gp_sparse_vector \
 	       gp_distribution_policy \
