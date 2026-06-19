@@ -2007,9 +2007,13 @@ END$$;
 ALTER FUNCTION terminate_nothrow OWNER TO pg_signal_backend;
 SELECT backend_type FROM pg_stat_activity
 WHERE CASE WHEN COALESCE(usesysid, 10) = 10 THEN terminate_nothrow(pid) END;
- backend_type 
---------------
-(0 rows)
+         backend_type         
+------------------------------
+ autovacuum launcher
+ dtx recovery process
+ logical replication launcher
+ login monitor
+(4 rows)
 
 ROLLBACK;
 -- test default ACLs
