@@ -128,7 +128,7 @@ jobs:
 
       - name: Install MinIO Client (mc)
         run: |
-          set -ex pipefail
+          set -exo pipefail
           # Download mc for Linux (amd64)
           curl -fsSL -o mc https://dl.min.io/client/mc/release/linux-amd64/mc
           chmod +x mc
@@ -136,7 +136,7 @@ jobs:
 
       - name: Configure MinIO service
         run: |
-          set -ex pipefail
+          set -exo pipefail
            # Add the MinIO service as an "alias" in mc (name it "minio-ci")
           mc alias set minio-ci http://minio:9000 some_key some_key
 

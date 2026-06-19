@@ -1381,6 +1381,20 @@ PGAC_ARG_BOOL(with, yezzey, no,
 AC_SUBST(with_yezzey)
 
 #
+# diskquota
+#
+PGAC_ARG_BOOL(with, diskquota, yes,
+              [build with diskquota extension])
+AC_SUBST(with_diskquota)
+
+#
+# gp_stats_collector
+#
+PGAC_ARG_BOOL(with, gp_stats_collector, yes,
+              [build with gp_stats_collector extension])
+AC_SUBST(with_gp_stats_collector)
+
+#
 # Realtime library
 #
 PGAC_ARG_BOOL(with, rt, yes,
