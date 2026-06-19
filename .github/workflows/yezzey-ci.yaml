@@ -127,6 +127,7 @@ jobs:
           echo "SRC_DIR=${GITHUB_WORKSPACE}" | tee -a "$GITHUB_ENV"
 
       - name: Install MinIO Client (mc)
+        shell: bash
         run: |
           set -exo pipefail
           # Download mc for Linux (amd64)
@@ -135,6 +136,7 @@ jobs:
           sudo mv mc /usr/local/bin/mc  # Make mc available system-wide
 
       - name: Configure MinIO service
+        shell: bash
         run: |
           set -exo pipefail
            # Add the MinIO service as an "alias" in mc (name it "minio-ci")
@@ -330,5 +332,4 @@ jobs:
           echo "::error::Build/Test pipeline failed! Check job summaries and logs for details"
           echo "Timestamp: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
           echo "Cloudberry Result: ${{ needs.test-cloudberry.result }}"
-
 
