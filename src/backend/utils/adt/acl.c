@@ -5129,48 +5129,6 @@ mdb_admin_allow_bypass_owner_checks(Oid userId,  Oid ownerId)
 
 // -- non-upstream patch end
 
-// -- non-upstream patch begin
-/*
- * Is userId allowed to bypass ownership check
- * and tranfer onwership to ownerId role?
- */
-bool
-mdb_admin_allow_bypass_owner_checks(Oid userId,  Oid ownerId)
-{
-	Oid mdb_admin_roleoid;
-	/* 
-	* Never allow nobody to grant objects to 
-	* superusers.
-	* This can result in various CVE.
-	* For paranoic reasons, check this even before
-	* membership of mdb_admin role.
-	*/
-	if (superuser_arg(ownerId)) {
-		return false;
-	}
-
-	mdb_admin_roleoid = get_role_oid("mdb_admin", true /*if nodoby created mdb_admin role in this database*/);
-	/* Is userId actually member of mdb admin? */
-	if (!is_member_of_role(userId, mdb_admin_roleoid)) {
-		/* if no, disallow. */
-		return false;
-	}
-	
-	/* 
-	* Now, we need to check if ownerId 
-	* is some dangerous role to trasfer membership to.
-	*
-	* For now, we check that ownerId does not have
-	* priviledge to execute server program or/and
-	* read/write server files, or/and pg read/write all data
-	*/
-
-	/* All checks passed, hope will not be hacked here (again) */
-	return !has_privs_of_unwanted_system_role(ownerId);
-}
-
-// -- non-upstream patch end
-
 /*
  * Is member a member of role (directly or indirectly)?
  *
