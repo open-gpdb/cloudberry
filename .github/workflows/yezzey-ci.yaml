@@ -117,7 +117,7 @@ jobs:
 
       - name: Setup MinIO
         run: |
-          set -ex pipefail
+          set -exo pipefail
 
           # Make sure configs that use the "minio" hostname resolve it to the
           # local MinIO server started below.
