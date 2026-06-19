@@ -129,6 +129,7 @@
 #include "catalog/pg_type.h"
 #include "catalog/pg_user_mapping.h"
 #include "catalog/oid_dispatch.h"
+#include "access/transam.h"
 #include "cdb/cdbvars.h"
 #include "executor/execdesc.h"
 #include "lib/rbtree.h"

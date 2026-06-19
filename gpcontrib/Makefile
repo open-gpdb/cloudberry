@@ -35,10 +35,6 @@ else
                diskquota
 endif
 
-ifeq "$(with_diskquota)" "yes"
-	recurse_targets += diskquota
-endif
-
 ifeq "$(with_gp_stats_collector)" "yes"
 	recurse_targets += gp_stats_collector
 endif
