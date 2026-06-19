@@ -116,6 +116,7 @@ jobs:
           echo "SRC_DIR=${GITHUB_WORKSPACE}" | tee -a "$GITHUB_ENV"
 
       - name: Setup MinIO
+        shell: bash
         run: |
           set -exo pipefail
 
