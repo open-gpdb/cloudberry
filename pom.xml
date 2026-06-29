@@ -155,6 +155,9 @@ code or new licensing patterns.
 
             <exclude>gpcontrib/diskquota/**</exclude>
 
+            <exclude>gpcontrib/gp_url_tools/Makefile</exclude>
+            <exclude>gpcontrib/gp_url_tools/gp_url_tools.control</exclude>
+
             <exclude>getversion</exclude>
             <exclude>.git-blame-ignore-revs</exclude>
             <exclude>.dir-locals.el</exclude>
