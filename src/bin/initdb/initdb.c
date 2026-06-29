@@ -175,6 +175,8 @@ static char *external_fts_files;
 #endif
 static char *system_functions_file;
 static char *system_views_file;
+static char *system_views_gp_file;
+static char *system_views_gp_summary_file;
 static bool success = false;
 static bool made_new_pgdata = false;
 static bool found_existing_pgdata = false;
@@ -1705,8 +1707,6 @@ setup_run_file(FILE *cmdfd, const char *filename)
 	}
 
 	PG_CMD_PUTS("\n\n");
-
-	free(lines);
 }
 
 /*
@@ -2024,7 +2024,7 @@ setup_cdb_schema(FILE *cmdfd)
 
 	/* Collect all files with .sql suffix in array. */
 	nscripts = 0;
-	while ((file = readdir(dir)) != NULL)
+	while (errno = 0, (file = readdir(dir)) != NULL)
 	{
 		int			namelen = strlen(file->d_name);
 
@@ -2054,12 +2054,16 @@ setup_cdb_schema(FILE *cmdfd)
 		errno = 0;
 #endif
 
-	closedir(dir);
-
 	if (errno != 0)
 	{
-		/* some kind of I/O error? */
 		pg_log_error("error while reading cdb_init.d directory: %m");
+		closedir(dir);
+		exit(1);
+	}
+
+	if (closedir(dir))
+	{
+		pg_log_error("error while closing cdb_init.d directory: %m");
 		exit(1);
 	}
 
@@ -2833,6 +2837,8 @@ setup_data_file_paths(void)
 	set_input(&system_constraints_file, "system_constraints.sql");
 	set_input(&system_functions_file, "system_functions.sql");
 	set_input(&system_views_file, "system_views.sql");
+	set_input(&system_views_gp_file, "system_views_gp.sql");
+	set_input(&system_views_gp_summary_file, "system_views_gp_summary.sql");
 
 	set_input(&cdb_init_d_dir, "cdb_init.d");
 
@@ -2866,6 +2872,8 @@ setup_data_file_paths(void)
 #endif
 	check_input(system_functions_file);
 	check_input(system_views_file);
+	check_input(system_views_gp_file);
+	check_input(system_views_gp_summary_file);
 }
 
 
@@ -3233,6 +3241,8 @@ initialize_data_directory(void)
 	 */
 
 	setup_run_file(cmdfd, system_views_file);
+	setup_run_file(cmdfd, system_views_gp_file);
+	setup_run_file(cmdfd, system_views_gp_summary_file);
 
 	setup_description(cmdfd);
 

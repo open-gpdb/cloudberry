@@ -121,12 +121,7 @@ create_upper_paths_hook_type create_upper_paths_hook = NULL;
 #define EXPRKIND_TABLEFUNC_LATERAL	12
 #define EXPRKIND_WINDOW_BOUND		13
 
-/* Passthrough data for standard_qp_callback */
-typedef struct
-{
-	List	   *activeWindows;	/* active windows, if any */
-	List	   *groupClause;	/* overrides parse->groupClause */
-} standard_qp_extra;
+/* standard_qp_extra is defined in optimizer/planner.h */
 
 /*
  * Data specific to grouping sets
@@ -333,6 +328,27 @@ planner(Query *parse, const char *query_string, int cursorOptions,
 
 	optimizer_options = palloc(sizeof(OptimizerOptions));
 	optimizer_options->create_vectorization_plan = false;
+
+	/*
+	 * Set parallel plan creation based on PostgreSQL planner's parallel safety checks.
+	 * This synchronizes with the same conditions used in standard_planner().
+	 */
+	if ((cursorOptions & CURSOR_OPT_PARALLEL_OK) != 0 &&
+		IsUnderPostmaster &&
+		parse->commandType == CMD_SELECT &&
+		!parse->hasModifyingCTE &&
+		max_parallel_workers_per_gather > 0 &&
+		!IsParallelWorker())
+	{
+		/* All cheap tests pass, check query tree for parallel safety */
+		char maxParallelHazard = max_parallel_hazard(parse);
+		optimizer_options->create_parallel_plan = (maxParallelHazard != PROPARALLEL_UNSAFE);
+	}
+	else
+	{
+		/* Skip the query tree scan, assume unsafe */
+		optimizer_options->create_parallel_plan = false;
+	}
 	if (planner_hook)
 	{
 		if (gp_log_optimization_time)
@@ -952,6 +968,17 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 	root->non_recursive_path = NULL;
 	root->partColsUpdated = false;
 	root->is_correlated_subplan = false;
+
+	/*
+	 * Save a copy of the raw parse tree for AQUMV join exact-match.
+	 * This must be done before any preprocessing modifies the parse tree.
+	 */
+	if (Gp_role == GP_ROLE_DISPATCH &&
+		enable_answer_query_using_materialized_views &&
+		parent_root == NULL)
+		root->aqumv_raw_parse = copyObject(parse);
+	else
+		root->aqumv_raw_parse = NULL;
 
 	/*
 	 * If there is a WITH list, process each WITH query and either convert it
@@ -1965,6 +1992,13 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 
 			/* Do the real work. */
 			current_rel = answer_query_using_materialized_views(root, aqumv_context);
+
+			/* Try join AQUMV if single-table didn't rewrite. */
+			if (current_rel == aqumv_context->current_rel)
+			{
+				current_rel = answer_query_using_materialized_views_for_join(root, aqumv_context);
+			}
+
 			/* parse tree may be rewriten. */
 			parse = root->parse;
 		}

@@ -271,3 +271,35 @@ udpifc result:
 
 Notice that: Lower TPS does not mean the protocol is slower, might means that the cpu time taken by the protocol is low. For the udpifc, it satisfies the highest tps required by `cbdb`. at the same time it occupies a lower cpu than other types of interconnect.
 
+# interconnect statistics
+
+This extension provides cumulative interconnect statistics for Apache Cloudberry, including queue sizes, buffer usage, retransmits, packet errors, and other UDPIFC‑related metrics. 
+
+It exposes three views with statistics at different aggregation levels:
+- `gp_interconnect_stats` — total cluster‑wide stats;
+- `gp_interconnect_stats_per_segment` — stats per segment;
+- `gp_interconnect_stats_per_host` — stats grouped by host.
+
+## How to create the extension
+
+Add interconnect to shared_preload_libraries and restart the cluster.
+
+```
+gpconfig -c shared_preload_libraries -v \
+  "$(psql -At -c \
+    "SELECT array_to_string( \
+        array_append( \
+          string_to_array( \
+            current_setting('shared_preload_libraries'), \
+            ','), \
+          'interconnect'), \
+        ',')" \
+    postgres)"
+gpstop -ra
+```
+
+Create the extension in your database.
+
+```
+CREATE EXTENSION interconnect;
+```

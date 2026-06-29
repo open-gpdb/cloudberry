@@ -405,6 +405,10 @@ optimize_query(Query *parse, int cursorOptions, ParamListInfo boundParams, Optim
 	result->oneoffPlan = glob->oneoffPlan;
 	result->transientPlan = glob->transientPlan;
 
+	result->queryId = parse->queryId;
+	result->stmt_location = parse->stmt_location;
+	result->stmt_len = parse->stmt_len;
+
 	return result;
 }
 
@@ -544,6 +548,10 @@ push_down_expr_mutator(Node *node, List *child_tlist)
 			if (IsA(child_tle->expr, Const))
 			{
 				((Const *) child_tle->expr)->consttypmod = ((Var *) node)->vartypmod;
+			}
+			else if (IsA(child_tle->expr, Var))
+			{
+				((Var *) child_tle->expr)->vartypmod = ((Var *) node)->vartypmod;
 			}
 
 			return (Node *) child_tle->expr;

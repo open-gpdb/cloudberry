@@ -16,12 +16,15 @@
 #include "ic_common.h"
 #include "tcp/ic_tcp.h"
 #include "udp/ic_udpifc.h"
+#include "storage/ipc.h"
 
 #ifdef ENABLE_IC_PROXY
 #include "proxy/ic_proxy_server.h"
 #endif
 
 PG_MODULE_MAGIC;
+
+static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
 
 MotionIPCLayer tcp_ipc_layer = {
     .ic_type = INTERCONNECT_TYPE_TCP,
@@ -141,6 +144,15 @@ MotionIPCLayer udpifc_ipc_layer = {
     .GetMotionSentRecordTypmod = GetMotionSentRecordTypmod,
 };
 
+static void
+InterconnectShmemInit(void)
+{
+    if (prev_shmem_startup_hook)
+        prev_shmem_startup_hook();
+
+    InterconnectShmemInitUDPIFC();
+}
+
 void
 _PG_init(void)
 {
@@ -153,4 +165,18 @@ _PG_init(void)
 	RegisterIPCLayerImpl(&tcp_ipc_layer);
 	RegisterIPCLayerImpl(&udpifc_ipc_layer);
 	RegisterIPCLayerImpl(&proxy_ipc_layer);
+
+    if (Gp_interconnect_type == INTERCONNECT_TYPE_UDPIFC)
+    {
+	    RequestAddinShmemSpace(MAXALIGN(sizeof(ICStatisticsShmem)));
+
+        prev_shmem_startup_hook = shmem_startup_hook;
+        shmem_startup_hook = InterconnectShmemInit;
+    }
+}
+
+void
+_PG_fini(void)
+{
+    shmem_startup_hook = prev_shmem_startup_hook;
 }
