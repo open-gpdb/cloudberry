@@ -23,6 +23,7 @@ ifeq "$(enable_debug_extensions)" "yes"
 			   gp_relsizes_stats \
                gp_replica_check \
                gp_toolkit \
+               gp_url_tools \
                pg_hint_plan \
                reject_partition_fullscan
 else
@@ -33,6 +34,7 @@ else
 			   gp_relsizes_stats \
                gp_exttable_fdw \
                gp_toolkit \
+			   gp_url_tools \
                pg_hint_plan
 endif
 
