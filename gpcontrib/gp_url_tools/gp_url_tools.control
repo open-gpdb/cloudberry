@@ -1,0 +1,6 @@
+# gp_url_tools extension
+comment = 'Functions for working with URL-s'
+default_version = '1.0'
+module_pathname = '$libdir/gp_url_tools'
+relocatable = true
+trusted = true
