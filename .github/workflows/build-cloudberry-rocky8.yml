@@ -319,7 +319,8 @@ jobs:
                "make_configs":["gpcontrib/orafce:installcheck",
                                "gpcontrib/zstd:installcheck",
                                "gpcontrib/gp_sparse_vector:installcheck",
-                               "gpcontrib/gp_toolkit:installcheck"]
+                               "gpcontrib/gp_toolkit:installcheck",
+                               "gpcontrib/gp_url_tools:installcheck"]
               },
               {"test":"gpcontrib-gp-stats-collector",
                "make_configs":["gpcontrib/gp_stats_collector:installcheck"],
