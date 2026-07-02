@@ -54,6 +54,7 @@
 #
 # Optional Environment Variables:
 #   LOG_DIR - Directory for logs (defaults to ${SRC_DIR}/build-logs)
+#   CONFIGURE_EXTRA_OPTS - Args to pass to configure command
 #   ENABLE_DEBUG - Enable debug build options (true/false, defaults to
 #                  false)
 #
@@ -193,7 +194,8 @@ execute_cmd ./configure --prefix=${BUILD_DESTINATION} \
             ${CONFIGURE_YEZZEY_OPTS} \
      ${CONFIGURE_EXTRA_OPTS:-} \
             --with-includes=/usr/local/xerces-c/include \
-            --with-libraries=${BUILD_DESTINATION}/lib || exit 4
+            --with-libraries=${BUILD_DESTINATION}/lib \
+            ${CONFIGURE_EXTRA_OPTS:-""} || exit 4
 log_section_end "Configure"
 
 # Capture version information
