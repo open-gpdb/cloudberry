@@ -900,6 +900,7 @@ GuessControlValues(void)
 	ControlFile.toast_max_chunk_size = TOAST_MAX_CHUNK_SIZE;
 	ControlFile.loblksize = LOBLKSIZE;
 	ControlFile.float8ByVal = FLOAT8PASSBYVAL;
+	ControlFile.bigendian_varlena = BIGENDIAN_VARLENA_LAYOUT;
 	ControlFile.data_checksum_version = PG_DATA_CHECKSUM_VERSION;
 
 	/*
@@ -984,6 +985,8 @@ PrintControlValues(bool guessed)
 		   _("64-bit integers"));
 	printf(_("Float8 argument passing:              %s\n"),
 		   (ControlFile.float8ByVal ? _("by value") : _("by reference")));
+	printf(_("Varlena header byte order:            %s\n"),
+		   (ControlFile.bigendian_varlena ? _("network (GPDB6-compatible)") : _("native")));
 	printf(_("Data page checksum version:           %u\n"),
 		   ControlFile.data_checksum_version);
 	printf(_("File encryption method:               %s\n"),

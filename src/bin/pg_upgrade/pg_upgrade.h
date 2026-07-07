@@ -194,6 +194,12 @@ typedef enum
 #define LARGE_OBJECT_SIZE_PG_CONTROL_VER 942
 
 /*
+ * varlena header byte order (bigendian_varlena) added to pg_control in
+ * Cloudberry to guard GPDB6-compatible vs native on-disk varlena layout.
+ */
+#define VARLENA_LAYOUT_PG_CONTROL_VER 13000701
+
+/*
  * change in JSONB format during 9.4 beta
  */
 #define JSONB_FORMAT_CHANGE_CAT_VER 201409291
@@ -323,6 +329,7 @@ typedef struct
 	uint32		large_object;
 	bool		date_is_int;
 	bool		float8_pass_by_value;
+	bool		varlena_bigendian;
 	uint32		data_checksum_version;
 	int		file_encryption_method;
 } ControlData;

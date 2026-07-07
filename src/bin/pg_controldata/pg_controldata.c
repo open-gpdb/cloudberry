@@ -336,6 +336,8 @@ main(int argc, char *argv[])
 		   _("64-bit integers"));
 	printf(_("Float8 argument passing:              %s\n"),
 		   (ControlFile->float8ByVal ? _("by value") : _("by reference")));
+	printf(_("Varlena header byte order:            %s\n"),
+		   (ControlFile->bigendian_varlena ? _("network (GPDB6-compatible)") : _("native")));
 	printf(_("Data page checksum version:           %u\n"),
 		   ControlFile->data_checksum_version);
 	printf(_("Mock authentication nonce:            %s\n"),
