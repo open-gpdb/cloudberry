@@ -47,7 +47,7 @@ ifeq "$(with_gp_stats_collector)" "yes"
 	recurse_targets += gp_stats_collector
 endif
 ifeq "$(with_yezzey)" "yes"
-        recurse_targets += yezzey
+	recurse_targets += yezzey
 endif
 ifeq "$(with_zstd)" "yes"
 	recurse_targets += zstd
