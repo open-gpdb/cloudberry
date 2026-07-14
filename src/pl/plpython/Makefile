@@ -41,6 +41,13 @@ OBJS = \
 DATA = $(NAME)u.control $(NAME)u--1.0.sql
 ifeq ($(python_majorversion),2)
 DATA += plpythonu.control plpythonu--1.0.sql
+else
+# Cloudberry builds PL/Python against Python 3 only.  Still install the legacy
+# plpythonu extension files (their control/SQL are remapped onto the plpython3
+# runtime) so that a GPDB6 dump which does "CREATE EXTENSION plpythonu" can be
+# restored during a binary upgrade instead of failing to open the missing
+# plpythonu.control.
+DATA += plpythonu.control plpythonu--1.0.sql
 endif
 
 # header files to install - it's not clear which of these might be needed
