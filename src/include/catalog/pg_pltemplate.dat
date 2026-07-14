@@ -32,10 +32,15 @@
   tmplhandler => 'plperlu_call_handler', tmplinline => 'plperlu_inline_handler',
   tmplvalidator => 'plperlu_validator', tmpllibrary => '$libdir/plperl',
   tmplacl => '_null_' },
+# Cloudberry ships only plpython3 (Python 3). Remap the legacy plpythonu
+# template onto the plpython3 handler/library so that objects dumped from a
+# GPDB6 cluster (e.g. "CREATE OR REPLACE PROCEDURAL LANGUAGE plpythonu")
+# recreate against the Python 3 runtime during pg_upgrade instead of failing
+# on the missing $libdir/plpython2.
 { tmplname => 'plpythonu', tmpltrusted => 'f', tmpldbacreate => 'f',
-  tmplhandler => 'plpython_call_handler',
-  tmplinline => 'plpython_inline_handler',
-  tmplvalidator => 'plpython_validator', tmpllibrary => '$libdir/plpython2',
+  tmplhandler => 'plpython3_call_handler',
+  tmplinline => 'plpython3_inline_handler',
+  tmplvalidator => 'plpython3_validator', tmpllibrary => '$libdir/plpython3',
   tmplacl => '_null_' },
 { tmplname => 'plpython2u', tmpltrusted => 'f', tmpldbacreate => 'f',
   tmplhandler => 'plpython2_call_handler',
