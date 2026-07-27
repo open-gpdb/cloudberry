@@ -661,6 +661,9 @@ jobs:
             "${SRC_DIR}"/devops/build/packaging/rpm/build-rpm.sh --version "${CBDB_VERSION}" --release "${BUILD_NUMBER}" "${DEBUG_RPMBUILD_OPT}"
 
             # Get OS version and move RPM
+            # build-rpm.sh normalizes the published file name to the historical
+            # format (without the "-<major>" segment); the package Name metadata
+            # still embeds the major version.
             os_version=$(grep -oP '(?<=^VERSION_ID=")[0-9]+' /etc/os-release)
             RPM_FILE="${HOME}"/rpmbuild/RPMS/x86_64/apache-cloudberry-db-incubating-"${CBDB_VERSION}"-"${BUILD_NUMBER}""${DEBUG_IDENTIFIER}".el"${os_version}".x86_64.rpm
             cp "${RPM_FILE}" "${SRC_DIR}"
@@ -920,9 +923,9 @@ jobs:
             fi
 
             echo "Installation completed successfully"
-            rpm -qi apache-cloudberry-db-incubating
+            rpm -qa 'apache-cloudberry-db-incubating*' | xargs -r rpm -qi
             echo "Installed files:"
-            rpm -ql apache-cloudberry-db-incubating
+            rpm -qa 'apache-cloudberry-db-incubating*' | xargs -r rpm -ql
           } 2>&1 | tee -a install-logs/details/rpm-installation.log
 
       - name: Upload install logs
@@ -942,7 +945,7 @@ jobs:
             echo "# Installed Package Summary"
             echo "\`\`\`"
 
-            rpm -qi apache-cloudberry-db-incubating
+            rpm -qa 'apache-cloudberry-db-incubating*' | xargs -r rpm -qi
             echo "\`\`\`"
           } >> "$GITHUB_STEP_SUMMARY" || true
 
@@ -1330,7 +1333,7 @@ jobs:
             fi
 
             echo "Installation completed successfully"
-            rpm -qi apache-cloudberry-db-incubating
+            rpm -qa 'apache-cloudberry-db-incubating*' | xargs -r rpm -qi
           } 2>&1 | tee -a build-logs/details/rpm-installation.log
 
           # Clean up downloaded RPM artifacts to free disk space
@@ -1422,6 +1425,10 @@ jobs:
         shell: bash {0}
         run: |
           set -o pipefail
+
+          # Grant gpadmin write access to the install directory
+          # -H follows the command-line symlink to the real directory.
+          chown -RH gpadmin:gpadmin "${BUILD_DESTINATION}/"
 
           # Initialize test status
           overall_status=0
