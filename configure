@@ -725,6 +725,7 @@ with_zstd
 with_yezzey
 PROTOC
 with_gp_stats_collector
+with_varlena_gpdb_layout
 with_diskquota
 with_zstd
 with_libbz2
@@ -949,6 +950,7 @@ with_libbz2
 with_zstd
 with_diskquota
 with_gp_stats_collector
+with_varlena_gpdb_layout
 with_yezzey
 with_rt
 with_libcurl
@@ -11453,6 +11455,41 @@ else
 
   with_gp_stats_collector=no
 
+fi
+
+#
+# varlena_gpdb_layout
+#
+
+
+
+# Check whether --with-varlena_gpdb_layout was given.
+if test "${with_varlena_gpdb_layout+set}" = set; then :\
+  withval=$with_varlena_gpdb_layout;
+  case $withval in
+    yes)
+      :
+      ;;
+    no)
+      :
+      ;;
+    *)
+      as_fn_error $? "no argument expected for --with-varlena_gpdb_layout option" "$LINENO" 5
+      ;;
+  esac
+
+else $as_nop
+  with_varlena_gpdb_layout=no
+
+fi
+
+
+
+
+if test "$with_varlena_gpdb_layout" = yes; then
+  printf "%s\n" "#define FORCE_BIGENDIAN_VARLENA 1" >>confdefs.h
+  CFLAGS="$CFLAGS -DFORCE_BIGENDIAN_VARLENA"
+  CXXFLAGS="$CXXFLAGS -DFORCE_BIGENDIAN_VARLENA"
 fi
 
 #
