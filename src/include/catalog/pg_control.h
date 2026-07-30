@@ -34,17 +34,23 @@
 
 /*
  * On-disk varlena header byte order produced by this build, stamped into
- * ControlFileData.bigendian_varlena.  1 == big-endian/network order (real
+ * ControlFileData.bigendian_varlena.  true == big-endian/network order (real
  * big-endian hardware, or -DFORCE_BIGENDIAN_VARLENA for GPDB6 compatibility;
- * see the varlena macros in postgres.h); 0 == upstream native little-endian.
+ * see the varlena macros in postgres.h); false == upstream native little-endian.
  * Defined here rather than in postgres.h so the frontend tools (pg_resetwal,
  * pg_controldata, pg_upgrade) that only include pg_control.h can see it.
  */
 #if defined(WORDS_BIGENDIAN) || defined(FORCE_BIGENDIAN_VARLENA)
-#define BIGENDIAN_VARLENA_LAYOUT	1
+#define BIGENDIAN_VARLENA_LAYOUT	true
 #else
-#define BIGENDIAN_VARLENA_LAYOUT	0
+#define BIGENDIAN_VARLENA_LAYOUT	false
 #endif
+
+static inline const char *
+varlena_order_to_str(bool order_is_bigendian)
+{
+	return order_is_bigendian ? "network-byte-order (GPDB6-compatible)" : "native";
+}
 
 /*
  * Body of CheckPoint XLOG records.  This is declared here because we keep

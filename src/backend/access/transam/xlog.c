@@ -5008,8 +5008,8 @@ ReadControlFile(void)
 				(errmsg("database files are incompatible with server"),
 				 errdetail("The database cluster was initialized with %s varlena headers,"
 						   " but the server was compiled for %s.",
-						   ControlFile->bigendian_varlena ? "network-byte-order (GPDB6-compatible)" : "native",
-						   BIGENDIAN_VARLENA_LAYOUT ? "network-byte-order (GPDB6-compatible)" : "native"),
+						   varlena_order_to_str(ControlFile->bigendian_varlena),
+						   varlena_order_to_str(BIGENDIAN_VARLENA_LAYOUT)),
 				 errhint("It looks like you need to recompile or initdb.")));
 
 	wal_segment_size = ControlFile->xlog_seg_size;
