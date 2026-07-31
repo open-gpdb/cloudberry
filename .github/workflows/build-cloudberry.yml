@@ -541,7 +541,7 @@ jobs:
 
       - name: Checkout Apache Cloudberry
         if: needs.check-skip.outputs.should_skip != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
           submodules: true
@@ -759,7 +759,7 @@ jobs:
 
       - name: Upload build logs
         if: needs.check-skip.outputs.should_skip != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: build-logs-rocky${{ matrix.rocky_version }}-${{ env.BUILD_TIMESTAMP }}
           path: |
@@ -768,7 +768,7 @@ jobs:
 
       - name: Upload Cloudberry RPM build artifacts
         if: needs.check-skip.outputs.should_skip != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: apache-cloudberry-db-incubating-rpm-build-artifacts-rocky${{ matrix.rocky_version }}
           retention-days: ${{ env.LOG_RETENTION_DAYS }}
@@ -778,7 +778,7 @@ jobs:
 
       - name: Upload Cloudberry source build artifacts
         if: needs.check-skip.outputs.should_skip != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: apache-cloudberry-db-incubating-source-build-artifacts-rocky${{ matrix.rocky_version }}
           retention-days: ${{ env.LOG_RETENTION_DAYS }}
@@ -845,7 +845,7 @@ jobs:
 
       - name: Download Cloudberry RPM build artifacts
         if: needs.check-skip.outputs.should_skip != 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: apache-cloudberry-db-incubating-rpm-build-artifacts-rocky${{ matrix.rocky_version }}
           path: ${{ github.workspace }}/rpm_build_artifacts
@@ -980,7 +980,7 @@ jobs:
 
       - name: Upload install logs
         if: needs.check-skip.outputs.should_skip != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: install-logs-rocky${{ matrix.rocky_version }}
           path: |
@@ -1253,7 +1253,7 @@ jobs:
 
       - name: Download Cloudberry RPM build artifacts
         if: needs.check-skip.outputs.should_skip != 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: apache-cloudberry-db-incubating-rpm-build-artifacts-rocky${{ matrix.rocky_version }}
           path: ${{ github.workspace }}/rpm_build_artifacts
@@ -1263,7 +1263,7 @@ jobs:
 
       - name: Download Cloudberry Source build artifacts
         if: needs.check-skip.outputs.should_skip != 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: apache-cloudberry-db-incubating-source-build-artifacts-rocky${{ matrix.rocky_version }}
           path: ${{ github.workspace }}/source_build_artifacts
@@ -1938,7 +1938,7 @@ jobs:
 
       - name: Upload test logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-logs-${{ matrix.test }}-rocky${{ matrix.rocky_version }}
           path: |
@@ -1947,7 +1947,7 @@ jobs:
 
       - name: Upload Test Metadata
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-metadata-${{ matrix.test }}-rocky${{ matrix.rocky_version }}
           path: |
@@ -1955,7 +1955,7 @@ jobs:
           retention-days: ${{ env.LOG_RETENTION_DAYS }}
 
       - name: Upload test results files
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: results-${{ matrix.test }}-rocky${{ matrix.rocky_version }}
           path: |
@@ -1966,7 +1966,7 @@ jobs:
 
       - name: Upload test regression logs
         if: failure() || cancelled()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: regression-logs-${{ matrix.test }}-rocky${{ matrix.rocky_version }}
           path: |
