@@ -20,17 +20,17 @@ CREATE TABLE relaccess.relaccess_stats (
 ) DISTRIBUTED BY (relid);
 
 CREATE FUNCTION relaccess.relaccess_stats_dump()
-RETURNS void
+RETURNS SETOF void
 AS 'MODULE_PATHNAME', 'relaccess_stats_dump'
 LANGUAGE C VOLATILE EXECUTE ON MASTER;
 
 CREATE FUNCTION relaccess.relaccess_stats_update()
-RETURNS void
+RETURNS SETOF void
 AS 'MODULE_PATHNAME', 'relaccess_stats_update'
 LANGUAGE C VOLATILE EXECUTE ON MASTER;
 
 CREATE FUNCTION relaccess.relaccess_stats_fillfactor()
-RETURNS INT2
+RETURNS SETOF INT2
 AS 'MODULE_PATHNAME', 'relaccess_stats_fillfactor'
 LANGUAGE C VOLATILE EXECUTE ON MASTER;
 
