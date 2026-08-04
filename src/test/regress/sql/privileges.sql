@@ -1226,7 +1226,8 @@ EXCEPTION WHEN OTHERS THEN
 END$$;
 ALTER FUNCTION terminate_nothrow OWNER TO pg_signal_backend;
 SELECT backend_type FROM pg_stat_activity
-WHERE CASE WHEN COALESCE(usesysid, 10) = 10 THEN terminate_nothrow(pid) END;
+WHERE CASE WHEN COALESCE(usesysid, 10) = 10 THEN terminate_nothrow(pid) END
+  AND backend_type <> 'autovacuum worker';
 ROLLBACK;
 
 -- test default ACLs
