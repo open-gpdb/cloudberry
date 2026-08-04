@@ -72,7 +72,6 @@ static void relaccess_stats_update_internal(void);
 static void relaccess_dump_to_files(bool only_this_db);
 static void relaccess_dump_to_files_internal(HTAB *files);
 static void relaccess_upsert_from_file(void);
-static void relaccess_shmem_request(void);
 static void relaccess_shmem_startup(void);
 static void relaccess_shmem_shutdown(int code, Datum arg);
 static uint32 relaccess_hash_fn(const void *key, Size keysize);
@@ -80,7 +79,7 @@ static int relaccess_match_fn(const void *key1, const void *key2, Size keysize);
 static uint32 local_relaccess_hash_fn(const void *key, Size keysize);
 static int local_relaccess_match_fn(const void *key1, const void *key2,
                                     Size keysize);
-static bool collect_relaccess_hook(List *rangeTable, List *rtePermInfos,
+static bool collect_relaccess_hook(List *rangeTable,
                                    bool ereport_on_violation);
 static void relaccess_xact_callback(XactEvent event, void *arg);
 static void collect_truncate_hook(PlannedStmt *pstmt, const char *queryString,
@@ -96,7 +95,6 @@ static void memorize_local_access_entry(Oid relid, AclMode perms);
 static void update_relname_cache(Oid relid, char *relname);
 static StringInfoData get_dump_filename(Oid dbid);
 
-static shmem_request_hook_type prev_shmem_request_hook = NULL;
 static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
 static ExecutorCheckPerms_hook_type prev_check_perms_hook = NULL;
 static ProcessUtility_hook_type next_ProcessUtility_hook = NULL;
@@ -170,22 +168,6 @@ static bool had_ht_overflow = false;
   (((perms) & (ACL_INSERT | ACL_UPDATE | ACL_DELETE | ACL_TRUNCATE)) != 0)
 
 #define is_read(perms) (!is_write(perms) && ((perms) & ACL_SELECT) != 0)
-
-/*
- * Shmem request hook: request shared memory and LWLocks.
- * In PG16+, RequestAddinShmemSpace/RequestNamedLWLockTranche must be called
- * from shmem_request_hook, not directly from _PG_init().
- */
-static void relaccess_shmem_request() {
-  if (prev_shmem_request_hook)
-    prev_shmem_request_hook();
-
-  RequestNamedLWLockTranche("gp_relaccess_stats", 2);
-  Size size = MAXALIGN(sizeof(relaccessGlobalData));
-  size = add_size(size,
-                  hash_estimate_size(relaccess_size, sizeof(relaccessEntry)));
-  RequestAddinShmemSpace(size);
-}
 
 static void relaccess_shmem_startup() {
   bool found;
@@ -280,8 +262,12 @@ void _PG_init(void) {
     return;
   }
 
-  prev_shmem_request_hook = shmem_request_hook;
-  shmem_request_hook = relaccess_shmem_request;
+  RequestNamedLWLockTranche("gp_relaccess_stats", 2);
+  Size size = MAXALIGN(sizeof(relaccessGlobalData));
+  size = add_size(size,
+                  hash_estimate_size(relaccess_size, sizeof(relaccessEntry)));
+  RequestAddinShmemSpace(size);
+
   prev_shmem_startup_hook = shmem_startup_hook;
   shmem_startup_hook = relaccess_shmem_startup;
   prev_check_perms_hook = ExecutorCheckPerms_hook;
@@ -314,7 +300,6 @@ void _PG_fini(void) {
   if (Gp_role != GP_ROLE_DISPATCH) {
     return;
   }
-  shmem_request_hook = prev_shmem_request_hook;
   shmem_startup_hook = prev_shmem_startup_hook;
   ExecutorCheckPerms_hook = prev_check_perms_hook;
   ProcessUtility_hook = next_ProcessUtility_hook;
@@ -322,20 +307,23 @@ void _PG_fini(void) {
   object_access_hook = prev_object_access_hook;
 }
 
-static bool collect_relaccess_hook(List *rangeTable, List *rtePermInfos,
+static bool collect_relaccess_hook(List *rangeTable,
                                    bool ereport_on_violation) {
   if (prev_check_perms_hook &&
-      !prev_check_perms_hook(rangeTable, rtePermInfos, ereport_on_violation)) {
+      !prev_check_perms_hook(rangeTable, ereport_on_violation)) {
     return false;
   }
   if (Gp_role == GP_ROLE_DISPATCH && is_enabled) {
-    ListCell *l;
-    foreach (l, rtePermInfos) {
-      RTEPermissionInfo *perminfo = (RTEPermissionInfo *)lfirst(l);
-      AclMode requiredPerms = perminfo->requiredPerms;
+    ListCell *r;
+    foreach (r, rangeTable) {
+      RangeTblEntry *rte = (RangeTblEntry *)lfirst(r);
+      if (rte->rtekind != RTE_RELATION) {
+        continue;
+      }
+      AclMode requiredPerms = rte->requiredPerms;
       if (is_read(requiredPerms) || is_write(requiredPerms)) {
-        memorize_local_access_entry(perminfo->relid, requiredPerms);
-        update_relname_cache(perminfo->relid, NULL);
+        memorize_local_access_entry(rte->relid, requiredPerms);
+        update_relname_cache(rte->relid, NULL);
       }
     }
   }
