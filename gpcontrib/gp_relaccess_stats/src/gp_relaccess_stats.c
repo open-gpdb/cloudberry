@@ -1,4 +1,5 @@
 #include "postgres.h"
+#include "access/table.h"
 #include "access/xact.h"
 #include "access/hash.h"
 #include "catalog/objectaccess.h"
@@ -22,6 +23,7 @@
 #include "utils/timestamp.h"
 #include "tcop/utility.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -70,6 +72,7 @@ static void relaccess_stats_update_internal(void);
 static void relaccess_dump_to_files(bool only_this_db);
 static void relaccess_dump_to_files_internal(HTAB *files);
 static void relaccess_upsert_from_file(void);
+static void relaccess_shmem_request(void);
 static void relaccess_shmem_startup(void);
 static void relaccess_shmem_shutdown(int code, Datum arg);
 static uint32 relaccess_hash_fn(const void *key, Size keysize);
@@ -77,12 +80,15 @@ static int relaccess_match_fn(const void *key1, const void *key2, Size keysize);
 static uint32 local_relaccess_hash_fn(const void *key, Size keysize);
 static int local_relaccess_match_fn(const void *key1, const void *key2,
                                     Size keysize);
-static bool collect_relaccess_hook(List *rangeTable, bool ereport_on_violation);
+static bool collect_relaccess_hook(List *rangeTable, List *rtePermInfos,
+                                   bool ereport_on_violation);
 static void relaccess_xact_callback(XactEvent event, void *arg);
-static void collect_truncate_hook(Node *parsetree, const char *queryString,
+static void collect_truncate_hook(PlannedStmt *pstmt, const char *queryString,
+                                  bool readOnlyTree,
                                   ProcessUtilityContext context,
-                                  ParamListInfo params, DestReceiver *dest,
-                                  char *completionTag);
+                                  ParamListInfo params,
+                                  QueryEnvironment *queryEnv,
+                                  DestReceiver *dest, QueryCompletion *qc);
 static void relaccess_executor_end_hook(QueryDesc *query_desc);
 static void relaccess_drop_hook(ObjectAccessType access, Oid classId,
                                 Oid objectId, int subId, void *arg);
@@ -90,6 +96,7 @@ static void memorize_local_access_entry(Oid relid, AclMode perms);
 static void update_relname_cache(Oid relid, char *relname);
 static StringInfoData get_dump_filename(Oid dbid);
 
+static shmem_request_hook_type prev_shmem_request_hook = NULL;
 static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
 static ExecutorCheckPerms_hook_type prev_check_perms_hook = NULL;
 static ProcessUtility_hook_type next_ProcessUtility_hook = NULL;
@@ -162,7 +169,23 @@ static bool had_ht_overflow = false;
 #define is_write(perms)                                                        \
   (((perms) & (ACL_INSERT | ACL_UPDATE | ACL_DELETE | ACL_TRUNCATE)) != 0)
 
-#define is_read(perms) (!is_write(perms) && ((perms)&ACL_SELECT) != 0)
+#define is_read(perms) (!is_write(perms) && ((perms) & ACL_SELECT) != 0)
+
+/*
+ * Shmem request hook: request shared memory and LWLocks.
+ * In PG16+, RequestAddinShmemSpace/RequestNamedLWLockTranche must be called
+ * from shmem_request_hook, not directly from _PG_init().
+ */
+static void relaccess_shmem_request() {
+  if (prev_shmem_request_hook)
+    prev_shmem_request_hook();
+
+  RequestNamedLWLockTranche("gp_relaccess_stats", 2);
+  Size size = MAXALIGN(sizeof(relaccessGlobalData));
+  size = add_size(size,
+                  hash_estimate_size(relaccess_size, sizeof(relaccessEntry)));
+  RequestAddinShmemSpace(size);
+}
 
 static void relaccess_shmem_startup() {
   bool found;
@@ -176,8 +199,9 @@ static void relaccess_shmem_startup() {
   data = (relaccessGlobalData *)(ShmemInitStruct(
       "relaccess_stats", sizeof(relaccessGlobalData), &found));
   if (!found) {
-    data->relaccess_ht_lock = LWLockAssign();
-    data->relaccess_file_lock = LWLockAssign();
+    LWLockPadded *locks = GetNamedLWLockTranche("gp_relaccess_stats");
+    data->relaccess_ht_lock = &locks[0].lock;
+    data->relaccess_file_lock = &locks[1].lock;
   }
 
   memset(&info, 0, sizeof(info));
@@ -230,10 +254,6 @@ static int local_relaccess_match_fn(const void *key1, const void *key2,
 }
 
 void _PG_init(void) {
-  Size size;
-  if (Gp_role != GP_ROLE_DISPATCH) {
-    return;
-  }
   if (!process_shared_preload_libraries_in_progress) {
     return;
   }
@@ -256,6 +276,12 @@ void _PG_init(void) {
       "Note that shared memory is initialized indepemdent of this argument.",
       NULL, &is_enabled, false, PGC_SUSET, 0, NULL, NULL, NULL);
 
+  if (Gp_role != GP_ROLE_DISPATCH) {
+    return;
+  }
+
+  prev_shmem_request_hook = shmem_request_hook;
+  shmem_request_hook = relaccess_shmem_request;
   prev_shmem_startup_hook = shmem_startup_hook;
   shmem_startup_hook = relaccess_shmem_startup;
   prev_check_perms_hook = ExecutorCheckPerms_hook;
@@ -266,11 +292,6 @@ void _PG_init(void) {
   ExecutorEnd_hook = relaccess_executor_end_hook;
   prev_object_access_hook = object_access_hook;
   object_access_hook = relaccess_drop_hook;
-  RequestAddinLWLocks(2);
-  size = MAXALIGN(sizeof(relaccessGlobalData));
-  size = add_size(size,
-                  hash_estimate_size(relaccess_size, sizeof(relaccessEntry)));
-  RequestAddinShmemSpace(size);
   RegisterXactCallback(relaccess_xact_callback, NULL);
   HASHCTL ctl;
   MemSet(&ctl, 0, sizeof(ctl));
@@ -293,6 +314,7 @@ void _PG_fini(void) {
   if (Gp_role != GP_ROLE_DISPATCH) {
     return;
   }
+  shmem_request_hook = prev_shmem_request_hook;
   shmem_startup_hook = prev_shmem_startup_hook;
   ExecutorCheckPerms_hook = prev_check_perms_hook;
   ProcessUtility_hook = next_ProcessUtility_hook;
@@ -300,34 +322,33 @@ void _PG_fini(void) {
   object_access_hook = prev_object_access_hook;
 }
 
-static bool collect_relaccess_hook(List *rangeTable,
+static bool collect_relaccess_hook(List *rangeTable, List *rtePermInfos,
                                    bool ereport_on_violation) {
   if (prev_check_perms_hook &&
-      !prev_check_perms_hook(rangeTable, ereport_on_violation)) {
+      !prev_check_perms_hook(rangeTable, rtePermInfos, ereport_on_violation)) {
     return false;
   }
   if (Gp_role == GP_ROLE_DISPATCH && is_enabled) {
     ListCell *l;
-    foreach (l, rangeTable) {
-      RangeTblEntry *rte = (RangeTblEntry *)lfirst(l);
-      if (rte->rtekind != RTE_RELATION) {
-        continue;
-      }
-      Oid relid = rte->relid;
-      AclMode requiredPerms = rte->requiredPerms;
+    foreach (l, rtePermInfos) {
+      RTEPermissionInfo *perminfo = (RTEPermissionInfo *)lfirst(l);
+      AclMode requiredPerms = perminfo->requiredPerms;
       if (is_read(requiredPerms) || is_write(requiredPerms)) {
-        memorize_local_access_entry(relid, requiredPerms);
-        update_relname_cache(relid, NULL);
+        memorize_local_access_entry(perminfo->relid, requiredPerms);
+        update_relname_cache(perminfo->relid, NULL);
       }
     }
   }
   return true;
 }
 
-static void collect_truncate_hook(Node *parsetree, const char *queryString,
+static void collect_truncate_hook(PlannedStmt *pstmt, const char *queryString,
+                                  bool readOnlyTree,
                                   ProcessUtilityContext context,
-                                  ParamListInfo params, DestReceiver *dest,
-                                  char *completionTag) {
+                                  ParamListInfo params,
+                                  QueryEnvironment *queryEnv,
+                                  DestReceiver *dest, QueryCompletion *qc) {
+  Node *parsetree = pstmt->utilityStmt;
   if (nodeTag(parsetree) == T_TruncateStmt && is_enabled &&
       Gp_role == GP_ROLE_DISPATCH) {
     TruncateStmt *stmt = (TruncateStmt *)parsetree;
@@ -340,20 +361,19 @@ static void collect_truncate_hook(Node *parsetree, const char *queryString,
      **/
     foreach (cell, stmt->relations) {
       RangeVar *rv = lfirst(cell);
-      Relation rel;
-      rel = heap_openrv(rv, AccessExclusiveLock);
+      Relation rel = table_openrv(rv, AccessExclusiveLock);
       Oid relid = rel->rd_id;
-      heap_close(rel, NoLock);
+      table_close(rel, NoLock);
       memorize_local_access_entry(relid, ACL_TRUNCATE);
       update_relname_cache(relid, rv->relname);
     }
   }
   if (next_ProcessUtility_hook) {
-    next_ProcessUtility_hook(parsetree, queryString, context, params, dest,
-                             completionTag);
+    (*next_ProcessUtility_hook)(pstmt, queryString, readOnlyTree, context,
+                                params, queryEnv, dest, qc);
   } else {
-    standard_ProcessUtility(parsetree, queryString, context, params, dest,
-                            completionTag);
+    standard_ProcessUtility(pstmt, queryString, readOnlyTree, context, params,
+                            queryEnv, dest, qc);
   }
 }
 
@@ -470,22 +490,59 @@ static void relaccess_xact_callback(XactEvent event, void *arg) {
 }
 
 Datum relaccess_stats_update(PG_FUNCTION_ARGS) {
-  relaccess_stats_update_internal();
-  PG_RETURN_VOID();
+  FuncCallContext *funcctx;
+
+  if (SRF_IS_FIRSTCALL()) {
+    funcctx = SRF_FIRSTCALL_INIT();
+    funcctx->max_calls = 1;
+    relaccess_stats_update_internal();
+  }
+
+  funcctx = SRF_PERCALL_SETUP();
+  if (funcctx->call_cntr < funcctx->max_calls) {
+    SRF_RETURN_NEXT(funcctx, (Datum)0);
+  }
+  SRF_RETURN_DONE(funcctx);
 }
 
 Datum relaccess_stats_dump(PG_FUNCTION_ARGS) {
-  LWLockAcquire(data->relaccess_ht_lock, LW_EXCLUSIVE);
-  relaccess_dump_to_files(true);
-  LWLockRelease(data->relaccess_ht_lock);
-  PG_RETURN_VOID();
+  FuncCallContext *funcctx;
+
+  if (SRF_IS_FIRSTCALL()) {
+    funcctx = SRF_FIRSTCALL_INIT();
+    funcctx->max_calls = 1;
+    LWLockAcquire(data->relaccess_ht_lock, LW_EXCLUSIVE);
+    relaccess_dump_to_files(true);
+    LWLockRelease(data->relaccess_ht_lock);
+  }
+
+  funcctx = SRF_PERCALL_SETUP();
+  if (funcctx->call_cntr < funcctx->max_calls) {
+    SRF_RETURN_NEXT(funcctx, (Datum)0);
+  }
+  SRF_RETURN_DONE(funcctx);
 }
 
 Datum relaccess_stats_fillfactor(PG_FUNCTION_ARGS) {
-  LWLockAcquire(data->relaccess_ht_lock, LW_SHARED);
-  int16_t fillfactor = hash_get_num_entries(relaccesses) * 100 / relaccess_size;
-  LWLockRelease(data->relaccess_ht_lock);
-  PG_RETURN_INT16(fillfactor);
+  FuncCallContext *funcctx;
+
+  if (SRF_IS_FIRSTCALL()) {
+    int16_t fillfactor;
+
+    funcctx = SRF_FIRSTCALL_INIT();
+    funcctx->max_calls = 1;
+    LWLockAcquire(data->relaccess_ht_lock, LW_SHARED);
+    fillfactor = hash_get_num_entries(relaccesses) * 100 / relaccess_size;
+    LWLockRelease(data->relaccess_ht_lock);
+    funcctx->user_fctx = (void *)(intptr_t)fillfactor;
+  }
+
+  funcctx = SRF_PERCALL_SETUP();
+  if (funcctx->call_cntr < funcctx->max_calls) {
+    SRF_RETURN_NEXT(funcctx,
+                    Int16GetDatum((int16_t)(intptr_t)funcctx->user_fctx));
+  }
+  SRF_RETURN_DONE(funcctx);
 }
 
 Datum relaccess_stats_from_dump(PG_FUNCTION_ARGS) {
@@ -496,7 +553,7 @@ Datum relaccess_stats_from_dump(PG_FUNCTION_ARGS) {
     funcctx = SRF_FIRSTCALL_INIT();
     MemoryContext oldcontext =
         MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
-    TupleDesc tupdesc = CreateTemplateTupleDesc(11, false /* hasoid */);
+    TupleDesc tupdesc = CreateTemplateTupleDesc(11);
     TupleDescInitEntry(tupdesc, (AttrNumber)1, "relid", OIDOID, -1 /* typmod */,
                        0 /* attdim */);
     TupleDescInitEntry(tupdesc, (AttrNumber)2, "relname", NAMEOID,
