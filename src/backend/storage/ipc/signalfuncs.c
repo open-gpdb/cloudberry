@@ -75,29 +75,27 @@ pg_signal_backend(int pid, int sig, char *msg)
 
 	local_beentry = pgstat_fetch_stat_local_beentry_by_pid(pid);
 
-	/* Only allow superusers to signal superuser-owned backends. */
-	if (superuser_arg(proc->roleId) && !superuser())
+	/*
+	 * Only allow superusers to signal superuser-owned backends.  Any process
+	 * not advertising a role might have the importance of a superuser-owned
+	 * backend, so treat it that way.
+	 */
+	if ((!OidIsValid(proc->roleId) || superuser_arg(proc->roleId)) &&
+		!superuser())
 	{
-		Oid role;
-		char * appname;
+		Oid  role;
+		char *appname;
 
-		if (local_beentry == NULL) {
+		if (local_beentry == NULL)
 			return SIGNAL_BACKEND_NOSUPERUSER;
-		}
 
-		role = get_role_oid("mdb_admin", true /*if nodoby created mdb_admin role in this database*/);
+		role = get_role_oid("mdb_admin", true /* if nobody created mdb_admin role in this database */);
 		appname = local_beentry->backendStatus.st_appname;
 
-		// only allow mdb_admin to kill su queries
-		if (!is_member_of_role(GetUserId(), role)) {
-			return SIGNAL_BACKEND_NOSUPERUSER;
-		}
-
-		if (local_beentry->backendStatus.st_backendType == B_AUTOVAC_WORKER) {
-			// ok
-		} else if (appname != NULL && strcmp(appname, "MDB") == 0) {
-			// ok
-		} else {
+		if (!(OidIsValid(role) && is_member_of_role(GetUserId(), role) &&
+			 (local_beentry->backendStatus.st_backendType == B_AUTOVAC_WORKER ||
+			 (appname != NULL && strcmp(appname, "MDB") == 0))))
+		{
 			return SIGNAL_BACKEND_NOSUPERUSER;
 		}
 	}
