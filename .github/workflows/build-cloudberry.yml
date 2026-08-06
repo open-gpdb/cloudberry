@@ -320,7 +320,8 @@ jobs:
                                "gpcontrib/gp_toolkit:installcheck",
                                "gpcontrib/gp_exttable_fdw:installcheck",
                                "gpcontrib/gp_internal_tools:installcheck",
-                               "gpcontrib/gp_url_tools:installcheck"]
+                               "gpcontrib/gp_url_tools:installcheck",
+                               "gpcontrib/uuid_cb:installcheck"]
               },
               {"test":"ic-diskquota",
                "make_configs":["gpcontrib/diskquota:installcheck"],

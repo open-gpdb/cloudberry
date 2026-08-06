@@ -158,6 +158,13 @@ code or new licensing patterns.
             <exclude>gpcontrib/gp_url_tools/Makefile</exclude>
             <exclude>gpcontrib/gp_url_tools/gp_url_tools.control</exclude>
 
+            <exclude>gpcontrib/uuid_cb/src/uid.c</exclude>
+            <exclude>gpcontrib/uuid_cb/src/uid.h</exclude>
+            <exclude>gpcontrib/uuid_cb/src/uuid.c</exclude>
+            <exclude>gpcontrib/uuid_cb/src/uuid.h</exclude>
+            <exclude>gpcontrib/uuid_cb/Makefile</exclude>
+            <exclude>gpcontrib/uuid_cb/uuid-cb.control</exclude>
+
             <exclude>getversion</exclude>
             <exclude>.git-blame-ignore-revs</exclude>
             <exclude>.dir-locals.el</exclude>
