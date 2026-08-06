@@ -79,20 +79,25 @@ pg_signal_backend(int pid, int sig, char *msg)
 	 * Only allow superusers to signal superuser-owned backends.  Any process
 	 * not advertising a role might have the importance of a superuser-owned
 	 * backend, so treat it that way.
+	 *
+	 * The mdb_admin role is also allowed to signal autovacuum workers and MDB
+	 * service backends, even though they are superuser-owned.
 	 */
 	if ((!OidIsValid(proc->roleId) || superuser_arg(proc->roleId)) &&
 		!superuser())
 	{
-		Oid  role;
+		Oid	  mdb_admin_role;
 		char *appname;
 
-		if (local_beentry == NULL)
+		if (local_beentry == NULL) {
 			return SIGNAL_BACKEND_NOSUPERUSER;
+		}
 
-		role = get_role_oid("mdb_admin", true /* if nobody created mdb_admin role in this database */);
+		mdb_admin_role = get_role_oid("mdb_admin", true);
 		appname = local_beentry->backendStatus.st_appname;
 
-		if (!(OidIsValid(role) && is_member_of_role(GetUserId(), role) &&
+		if (!(OidIsValid(mdb_admin_role) &&
+			  is_member_of_role(GetUserId(), mdb_admin_role) &&
 			 (local_beentry->backendStatus.st_backendType == B_AUTOVAC_WORKER ||
 			 (appname != NULL && strcmp(appname, "MDB") == 0))))
 		{
