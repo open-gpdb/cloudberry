@@ -18,7 +18,7 @@
 -->
 
 ## Overview
-UUID-CB PostgreSQL/Greenplum extension provides functions to generate text UUIDs in format required by Russian Central Bank. The only difference from commonly used UUID format is that CB UUIDs have additional hexadecimal character for checksum:
+UUID-CB PostgreSQL/Greenplum/Cloudberry extension provides functions to generate text UUIDs in format required by Russian Central Bank. The only difference from commonly used UUID format is that CB UUIDs have additional hexadecimal character for checksum:
 
 	UUID:    f6553a80-642d-11ed-854e-09a55775d327
 	UUID-CB: f6553a80-642d-11ed-854e-09a55775d327-9
@@ -30,16 +30,16 @@ To build the extension you need those already installed:
 
 * GNU make
 * GCC
-* PostgreSQL or Greenplum
+* PostgreSQL/Greenplum/Cloudberry
 
-In addition you need to include greenplum binaries into PATH variable:
+In addition you need to include greenplum/cloudberry binaries into PATH variable:
 
 ```
 PATH="${GPHOME}/bin:${PATH}"
 ```
 This will allow build and install instructions to find pg_config, which provides the rest of information, necessary for the build: library paths, include paths, etc.
 
-Once it is done you can proceed with `make && make install` and it should install uuid-cb into proper location for your PG/GP installation.
+Once it is done you can proceed with `make && make install` and it should install uuid-cb into proper location for your PostgreSQL/Greenplum/Cloudberry installation.
 
 ### Running regression tests
 To make sure the extension works well, you can start your database server:

@@ -9,10 +9,6 @@ OBJS = src/uuid-cb.o src/uuid.o src/uid.o
 
 MODULE_big = uuid-cb
 
-ifeq ($(OS),Windows_NT)
-		SHLIB_LINK += -lcrypt32
-endif
-
 ifdef USE_PGXS
 	PG_CONFIG       = pg_config
 	PGXS            := $(shell $(PG_CONFIG) --pgxs)
