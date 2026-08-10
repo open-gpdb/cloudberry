@@ -27,10 +27,30 @@
  * The first four digits is the PostgreSQL version number. The last
  * four digits indicates the GPDB version.
  */
-#define PG_CONTROL_VERSION	13000700
+#define PG_CONTROL_VERSION	13000701
 
 /* Nonce key length, see below */
 #define MOCK_AUTH_NONCE_LEN		32
+
+/*
+ * On-disk varlena header byte order produced by this build, stamped into
+ * ControlFileData.bigendian_varlena.  true == big-endian/network order (real
+ * big-endian hardware, or -DFORCE_BIGENDIAN_VARLENA for GPDB6 compatibility;
+ * see the varlena macros in postgres.h); false == upstream native little-endian.
+ * Defined here rather than in postgres.h so the frontend tools (pg_resetwal,
+ * pg_controldata, pg_upgrade) that only include pg_control.h can see it.
+ */
+#if defined(WORDS_BIGENDIAN) || defined(FORCE_BIGENDIAN_VARLENA)
+#define BIGENDIAN_VARLENA_LAYOUT	true
+#else
+#define BIGENDIAN_VARLENA_LAYOUT	false
+#endif
+
+static inline const char *
+varlena_order_to_str(bool order_is_bigendian)
+{
+	return order_is_bigendian ? "network-byte-order (GPDB6-compatible)" : "native";
+}
 
 /*
  * Body of CheckPoint XLOG records.  This is declared here because we keep
@@ -229,6 +249,12 @@ typedef struct ControlFileData
 	uint32		loblksize;		/* chunk size in pg_largeobject */
 
 	bool		float8ByVal;	/* float8, int8, etc pass-by-value? */
+
+	/*
+	 * On-disk varlena header byte order (GPDB6-compatible big-endian/network
+	 * order vs upstream native).  See BIGENDIAN_VARLENA_LAYOUT above.
+	 */
+	bool		bigendian_varlena;
 
 	/* Are data pages protected by checksums? Zero if no checksum version */
 	uint32		data_checksum_version;

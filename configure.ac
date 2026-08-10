@@ -1421,6 +1421,21 @@ AS_IF([test "$with_yezzey" = yes],
 ]) # fi
 
 #
+# varlena_gpdb_layout
+#
+PGAC_ARG_BOOL(with, varlena_gpdb_layout, no,
+              [force varlena headers to use legacy gpdb layout])
+AC_SUBST(with_varlena_gpdb_layout)
+
+if test "$with_varlena_gpdb_layout" = yes; then
+  AC_DEFINE(FORCE_BIGENDIAN_VARLENA, 1,
+            [Define to use GPDB6-compatible big-endian/network-order varlena headers.])
+  # Keep -D in both flag sets for any TU that does not include pg_config.h.
+  CFLAGS="$CFLAGS -DFORCE_BIGENDIAN_VARLENA"
+  CXXFLAGS="$CXXFLAGS -DFORCE_BIGENDIAN_VARLENA"
+fi
+
+#
 # Realtime library
 #
 PGAC_ARG_BOOL(with, rt, yes,
