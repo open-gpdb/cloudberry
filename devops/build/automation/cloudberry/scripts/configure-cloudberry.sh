@@ -181,6 +181,7 @@ execute_cmd ./configure --prefix=${BUILD_DESTINATION} \
             ${CONFIGURE_MDBLOCALES_OPTS} \
             --with-includes=/usr/local/xerces-c/include \
             --with-libraries=${BUILD_DESTINATION}/lib \
+            --with-varlena_gpdb_layout \
             ${CONFIGURE_EXTRA_OPTS:-""} || exit 4
 log_section_end "Configure"
 

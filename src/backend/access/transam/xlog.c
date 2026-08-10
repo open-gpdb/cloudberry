@@ -4784,6 +4784,8 @@ WriteControlFile(void)
 
 	ControlFile->float8ByVal = FLOAT8PASSBYVAL;
 
+	ControlFile->bigendian_varlena = BIGENDIAN_VARLENA_LAYOUT;
+
 	/* Contents are protected with a CRC */
 	INIT_CRC32C(ControlFile->crc);
 	COMP_CRC32C(ControlFile->crc,
@@ -5000,6 +5002,15 @@ ReadControlFile(void)
 						   " but the server was compiled without USE_FLOAT8_BYVAL."),
 				 errhint("It looks like you need to recompile or initdb.")));
 #endif
+
+	if (ControlFile->bigendian_varlena != BIGENDIAN_VARLENA_LAYOUT)
+		ereport(FATAL,
+				(errmsg("database files are incompatible with server"),
+				 errdetail("The database cluster was initialized with %s varlena headers,"
+						   " but the server was compiled for %s.",
+						   varlena_order_to_str(ControlFile->bigendian_varlena),
+						   varlena_order_to_str(BIGENDIAN_VARLENA_LAYOUT)),
+				 errhint("It looks like you need to recompile or initdb.")));
 
 	wal_segment_size = ControlFile->xlog_seg_size;
 

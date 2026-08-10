@@ -1127,6 +1127,9 @@
 # endif
 #endif
 
+/* Define to use GPDB6-compatible big-endian/network-order varlena headers. */
+#undef FORCE_BIGENDIAN_VARLENA
+
 /* Size of a WAL file block. This need have no particular relation to BLCKSZ.
    XLOG_BLCKSZ must be a power of 2, and if your system supports O_DIRECT I/O,
    XLOG_BLCKSZ must be a multiple of the alignment requirement for direct-I/O
