@@ -66,6 +66,7 @@ get_control_data(ClusterInfo *cluster, bool live_check)
 	bool		got_toast = false;
 	bool		got_large_object = false;
 	bool		got_date_is_int = false;
+	bool		got_varlena_layout = false;
 	bool		got_data_checksum_version = false;
 	bool		got_cluster_state = false;
 	int			got_file_encryption_method = false;
@@ -544,6 +545,17 @@ get_control_data(ClusterInfo *cluster, bool live_check)
 			cluster->controldata.date_is_int = strstr(p, "64-bit integers") != NULL;
 			got_date_is_int = true;
 		}
+		else if ((p = strstr(bufin, "Varlena header byte order:")) != NULL)
+		{
+			p = strchr(p, ':');
+
+			if (p == NULL || strlen(p) <= 1)
+				pg_fatal("%d: controldata retrieval problem\n", __LINE__);
+
+			p++;				/* remove ':' char */
+			cluster->controldata.varlena_bigendian = strstr(p, "network") != NULL;
+			got_varlena_layout = true;
+		}
 		else if ((p = strstr(bufin, "checksum")) != NULL)
 		{
 			p = strchr(p, ':');
@@ -645,6 +657,8 @@ get_control_data(ClusterInfo *cluster, bool live_check)
 		!got_index || /* !got_toast || */
 		(!got_large_object &&
 		 cluster->controldata.ctrl_ver >= LARGE_OBJECT_SIZE_PG_CONTROL_VER) ||
+		(!got_varlena_layout &&
+		 cluster->controldata.ctrl_ver >= VARLENA_LAYOUT_PG_CONTROL_VER) ||
 		!got_date_is_int || !got_data_checksum_version ||
 		!got_file_encryption_method)
 	{
@@ -713,6 +727,10 @@ get_control_data(ClusterInfo *cluster, bool live_check)
 			cluster->controldata.ctrl_ver >= LARGE_OBJECT_SIZE_PG_CONTROL_VER)
 			pg_log(PG_REPORT, "  large-object chunk size\n");
 
+		if (!got_varlena_layout &&
+			cluster->controldata.ctrl_ver >= VARLENA_LAYOUT_PG_CONTROL_VER)
+			pg_log(PG_REPORT, "  varlena header byte order\n");
+
 		if (!got_date_is_int)
 			pg_log(PG_REPORT, "  dates/times are integers?\n");
 
@@ -768,6 +786,19 @@ check_control_data(ControlData *oldctrl,
 	if (oldctrl->large_object != 0 &&
 		oldctrl->large_object != newctrl->large_object)
 		pg_fatal("old and new pg_controldata large-object chunk sizes are invalid or do not match\n");
+
+	/*
+	 * On-disk varlena header layout (bigendian_varlena) is recorded in
+	 * pg_control only since VARLENA_LAYOUT_PG_CONTROL_VER.  Older clusters
+	 * (GPDB6, pre-feature Cloudberry) don't report it, so only enforce the
+	 * match when the old cluster actually carries the field.  A mismatch means
+	 * every variable-length datum would be misread, so this must be fatal.
+	 */
+	if (oldctrl->ctrl_ver >= VARLENA_LAYOUT_PG_CONTROL_VER &&
+		oldctrl->varlena_bigendian != newctrl->varlena_bigendian)
+		pg_fatal("old and new clusters use different on-disk varlena header layouts\n"
+				 "The new cluster must be built to match the old cluster's layout\n"
+				 "(rebuild with or without -DFORCE_BIGENDIAN_VARLENA to match).\n");
 
 	/* 
 	 * GPDB, since 9.5, pg_upgrade removed the support for 8.3, however, GPDB
