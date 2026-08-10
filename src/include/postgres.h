@@ -211,12 +211,15 @@ typedef struct
  * the specific type and length of the pointer datum.
  *
  * NOTE:
- * Greenplum differs from PostgreSQL here... In Postgres, it use different
- * macros for big-endian and little-endian machines, so the length is contiguous,
- * while the 4 byte lengths are stored in native endian format.
+ * PostgreSQL uses different macros for big-endian and little-endian machines:
+ * flag bits sit in the physically first byte in both cases, and 4-byte lengths
+ * are stored in native endian format.
  *
- * Greenplum stored the 4 byte varlena header in network byte order, so it always
- * look big-endian in the tuple.
+ * GPDB 6 (and earlier) stored the 4-byte varlena header in network byte order
+ * unconditionally (htonl), so it always looked big-endian in the tuple.  Stock
+ * Cloudberry on little-endian follows upstream's native layout.  Building with
+ * -DFORCE_BIGENDIAN_VARLENA restores the GPDB6 encoding for binary pg_upgrade
+ * compatibility (see below).
  *
  */
 
@@ -229,7 +232,22 @@ typedef struct
  * checking for IS_1B.
  */
 
-#ifdef WORDS_BIGENDIAN
+#if defined(FORCE_BIGENDIAN_VARLENA) || defined(WORDS_BIGENDIAN)
+
+/*
+ * Big-endian on-disk layout (real big-endian hardware, or little-endian with
+ * -DFORCE_BIGENDIAN_VARLENA for GPDB6 compatibility).
+ *
+ * Flag bits and 1-byte (short) / external headers are byte-level and shared.
+ * On big-endian hardware the native uint32 already stores the 4-byte length in
+ * network byte order, so no swap is needed.  On little-endian with
+ * FORCE_BIGENDIAN_VARLENA the native uint32 is not in network order, so the
+ * 4-byte length word must be swapped with htonl/ntohl.  That also makes newly
+ * written data GPDB6-format, so the entire cluster must be built this way for
+ * self-consistency.  The compressed second word (va_tcinfo) needs no swap:
+ * GPDB6 stored it natively as well, and its compression-method bits are 0
+ * (== PGLZ), which is what Cloudberry expects.
+ */
 
 #define VARATT_IS_4B(PTR) \
 	((((varattrib_1b *) (PTR))->va_header & 0x80) == 0x00)
@@ -245,17 +263,29 @@ typedef struct
 	(*((uint8 *) (PTR)) != 0)
 
 /* VARSIZE_4B() should only be used on known-aligned data */
+#ifdef FORCE_BIGENDIAN_VARLENA
+#define VARSIZE_4B(PTR) \
+	(ntohl(((varattrib_4b *) (PTR))->va_4byte.va_header) & 0x3FFFFFFF)
+#else							/* WORDS_BIGENDIAN */
 #define VARSIZE_4B(PTR) \
 	(((varattrib_4b *) (PTR))->va_4byte.va_header & 0x3FFFFFFF)
+#endif
 #define VARSIZE_1B(PTR) \
 	(((varattrib_1b *) (PTR))->va_header & 0x7F)
 #define VARTAG_1B_E(PTR) \
 	(((varattrib_1b_e *) (PTR))->va_tag)
 
+#ifdef FORCE_BIGENDIAN_VARLENA
+#define SET_VARSIZE_4B(PTR,len) \
+	(((varattrib_4b *) (PTR))->va_4byte.va_header = htonl((len) & 0x3FFFFFFF))
+#define SET_VARSIZE_4B_C(PTR,len) \
+	(((varattrib_4b *) (PTR))->va_4byte.va_header = htonl(((len) & 0x3FFFFFFF) | 0x40000000))
+#else							/* WORDS_BIGENDIAN */
 #define SET_VARSIZE_4B(PTR,len) \
 	(((varattrib_4b *) (PTR))->va_4byte.va_header = (len) & 0x3FFFFFFF)
 #define SET_VARSIZE_4B_C(PTR,len) \
 	(((varattrib_4b *) (PTR))->va_4byte.va_header = ((len) & 0x3FFFFFFF) | 0x40000000)
+#endif
 #define SET_VARSIZE_1B(PTR,len) \
 	(((varattrib_1b *) (PTR))->va_header = (len) | 0x80)
 #define SET_VARTAG_1B_E(PTR,tag) \
@@ -263,7 +293,7 @@ typedef struct
 	 ((varattrib_1b_e *) (PTR))->va_tag = (tag))
 #define VARSIZE_TO_SHORT(PTR)   ((char)(VARSIZE(PTR)-VARHDRSZ+VARHDRSZ_SHORT) | 0x80)
 
-#else							/* !WORDS_BIGENDIAN */
+#else							/* !WORDS_BIGENDIAN && !FORCE_BIGENDIAN_VARLENA */
 
 #define VARATT_IS_4B(PTR) \
 	((((varattrib_1b *) (PTR))->va_header & 0x01) == 0x00)
@@ -297,7 +327,7 @@ typedef struct
 	 ((varattrib_1b_e *) (PTR))->va_tag = (tag))
 #define VARSIZE_TO_SHORT(PTR)	((char)((VARSIZE(PTR)-VARHDRSZ+VARHDRSZ_SHORT) << 1) | 0x01)
 
-#endif							/* WORDS_BIGENDIAN */
+#endif							/* WORDS_BIGENDIAN / FORCE_BIGENDIAN_VARLENA */
 
 #define VARDATA_4B(PTR)		(((varattrib_4b *) (PTR))->va_4byte.va_data)
 #define VARDATA_4B_C(PTR)	(((varattrib_4b *) (PTR))->va_compressed.va_data)
