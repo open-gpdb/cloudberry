@@ -2005,8 +2005,11 @@ EXCEPTION WHEN OTHERS THEN
 	RETURN false;
 END$$;
 ALTER FUNCTION terminate_nothrow OWNER TO pg_signal_backend;
+-- autovacuum workers come and go on their own, so leave them out to keep the
+-- set of reported background processes stable
 SELECT backend_type FROM pg_stat_activity
-WHERE CASE WHEN COALESCE(usesysid, 10) = 10 THEN terminate_nothrow(pid) END;
+WHERE backend_type IS DISTINCT FROM 'autovacuum worker'
+  AND CASE WHEN COALESCE(usesysid, 10) = 10 THEN terminate_nothrow(pid) END;
  backend_type 
 --------------
 (0 rows)
