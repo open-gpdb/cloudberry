@@ -72,9 +72,9 @@ github:
     # Enable rebase merging for linear history
     rebase: true
 
-  # Branch protection rules for the main branch
+  # Branch protection rules for the REL_2_STABLE release branch
   protected_branches:
-    main:
+    REL_2_STABLE:
       # Require status checks to pass before merging
       required_status_checks:
         # Require branches to be up to date before merging
@@ -118,18 +118,6 @@ github:
 
       # Don't require commits to be signed
       required_signatures: false
-
-      # Require conversation threads to be resolved
-      required_conversation_resolution: true
-
-    # Branch protection for REL_2_STABLE release branch
-    REL_2_STABLE:
-      # Pull request review requirements
-      required_pull_request_reviews:
-        # Require new reviews when new commits are pushed
-        dismiss_stale_reviews: false
-        # Require at least 2 approving reviews
-        required_approving_review_count: 2
 
       # Require conversation threads to be resolved
       required_conversation_resolution: true
