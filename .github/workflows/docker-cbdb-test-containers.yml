@@ -113,7 +113,7 @@ jobs:
 
       # Login to DockerHub for pushing images
       - name: Login to Docker Hub
-        if: ${{ steps.platform-filter.outputs[matrix.platform] == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        if: ${{ steps.platform-filter.outputs[matrix.platform] == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/REL_2_STABLE' }}
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USER }}
@@ -144,7 +144,7 @@ jobs:
       # Build and push multi-architecture images
       # Creates a manifest list that supports both architectures
       - name: Build and Push Multi-arch Docker images
-        if: ${{ steps.platform-filter.outputs[matrix.platform] == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        if: ${{ steps.platform-filter.outputs[matrix.platform] == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/REL_2_STABLE' }}
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: ./devops/deploy/docker/test/${{ matrix.platform }}
@@ -177,7 +177,7 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "- ✅ Dockerfile syntax validated" >> $GITHUB_STEP_SUMMARY
             echo "- ✅ Multi-architecture builds tested" >> $GITHUB_STEP_SUMMARY
-            echo "- ⏭️  Docker Hub push skipped (requires main branch)" >> $GITHUB_STEP_SUMMARY
+            echo "- ⏭️  Docker Hub push skipped (requires REL_2_STABLE branch)" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
           fi
 
