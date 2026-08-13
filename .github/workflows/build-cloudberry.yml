@@ -104,9 +104,9 @@ name: Apache Cloudberry Build (Rocky Linux)
 
 on:
   push:
-    branches: [main, REL_2_STABLE]
+    branches: [REL_2_STABLE]
   pull_request:
-    branches: [main, REL_2_STABLE]
+    branches: [REL_2_STABLE]
     types: [opened, synchronize, reopened, edited]
   workflow_dispatch:
     inputs:
