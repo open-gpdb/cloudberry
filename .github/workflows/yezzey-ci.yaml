@@ -33,7 +33,7 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/REL_2_STABLE' }}
 
 env:
   CLOUDBERRY_HOME: "/usr/local/cloudberry-db"
