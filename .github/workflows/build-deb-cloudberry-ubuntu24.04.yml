@@ -75,12 +75,12 @@ name: Apache Cloudberry Debian Build
 
 on:
   push:
-    branches: [main, REL_2_STABLE]
+    branches: [REL_2_STABLE]
   pull_request:
     paths:
       - '.github/workflows/build-deb-cloudberry-ubuntu24.04.yml'
     # We can enable the PR test when needed
-    # branches: [main, REL_2_STABLE]
+    # branches: [REL_2_STABLE]
     # types: [opened, synchronize, reopened, edited]
   schedule:
     # Run every Monday at 02:00 UTC

@@ -171,7 +171,7 @@ jobs:
       - name: Checkout Build Tools
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: REL_2_STABLE
           path: build_tools
           sparse-checkout: |
             devops
@@ -181,7 +181,7 @@ jobs:
         run: |
           # Copy devops scripts to baseline source if they don't exist
           if [ ! -d "devops" ]; then
-            echo "Injecting devops scripts from main branch..."
+            echo "Injecting devops scripts from REL_2_STABLE branch..."
             cp -r build_tools/devops .
           fi
 
@@ -316,7 +316,7 @@ jobs:
       - name: Checkout Build Tools
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: REL_2_STABLE
           path: build_tools
           sparse-checkout: |
             devops
@@ -326,7 +326,7 @@ jobs:
         run: |
           # Copy devops scripts to current source if they don't exist
           if [ ! -d "devops" ]; then
-            echo "Injecting devops scripts from main branch..."
+            echo "Injecting devops scripts from REL_2_STABLE branch..."
             cp -r build_tools/devops .
           fi
 

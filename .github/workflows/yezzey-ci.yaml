@@ -23,7 +23,7 @@ name: Yezzey CI Pipeline
 
 on:
   push:
-    branches: [ main ]
+    branches: [ REL_2_STABLE ]
   pull_request:
     types: [opened, synchronize, reopened, edited]
   workflow_dispatch:
@@ -33,11 +33,11 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/REL_2_STABLE' }}
 
 env:
   CLOUDBERRY_HOME: "/usr/local/cloudberry-db"
-  CLOUDBERRY_VERSION: "main"
+  CLOUDBERRY_VERSION: "REL_2_STABLE"
 
 jobs:
 
