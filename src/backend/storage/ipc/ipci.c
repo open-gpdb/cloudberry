@@ -26,6 +26,7 @@
 #include "access/syncscan.h"
 #include "access/twophase.h"
 #include "access/distributedlog.h"
+#include "cdb/anser.h"
 #include "cdb/cdblocaldistribxact.h"
 #include "cdb/cdbvars.h"
 #include "access/xlogprefetcher.h"
@@ -222,8 +223,9 @@ CalculateShmemSize(int *num_semaphores)
 	/* size of expand version */
 	size = add_size(size, GpExpandVersionShmemSize());
 
-	/* size of token and endpoint shared memory */
+	/* size of token, endpoint and Anser shared memory */
 	size = add_size(size, EndpointShmemSize());
+	size = add_size(size, AnserShmemSize());
 #ifndef USE_INTERNAL_FTS
 	/* size of cdb etcd result cache */
 	if (Gp_role != GP_ROLE_EXECUTE)
@@ -444,6 +446,10 @@ CreateSharedMemoryAndSemaphores(void)
 	/* Initialize shared memory for parallel retrieve cursor */
 	if (!IsUnderPostmaster)
 		EndpointShmemInit();
+
+	/* Initialize shared memory for Anser adaptive information sharing. */
+	if (!IsUnderPostmaster)
+		AnserShmemInit();
 #ifndef USE_INTERNAL_FTS
 	/* Initialize shared memory for cdb etcd cache */
 	if (Gp_role != GP_ROLE_EXECUTE)

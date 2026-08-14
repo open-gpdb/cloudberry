@@ -1,0 +1,98 @@
+/*-------------------------------------------------------------------------
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ *
+ * anser.h
+ *	  Shared-memory channel map for the Anser adaptive information
+ *	  sharing subsystem.
+ *
+ * IDENTIFICATION
+ *	  src/include/cdb/anser.h
+ *
+ *-------------------------------------------------------------------------
+ */
+#ifndef CDB_ANSER_H
+#define CDB_ANSER_H
+
+#include "postgres.h"
+
+#include "datatype/timestamp.h"
+#include "storage/latch.h"
+
+#define ANSER_CONDITION_KEY_SIZE	64
+
+/*
+ * Registered adaptive-information condition for one running command.
+ *
+ * The planner integration will eventually populate condition_key with the
+ * optimizer-generated equivalence-class symbols described in the Anser paper.
+ * For PR 1 this key is intentionally opaque and provided by callers/tests.
+ */
+typedef struct AnserChannelKey
+{
+	int			gp_session_id;
+	int			gp_command_count;
+	uint32		condition_id;
+	char		condition_key[ANSER_CONDITION_KEY_SIZE];
+} AnserChannelKey;
+
+typedef enum AnserChannelState
+{
+	ANSER_CHANNEL_PENDING = 0,
+	ANSER_CHANNEL_COLLECTING,
+	ANSER_CHANNEL_READY,
+	ANSER_CHANNEL_CANCELLED,
+	ANSER_CHANNEL_CONSUMED
+} AnserChannelState;
+
+typedef struct AnserChannelEntry
+{
+	AnserChannelKey key;
+	AnserChannelState state;
+	bool		cancelled;
+	uint32		expected_producers;
+	uint32		done_producers;
+	uint32		consumers;
+	uint32		done_consumers;
+	Size		data_len;
+	Size		data_offset;
+	TimestampTz created_at;
+	TimestampTz updated_at;
+} AnserChannelEntry;
+
+typedef struct AnserControl
+{
+	uint32		max_channels;
+	Size		max_info_size;
+	Size		arena_size;
+	Size		arena_next;
+	Latch		gather_latch;
+	Latch		send_latch;
+} AnserControl;
+
+/* GUCs */
+extern bool gp_anser_enable;
+extern int	gp_anser_max_channels;
+extern int	gp_anser_max_info_size;
+extern int	gp_anser_timeout_ms;
+
+/* Shared-memory setup. */
+extern Size AnserShmemSize(void);
+extern void AnserShmemInit(void);
+
+#endif							/* CDB_ANSER_H */
