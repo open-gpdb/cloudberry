@@ -29,6 +29,7 @@
 #include "postgres.h"
 
 #include "cdb/anser.h"
+#include "common/hashfn.h"
 #include "storage/lwlock.h"
 #include "storage/shmem.h"
 #include "utils/hsearch.h"
