@@ -104,8 +104,9 @@ jobs:
           # Exclude RC versions: X.Y.Z-incubating-rcN
           echo "Finding latest release tag..."
           
-          # Get all tags matching the incubating pattern, sort by version, filter out RC versions
-          TAG_INFO=$(git ls-remote --tags --refs origin '*-incubating' 2>/dev/null \
+          # Get all tags matching the incubating pattern from open-gpdb,
+          # sort by version, filter out RC versions.
+          TAG_INFO=$(git ls-remote --tags --refs https://github.com/open-gpdb/cloudberry.git '*-incubating' 2>/dev/null \
             | grep -v '\-rc[0-9]*$' \
             | sort -t'/' -k3 -V \
             | tail -1 || echo "")
@@ -164,6 +165,7 @@ jobs:
       - name: Checkout Baseline Code
         uses: actions/checkout@v4
         with:
+          repository: open-gpdb/cloudberry
           ref: ${{ needs.resolve-baseline.outputs.baseline_version }}
           fetch-depth: 1
           submodules: recursive
