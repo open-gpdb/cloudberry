@@ -29,7 +29,6 @@
 #include "postgres.h"
 
 #include "cdb/anser.h"
-#include "common/hashfn.h"
 #include "storage/lwlock.h"
 #include "storage/shmem.h"
 #include "utils/hsearch.h"
@@ -133,13 +132,12 @@ AnserInitializeChannelHash(void)
 	MemSet(&hctl, 0, sizeof(hctl));
 	hctl.keysize = sizeof(AnserChannelKey);
 	hctl.entrysize = sizeof(AnserChannelEntry);
-	hctl.hash = tag_hash;
 
 	AnserChannelHash = ShmemInitHash(ANSER_CHANNEL_HASH_NAME,
 									  gp_anser_max_channels,
 									  gp_anser_max_channels,
 									  &hctl,
-									  HASH_ELEM | HASH_FUNCTION);
+									  HASH_ELEM | HASH_BLOBS);
 }
 
 static void
