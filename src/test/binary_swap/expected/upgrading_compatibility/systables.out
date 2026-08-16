@@ -132,7 +132,6 @@ Indexes:
            View "pg_catalog.pg_stat_progress_copy"
       Column      |  Type   | Collation | Nullable | Default 
 ------------------+---------+-----------+----------+---------
- gp_segment_id    | integer |           |          | 
  pid              | integer |           |          | 
  datid            | oid     |           |          | 
  datname          | name    |           |          | 
@@ -148,7 +147,6 @@ Indexes:
           View "pg_catalog.pg_stat_progress_basebackup"
         Column        |  Type   | Collation | Nullable | Default 
 ----------------------+---------+-----------+----------+---------
- gp_segment_id        | integer |           |          | 
  pid                  | integer |           |          | 
  phase                | text    |           |          | 
  backup_total         | bigint  |           |          | 
@@ -160,7 +158,6 @@ Indexes:
         View "pg_catalog.pg_stat_progress_create_index"
        Column       |  Type   | Collation | Nullable | Default 
 --------------------+---------+-----------+----------+---------
- gp_segment_id      | integer |           |          | 
  pid                | integer |           |          | 
  datid              | oid     |           |          | 
  datname            | name    |           |          | 
@@ -182,7 +179,6 @@ Indexes:
            View "pg_catalog.pg_stat_progress_cluster"
        Column        |  Type   | Collation | Nullable | Default 
 ---------------------+---------+-----------+----------+---------
- gp_segment_id       | integer |           |          | 
  pid                 | integer |           |          | 
  datid               | oid     |           |          | 
  datname             | name    |           |          | 
@@ -200,7 +196,6 @@ Indexes:
            View "pg_catalog.pg_stat_progress_vacuum"
        Column       |  Type   | Collation | Nullable | Default 
 --------------------+---------+-----------+----------+---------
- gp_segment_id      | integer |           |          | 
  pid                | integer |           |          | 
  datid              | oid     |           |          | 
  datname            | name    |           |          | 
@@ -217,7 +212,6 @@ Indexes:
               View "pg_catalog.pg_stat_progress_analyze"
           Column           |  Type   | Collation | Nullable | Default 
 ---------------------------+---------+-----------+----------+---------
- gp_segment_id             | integer |           |          | 
  pid                       | integer |           |          | 
  datid                     | oid     |           |          | 
  datname                   | name    |           |          | 
@@ -235,9 +229,8 @@ Indexes:
                         View "pg_catalog.pg_stat_wal"
       Column      |           Type           | Collation | Nullable | Default 
 ------------------+--------------------------+-----------+----------+---------
- gp_segment_id    | integer                  |           |          | 
  wal_records      | bigint                   |           |          | 
- wal_fpi          | bigint                   |           |          | 
+ wal_fpw          | bigint                   |           |          | 
  wal_bytes        | numeric                  |           |          | 
  wal_buffers_full | bigint                   |           |          | 
  wal_write        | bigint                   |           |          | 
@@ -407,22 +400,20 @@ Indexes:
  rsqholders    | integer |           |          | 
 
 \d pg_stat_resqueues
-            View "pg_catalog.pg_stat_resqueues"
-     Column     |  Type   | Collation | Nullable | Default 
-----------------+---------+-----------+----------+---------
- gp_segment_id  | integer |           |          | 
- queueid        | oid     |           |          | 
- queuename      | name    |           |          | 
- n_queries_exec | bigint  |           |          | 
- n_queries_wait | bigint  |           |          | 
- elapsed_exec   | bigint  |           |          | 
- elapsed_wait   | bigint  |           |          | 
+           View "pg_catalog.pg_stat_resqueues"
+     Column     |  Type  | Collation | Nullable | Default 
+----------------+--------+-----------+----------+---------
+ queueid        | oid    |           |          | 
+ queuename      | name   |           |          | 
+ n_queries_exec | bigint |           |          | 
+ n_queries_wait | bigint |           |          | 
+ elapsed_exec   | bigint |           |          | 
+ elapsed_wait   | bigint |           |          | 
 
 \d pg_stat_database
                           View "pg_catalog.pg_stat_database"
           Column          |           Type           | Collation | Nullable | Default 
 --------------------------+--------------------------+-----------+----------+---------
- gp_segment_id            | integer                  |           |          | 
  datid                    | oid                      |           |          | 
  datname                  | name                     |           |          | 
  numbackends              | integer                  |           |          | 
@@ -453,20 +444,19 @@ Indexes:
  stats_reset              | timestamp with time zone |           |          | 
 
 \d pg_stat_replication_slots
-                View "pg_catalog.pg_stat_replication_slots"
-    Column     |           Type           | Collation | Nullable | Default 
----------------+--------------------------+-----------+----------+---------
- gp_segment_id | integer                  |           |          | 
- slot_name     | text                     |           |          | 
- spill_txns    | bigint                   |           |          | 
- spill_count   | bigint                   |           |          | 
- spill_bytes   | bigint                   |           |          | 
- stream_txns   | bigint                   |           |          | 
- stream_count  | bigint                   |           |          | 
- stream_bytes  | bigint                   |           |          | 
- total_txns    | bigint                   |           |          | 
- total_bytes   | bigint                   |           |          | 
- stats_reset   | timestamp with time zone |           |          | 
+               View "pg_catalog.pg_stat_replication_slots"
+    Column    |           Type           | Collation | Nullable | Default 
+--------------+--------------------------+-----------+----------+---------
+ slot_name    | text                     |           |          | 
+ spill_txns   | bigint                   |           |          | 
+ spill_count  | bigint                   |           |          | 
+ spill_bytes  | bigint                   |           |          | 
+ stream_txns  | bigint                   |           |          | 
+ stream_count | bigint                   |           |          | 
+ stream_bytes | bigint                   |           |          | 
+ total_txns   | bigint                   |           |          | 
+ total_bytes  | bigint                   |           |          | 
+ stats_reset  | timestamp with time zone |           |          | 
 
 \d pg_replication_slots
              View "pg_catalog.pg_replication_slots"
@@ -798,46 +788,7 @@ Indexes:
  idx_blks_hit  | bigint |           |          | 
 
 \d pg_stat_user_indexes
-          View "pg_catalog.pg_stat_user_indexes"
-    Column     |  Type   | Collation | Nullable | Default 
----------------+---------+-----------+----------+---------
- relid         | oid     |           |          | 
- indexrelid    | oid     |           |          | 
- schemaname    | name    |           |          | 
- relname       | name    |           |          | 
- indexrelname  | name    |           |          | 
- idx_scan      | numeric |           |          | 
- idx_tup_read  | numeric |           |          | 
- idx_tup_fetch | numeric |           |          | 
-
-\d pg_stat_sys_indexes
-          View "pg_catalog.pg_stat_sys_indexes"
-    Column     |  Type   | Collation | Nullable | Default 
----------------+---------+-----------+----------+---------
- relid         | oid     |           |          | 
- indexrelid    | oid     |           |          | 
- schemaname    | name    |           |          | 
- relname       | name    |           |          | 
- indexrelname  | name    |           |          | 
- idx_scan      | numeric |           |          | 
- idx_tup_read  | numeric |           |          | 
- idx_tup_fetch | numeric |           |          | 
-
-\d pg_stat_all_indexes
-          View "pg_catalog.pg_stat_all_indexes"
-    Column     |  Type   | Collation | Nullable | Default 
----------------+---------+-----------+----------+---------
- relid         | oid     |           |          | 
- indexrelid    | oid     |           |          | 
- schemaname    | name    |           |          | 
- relname       | name    |           |          | 
- indexrelname  | name    |           |          | 
- idx_scan      | numeric |           |          | 
- idx_tup_read  | numeric |           |          | 
- idx_tup_fetch | numeric |           |          | 
-
-\d pg_stat_all_indexes_internal
-     View "pg_catalog.pg_stat_all_indexes_internal"
+         View "pg_catalog.pg_stat_user_indexes"
     Column     |  Type  | Collation | Nullable | Default 
 ---------------+--------+-----------+----------+---------
  relid         | oid    |           |          | 
@@ -849,6 +800,33 @@ Indexes:
  idx_tup_read  | bigint |           |          | 
  idx_tup_fetch | bigint |           |          | 
 
+\d pg_stat_sys_indexes
+          View "pg_catalog.pg_stat_sys_indexes"
+    Column     |  Type  | Collation | Nullable | Default 
+---------------+--------+-----------+----------+---------
+ relid         | oid    |           |          | 
+ indexrelid    | oid    |           |          | 
+ schemaname    | name   |           |          | 
+ relname       | name   |           |          | 
+ indexrelname  | name   |           |          | 
+ idx_scan      | bigint |           |          | 
+ idx_tup_read  | bigint |           |          | 
+ idx_tup_fetch | bigint |           |          | 
+
+\d pg_stat_all_indexes
+          View "pg_catalog.pg_stat_all_indexes"
+    Column     |  Type  | Collation | Nullable | Default 
+---------------+--------+-----------+----------+---------
+ relid         | oid    |           |          | 
+ indexrelid    | oid    |           |          | 
+ schemaname    | name   |           |          | 
+ relname       | name   |           |          | 
+ indexrelname  | name   |           |          | 
+ idx_scan      | bigint |           |          | 
+ idx_tup_read  | bigint |           |          | 
+ idx_tup_fetch | bigint |           |          | 
+
+\d pg_stat_all_indexes_internal
 \d pg_statio_user_tables
           View "pg_catalog.pg_statio_user_tables"
      Column      |  Type  | Collation | Nullable | Default 
@@ -948,18 +926,18 @@ Indexes:
  relid               | oid                      |           |          | 
  schemaname          | name                     |           |          | 
  relname             | name                     |           |          | 
- seq_scan            | numeric                  |           |          | 
- seq_tup_read        | numeric                  |           |          | 
- idx_scan            | numeric                  |           |          | 
- idx_tup_fetch       | numeric                  |           |          | 
- n_tup_ins           | numeric                  |           |          | 
- n_tup_upd           | numeric                  |           |          | 
- n_tup_del           | numeric                  |           |          | 
- n_tup_hot_upd       | numeric                  |           |          | 
- n_live_tup          | numeric                  |           |          | 
- n_dead_tup          | numeric                  |           |          | 
- n_mod_since_analyze | numeric                  |           |          | 
- n_ins_since_vacuum  | numeric                  |           |          | 
+ seq_scan            | bigint                   |           |          | 
+ seq_tup_read        | bigint                   |           |          | 
+ idx_scan            | bigint                   |           |          | 
+ idx_tup_fetch       | bigint                   |           |          | 
+ n_tup_ins           | bigint                   |           |          | 
+ n_tup_upd           | bigint                   |           |          | 
+ n_tup_del           | bigint                   |           |          | 
+ n_tup_hot_upd       | bigint                   |           |          | 
+ n_live_tup          | bigint                   |           |          | 
+ n_dead_tup          | bigint                   |           |          | 
+ n_mod_since_analyze | bigint                   |           |          | 
+ n_ins_since_vacuum  | bigint                   |           |          | 
  last_vacuum         | timestamp with time zone |           |          | 
  last_autovacuum     | timestamp with time zone |           |          | 
  last_analyze        | timestamp with time zone |           |          | 
@@ -1020,18 +998,18 @@ Indexes:
  relid               | oid                      |           |          | 
  schemaname          | name                     |           |          | 
  relname             | name                     |           |          | 
- seq_scan            | numeric                  |           |          | 
- seq_tup_read        | numeric                  |           |          | 
- idx_scan            | numeric                  |           |          | 
- idx_tup_fetch       | numeric                  |           |          | 
- n_tup_ins           | numeric                  |           |          | 
- n_tup_upd           | numeric                  |           |          | 
- n_tup_del           | numeric                  |           |          | 
- n_tup_hot_upd       | numeric                  |           |          | 
- n_live_tup          | numeric                  |           |          | 
- n_dead_tup          | numeric                  |           |          | 
- n_mod_since_analyze | numeric                  |           |          | 
- n_ins_since_vacuum  | numeric                  |           |          | 
+ seq_scan            | bigint                   |           |          | 
+ seq_tup_read        | bigint                   |           |          | 
+ idx_scan            | bigint                   |           |          | 
+ idx_tup_fetch       | bigint                   |           |          | 
+ n_tup_ins           | bigint                   |           |          | 
+ n_tup_upd           | bigint                   |           |          | 
+ n_tup_del           | bigint                   |           |          | 
+ n_tup_hot_upd       | bigint                   |           |          | 
+ n_live_tup          | bigint                   |           |          | 
+ n_dead_tup          | bigint                   |           |          | 
+ n_mod_since_analyze | bigint                   |           |          | 
+ n_ins_since_vacuum  | bigint                   |           |          | 
  last_vacuum         | timestamp with time zone |           |          | 
  last_autovacuum     | timestamp with time zone |           |          | 
  last_analyze        | timestamp with time zone |           |          | 
@@ -1064,34 +1042,6 @@ Indexes:
  relid               | oid                      |           |          | 
  schemaname          | name                     |           |          | 
  relname             | name                     |           |          | 
- seq_scan            | numeric                  |           |          | 
- seq_tup_read        | numeric                  |           |          | 
- idx_scan            | numeric                  |           |          | 
- idx_tup_fetch       | numeric                  |           |          | 
- n_tup_ins           | numeric                  |           |          | 
- n_tup_upd           | numeric                  |           |          | 
- n_tup_del           | numeric                  |           |          | 
- n_tup_hot_upd       | numeric                  |           |          | 
- n_live_tup          | numeric                  |           |          | 
- n_dead_tup          | numeric                  |           |          | 
- n_mod_since_analyze | numeric                  |           |          | 
- n_ins_since_vacuum  | numeric                  |           |          | 
- last_vacuum         | timestamp with time zone |           |          | 
- last_autovacuum     | timestamp with time zone |           |          | 
- last_analyze        | timestamp with time zone |           |          | 
- last_autoanalyze    | timestamp with time zone |           |          | 
- vacuum_count        | bigint                   |           |          | 
- autovacuum_count    | bigint                   |           |          | 
- analyze_count       | bigint                   |           |          | 
- autoanalyze_count   | bigint                   |           |          | 
-
-\d pg_stat_all_tables_internal
-                  View "pg_catalog.pg_stat_all_tables_internal"
-       Column        |           Type           | Collation | Nullable | Default 
----------------------+--------------------------+-----------+----------+---------
- relid               | oid                      |           |          | 
- schemaname          | name                     |           |          | 
- relname             | name                     |           |          | 
  seq_scan            | bigint                   |           |          | 
  seq_tup_read        | bigint                   |           |          | 
  idx_scan            | bigint                   |           |          | 
@@ -1113,6 +1063,7 @@ Indexes:
  analyze_count       | bigint                   |           |          | 
  autoanalyze_count   | bigint                   |           |          | 
 
+\d pg_stat_all_tables_internal
 \d pg_timezone_names
           View "pg_catalog.pg_timezone_names"
    Column   |   Type   | Collation | Nullable | Default 
@@ -1147,7 +1098,6 @@ Indexes:
                   View "pg_catalog.pg_prepared_statements"
      Column      |           Type           | Collation | Nullable | Default 
 -----------------+--------------------------+-----------+----------+---------
- gp_segment_id   | integer                  |           |          | 
  name            | text                     |           |          | 
  statement       | text                     |           |          | 
  prepare_time    | timestamp with time zone |           |          | 
@@ -2889,7 +2839,6 @@ Tablespace: "pg_global"
        View "pg_catalog.pg_backend_memory_contexts"
     Column     |  Type   | Collation | Nullable | Default 
 ---------------+---------+-----------+----------+---------
- gp_segment_id | integer |           |          | 
  name          | text    |           |          | 
  ident         | text    |           |          | 
  parent        | text    |           |          | 
