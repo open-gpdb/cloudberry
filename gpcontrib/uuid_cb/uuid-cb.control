@@ -1,0 +1,6 @@
+# uuid-cb extension
+comment = 'generate universally unique identifiers that follow Russian Central Bank requirements'
+default_version = '1.0'
+module_pathname = '$libdir/uuid-cb'
+relocatable = true
+trusted = true
