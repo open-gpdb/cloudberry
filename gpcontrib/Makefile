@@ -25,7 +25,8 @@ ifeq "$(enable_debug_extensions)" "yes"
                gp_toolkit \
                gp_url_tools \
                pg_hint_plan \
-               reject_partition_fullscan
+               reject_partition_fullscan \
+               uuid_cb
 else
 	recurse_targets = gp_sparse_vector \
 	       gp_distribution_policy \
@@ -35,7 +36,8 @@ else
                gp_exttable_fdw \
                gp_toolkit \
 			   gp_url_tools \
-               pg_hint_plan
+               pg_hint_plan \
+			   uuid_cb
 endif
 
 ifeq "$(with_diskquota)" "yes"
