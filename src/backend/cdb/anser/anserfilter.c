@@ -36,6 +36,7 @@
 
 static bool AnserBloomValidateHeader(const AnserBloomPartHeader *header,
 									 Size payload_len);
+static uint64 AnserBloomFloorPowerOfTwo(uint64 value);
 
 uint64
 AnserBloomSeed(const char *condition_key)
@@ -66,7 +67,7 @@ AnserBloomChooseBitsetBits(int64 total_elems, Size max_payload_bytes)
 					   (uint64) Max(total_elems, 1) * 2);
 	target_bytes = Min(target_bytes, (uint64) max_bitset_bytes);
 
-	bits = ((uint64) 1) << pg_floor_log2_64(target_bytes * BITS_PER_BYTE);
+	bits = AnserBloomFloorPowerOfTwo(target_bytes * BITS_PER_BYTE);
 	if (bits < ANSER_BLOOM_MIN_BITSET_BITS)
 		return 0;
 
@@ -245,6 +246,17 @@ fail:
 	if (result != NULL)
 		bloom_free(result);
 	return NULL;
+}
+
+static uint64
+AnserBloomFloorPowerOfTwo(uint64 value)
+{
+	uint64		result = 1;
+
+	while (result <= value / 2 && result < (PG_UINT32_MAX + UINT64CONST(1)))
+		result <<= 1;
+
+	return result;
 }
 
 static bool
