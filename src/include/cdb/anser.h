@@ -113,6 +113,11 @@ extern AnserChannelState AnserChannelGetState(const AnserChannelKey *channel_key
 										  bool *found);
 extern bool AnserCancelChannel(const AnserChannelKey *channel_key);
 extern void AnserCancelQuery(int gp_session_id, int gp_command_count);
+extern void AnserAttachServiceLatch(bool gather_service);
+extern void AnserDetachServiceLatch(bool gather_service);
+extern void AnserWaitServiceLatch(bool gather_service, long timeout_ms);
+extern void AnserWakeServiceLatch(bool gather_service);
+extern void AnserServiceMaintenance(void);
 
 /* Background-service entry points. */
 extern void AnserGatherServiceMain(Datum main_arg);

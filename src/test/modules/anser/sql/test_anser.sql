@@ -18,6 +18,13 @@ SELECT anser_test_subscribe(1, 1, 2, 'join_timeout');
 SELECT anser_test_consume(1, 1, 2, 'join_timeout', 1) IS NULL;
 SELECT anser_test_state(1, 1, 2, 'join_timeout');
 
+-- Input validation: negative IDs/counts and overlong condition keys fail.
+SELECT anser_test_register_condition(1, 1, -1, 'bad_id', 1);
+SELECT anser_test_register_condition(1, 1, 3, 'bad_count', 0);
+SELECT anser_test_register_condition(1, 1, 3, repeat('x', 64), 1);
+SELECT anser_test_subscribe(1, 1, -1, 'bad_id');
+SELECT anser_test_subscribe(1, 1, 3, repeat('x', 64));
+
 -- Query-level cancellation touches all channels for the command.
 SELECT anser_test_register_condition(1, 2, 1, 'join_b', 1);
 SELECT anser_test_register_condition(1, 2, 2, 'join_c', 1);

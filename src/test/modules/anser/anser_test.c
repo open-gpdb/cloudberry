@@ -50,16 +50,22 @@ anser_test_register_condition(PG_FUNCTION_ARGS)
 {
 	int32		gp_session_id = PG_GETARG_INT32(0);
 	int32		gp_command_count = PG_GETARG_INT32(1);
-	uint32		condition_id = (uint32) PG_GETARG_INT32(2);
+	int32		condition_id_arg = PG_GETARG_INT32(2);
 	char	   *condition_key = text_to_cstring(PG_GETARG_TEXT_PP(3));
-	uint32		expected_producers = (uint32) PG_GETARG_INT32(4);
+	int32		expected_producers_arg = PG_GETARG_INT32(4);
 	AnserChannelKey channel_key;
+
+	if (condition_id_arg < 0 || expected_producers_arg <= 0)
+		PG_RETURN_BOOL(false);
+
+	if (strlen(condition_key) >= ANSER_CONDITION_KEY_SIZE)
+		PG_RETURN_BOOL(false);
 
 	PG_RETURN_BOOL(AnserRegisterCondition(gp_session_id,
 										gp_command_count,
-										condition_id,
+										(uint32) condition_id_arg,
 										condition_key,
-										expected_producers,
+										(uint32) expected_producers_arg,
 										&channel_key));
 }
 
@@ -94,12 +100,16 @@ Datum
 anser_test_consume(PG_FUNCTION_ARGS)
 {
 	AnserChannelKey key;
-	long		timeout_ms = PG_GETARG_INT32(4);
+	int32		timeout_arg = PG_GETARG_INT32(4);
+	long		timeout_ms = timeout_arg;
 	char	   *buffer;
 	Size		payload_len = 0;
 	bool		cancelled = false;
 	bool		ready;
 	bytea	   *result;
+
+	if (timeout_arg < 0)
+		PG_RETURN_NULL();
 
 	if (!build_test_key(fcinfo, &key))
 		PG_RETURN_NULL();
@@ -161,16 +171,19 @@ build_test_key(FunctionCallInfo fcinfo, AnserChannelKey *key)
 {
 	int32		gp_session_id = PG_GETARG_INT32(0);
 	int32		gp_command_count = PG_GETARG_INT32(1);
-	uint32		condition_id = (uint32) PG_GETARG_INT32(2);
+	int32		condition_id_arg = PG_GETARG_INT32(2);
 	char	   *condition_key = text_to_cstring(PG_GETARG_TEXT_PP(3));
 
-	if (key == NULL)
+	if (key == NULL || condition_id_arg < 0)
+		return false;
+
+	if (strlen(condition_key) >= ANSER_CONDITION_KEY_SIZE)
 		return false;
 
 	MemSet(key, 0, sizeof(AnserChannelKey));
 	key->gp_session_id = gp_session_id;
 	key->gp_command_count = gp_command_count;
-	key->condition_id = condition_id;
+	key->condition_id = (uint32) condition_id_arg;
 	strlcpy(key->condition_key, condition_key, ANSER_CONDITION_KEY_SIZE);
 	return true;
 }

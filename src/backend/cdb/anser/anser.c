@@ -120,6 +120,13 @@ AnserRegisterCondition(int gp_session_id, int gp_command_count,
 	if (!AnserInitialized())
 		return false;
 
+	if (expected_producers == 0)
+	{
+		ereport(WARNING,
+				(errmsg("could not register Anser channel: expected producers must be greater than zero")));
+		return false;
+	}
+
 	if (!AnserBuildChannelKey(gp_session_id, gp_command_count, condition_id,
 						   condition_key, channel_key))
 		return false;
@@ -256,13 +263,19 @@ AnserPublish(const AnserChannelKey *channel_key, const void *payload,
 
 	if (payload != NULL && payload_len > 0)
 	{
-		Size		copy_len;
+		if (payload_len > (Size) gp_anser_max_info_size - entry->data_len)
+		{
+			entry->cancelled = true;
+			entry->state = ANSER_CHANNEL_CANCELLED;
+			entry->updated_at = GetCurrentTimestamp();
+			SetLatch(&AnserCtl->send_latch);
+			LWLockRelease(AnserChannelLock);
+			return false;
+		}
 
-		copy_len = Min(payload_len,
-					   (Size) gp_anser_max_info_size - entry->data_len);
 		memcpy(AnserDataArena + entry->data_offset + entry->data_len,
-			   payload, copy_len);
-		entry->data_len += copy_len;
+			   payload, payload_len);
+		entry->data_len += payload_len;
 	}
 
 	entry->done_producers++;
@@ -298,8 +311,9 @@ AnserConsume(const AnserChannelKey *channel_key, void *buffer,
 		bool		found;
 		bool		ready;
 		bool		is_cancelled;
+		bool		delivered = false;
 
-		LWLockAcquire(AnserChannelLock, LW_EXCLUSIVE);
+		LWLockAcquire(AnserChannelLock, LW_SHARED);
 		entry = (AnserChannelEntry *) hash_search(AnserChannelHash,
 											 channel_key,
 											 HASH_FIND,
@@ -313,15 +327,39 @@ AnserConsume(const AnserChannelKey *channel_key, void *buffer,
 		ready = (entry->state == ANSER_CHANNEL_READY);
 		is_cancelled = (entry->state == ANSER_CHANNEL_CANCELLED ||
 						entry->cancelled);
+		if (ready && !is_cancelled)
+		{
+			delivered = AnserDeliverChannelData(entry, buffer, buffer_size,
+											   payload_len);
+			if (!delivered)
+			{
+				LWLockRelease(AnserChannelLock);
+				return false;
+			}
+		}
+		LWLockRelease(AnserChannelLock);
+
 		if (ready || is_cancelled)
 		{
+			LWLockAcquire(AnserChannelLock, LW_EXCLUSIVE);
+			entry = (AnserChannelEntry *) hash_search(AnserChannelHash,
+											 channel_key,
+											 HASH_FIND,
+											 &found);
+			if (!found)
+			{
+				LWLockRelease(AnserChannelLock);
+				return false;
+			}
+
+			is_cancelled = (entry->state == ANSER_CHANNEL_CANCELLED ||
+							entry->cancelled);
 			if (is_cancelled)
 			{
 				if (cancelled != NULL)
 					*cancelled = true;
 			}
-			else if (!AnserDeliverChannelData(entry, buffer, buffer_size,
-										   payload_len))
+			else if (entry->state != ANSER_CHANNEL_READY || !delivered)
 			{
 				LWLockRelease(AnserChannelLock);
 				return false;
@@ -337,7 +375,18 @@ AnserConsume(const AnserChannelKey *channel_key, void *buffer,
 			}
 			entry->updated_at = GetCurrentTimestamp();
 			LWLockRelease(AnserChannelLock);
-			return ready;
+			return ready && !is_cancelled;
+		}
+
+		LWLockAcquire(AnserChannelLock, LW_EXCLUSIVE);
+		entry = (AnserChannelEntry *) hash_search(AnserChannelHash,
+											 channel_key,
+											 HASH_FIND,
+											 &found);
+		if (!found)
+		{
+			LWLockRelease(AnserChannelLock);
+			return false;
 		}
 
 		if (timeout_ms >= 0 &&
@@ -387,6 +436,78 @@ AnserChannelGetState(const AnserChannelKey *channel_key, bool *found)
 	if (found != NULL)
 		*found = local_found;
 	return state;
+}
+
+void
+AnserAttachServiceLatch(bool gather_service)
+{
+	if (!AnserInitialized())
+		return;
+
+	OwnLatch(gather_service ? &AnserCtl->gather_latch : &AnserCtl->send_latch);
+}
+
+void
+AnserDetachServiceLatch(bool gather_service)
+{
+	if (!AnserInitialized())
+		return;
+
+	DisownLatch(gather_service ? &AnserCtl->gather_latch : &AnserCtl->send_latch);
+}
+
+void
+AnserWaitServiceLatch(bool gather_service, long timeout_ms)
+{
+	if (!AnserInitialized())
+	{
+		(void) WaitLatch(MyLatch,
+						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+						 timeout_ms,
+						 PG_WAIT_EXTENSION);
+		ResetLatch(MyLatch);
+		return;
+	}
+
+	if (gather_service)
+	{
+		(void) WaitLatch(&AnserCtl->gather_latch,
+						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+						 timeout_ms,
+						 PG_WAIT_EXTENSION);
+		ResetLatch(&AnserCtl->gather_latch);
+	}
+	else
+	{
+		(void) WaitLatch(&AnserCtl->send_latch,
+						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+						 timeout_ms,
+						 PG_WAIT_EXTENSION);
+		ResetLatch(&AnserCtl->send_latch);
+	}
+}
+
+void
+AnserWakeServiceLatch(bool gather_service)
+{
+	if (!AnserInitialized())
+		return;
+
+	if (gather_service)
+		SetLatch(&AnserCtl->gather_latch);
+	else
+		SetLatch(&AnserCtl->send_latch);
+}
+
+void
+AnserServiceMaintenance(void)
+{
+	if (!AnserInitialized())
+		return;
+
+	LWLockAcquire(AnserChannelLock, LW_EXCLUSIVE);
+	AnserSweepOrphanChannels();
+	LWLockRelease(AnserChannelLock);
 }
 
 bool
@@ -591,6 +712,13 @@ AnserBuildChannelKey(int gp_session_id, int gp_command_count,
 	if (channel_key == NULL || condition_key == NULL)
 		return false;
 
+	if (strlen(condition_key) >= ANSER_CONDITION_KEY_SIZE)
+	{
+		ereport(WARNING,
+				(errmsg("could not build Anser channel key: condition key is too long")));
+		return false;
+	}
+
 	MemSet(channel_key, 0, sizeof(AnserChannelKey));
 	channel_key->gp_session_id = gp_session_id;
 	channel_key->gp_command_count = gp_command_count;
@@ -673,15 +801,25 @@ AnserDeliverChannelData(const AnserChannelEntry *entry, void *buffer,
 	Assert(LWLockHeldByMe(AnserChannelLock));
 	Assert(entry != NULL);
 
-	if (payload_len != NULL)
-		*payload_len = entry->data_len;
-
 	if (entry->arena_slot == ANSER_INVALID_ARENA_SLOT)
+	{
+		if (payload_len != NULL)
+			*payload_len = 0;
 		return (entry->data_len == 0);
+	}
 
-	copy_len = Min(buffer_size, entry->data_len);
-	if (buffer != NULL && copy_len > 0)
+	if (buffer == NULL && entry->data_len > 0)
+		return false;
+
+	if (buffer_size < entry->data_len)
+		return false;
+
+	copy_len = entry->data_len;
+	if (copy_len > 0)
 		memcpy(buffer, AnserDataArena + entry->data_offset, copy_len);
+
+	if (payload_len != NULL)
+		*payload_len = copy_len;
 
 	return true;
 }

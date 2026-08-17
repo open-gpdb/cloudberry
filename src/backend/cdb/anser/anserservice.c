@@ -41,7 +41,7 @@
 static volatile sig_atomic_t anser_service_got_sigterm = false;
 static volatile sig_atomic_t anser_service_got_sighup = false;
 
-static void AnserServiceLoop(const char *service_name);
+static void AnserServiceLoop(const char *service_name, bool gather_service);
 static void AnserServiceSigHup(SIGNAL_ARGS);
 static void AnserServiceSigTerm(SIGNAL_ARGS);
 
@@ -54,17 +54,17 @@ AnserStartRule(Datum main_arg)
 void
 AnserGatherServiceMain(Datum main_arg)
 {
-	AnserServiceLoop("anser gather service");
+	AnserServiceLoop("anser gather service", true);
 }
 
 void
 AnserSendServiceMain(Datum main_arg)
 {
-	AnserServiceLoop("anser send service");
+	AnserServiceLoop("anser send service", false);
 }
 
 static void
-AnserServiceLoop(const char *service_name)
+AnserServiceLoop(const char *service_name, bool gather_service)
 {
 	pqsignal(SIGHUP, AnserServiceSigHup);
 	pqsignal(SIGTERM, AnserServiceSigTerm);
@@ -74,6 +74,7 @@ AnserServiceLoop(const char *service_name)
 	ereport(LOG,
 			(errmsg_internal("%s started", service_name)));
 
+	AnserAttachServiceLatch(gather_service);
 	while (!anser_service_got_sigterm)
 	{
 		if (anser_service_got_sighup)
@@ -82,12 +83,10 @@ AnserServiceLoop(const char *service_name)
 			ProcessConfigFile(PGC_SIGHUP);
 		}
 
-		(void) WaitLatch(MyLatch,
-						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-						 1000L,
-						 PG_WAIT_EXTENSION);
-		ResetLatch(MyLatch);
+		AnserServiceMaintenance();
+		AnserWaitServiceLatch(gather_service, 1000L);
 	}
+	AnserDetachServiceLatch(gather_service);
 
 	proc_exit(0);
 }
@@ -98,6 +97,8 @@ AnserServiceSigHup(SIGNAL_ARGS)
 	int			save_errno = errno;
 
 	anser_service_got_sighup = true;
+	AnserWakeServiceLatch(true);
+	AnserWakeServiceLatch(false);
 	SetLatch(MyLatch);
 	errno = save_errno;
 }
@@ -108,6 +109,8 @@ AnserServiceSigTerm(SIGNAL_ARGS)
 	int			save_errno = errno;
 
 	anser_service_got_sigterm = true;
+	AnserWakeServiceLatch(true);
+	AnserWakeServiceLatch(false);
 	SetLatch(MyLatch);
 	errno = save_errno;
 }
