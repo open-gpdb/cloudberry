@@ -32,10 +32,10 @@
 #include "postgres.h"
 
 #include "datatype/timestamp.h"
+#include "storage/dsm.h"
 #include "storage/latch.h"
 
 #define ANSER_CONDITION_KEY_SIZE	64
-#define ANSER_INVALID_ARENA_SLOT UINT32_MAX
 
 /*
  * Registered adaptive-information condition for one running command.
@@ -71,8 +71,7 @@ typedef struct AnserChannelEntry
 	uint32		consumers;
 	uint32		done_consumers;
 	Size		data_len;
-	Size		data_offset;
-	uint32		arena_slot;
+	dsm_handle	dsm_handle;
 	TimestampTz created_at;
 	TimestampTz updated_at;
 } AnserChannelEntry;
@@ -81,8 +80,6 @@ typedef struct AnserControl
 {
 	uint32		max_channels;
 	Size		max_info_size;
-	Size		arena_size;
-	Size		arena_next;
 	Latch		gather_latch;
 	Latch		send_latch;
 } AnserControl;
@@ -106,9 +103,16 @@ extern bool AnserSubscribe(const AnserChannelKey *channel_key);
 extern bool AnserPublish(const AnserChannelKey *channel_key,
 						 const void *payload, Size payload_len,
 						 bool cancelled);
+extern bool AnserWaitProducersRegistered(const AnserChannelKey *channel_key,
+										 long timeout_ms);
 extern bool AnserConsume(const AnserChannelKey *channel_key,
 						 void *buffer, Size buffer_size, Size *payload_len,
 						 bool *cancelled, long timeout_ms);
+extern bool AnserWaitReady(const AnserChannelKey *channel_key,
+					   bool *cancelled);
+extern bool AnserConsumeReady(const AnserChannelKey *channel_key,
+						  void *buffer, Size buffer_size, Size *payload_len,
+						  bool *cancelled);
 extern AnserChannelState AnserChannelGetState(const AnserChannelKey *channel_key,
 										  bool *found);
 extern bool AnserCancelChannel(const AnserChannelKey *channel_key);

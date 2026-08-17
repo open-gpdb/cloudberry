@@ -3455,18 +3455,18 @@ struct config_int ConfigureNamesInt_gp[] =
 	{
 		{"gp_anser_max_info_size", PGC_POSTMASTER, CUSTOM_OPTIONS,
 			gettext_noop("Sets the maximum byte size of one Anser information record."),
-			gettext_noop("This value sizes the fixed Anser shared-memory data arena at postmaster start."),
+			gettext_noop("This is the per-record DSM payload cap for Anser information."),
 			GUC_NOT_IN_SAMPLE
 		},
 		&gp_anser_max_info_size,
-		1024 * 1024, 1, INT_MAX,
+		16 * 1024 * 1024, 1, INT_MAX,
 		NULL, NULL, NULL
 	},
 
 	{
 		{"gp_anser_timeout_ms", PGC_USERSET, CUSTOM_OPTIONS,
-			gettext_noop("Sets how long Anser consumers wait for adaptive information."),
-			gettext_noop("A consumer treats the dependency as weak and continues without data after this timeout."),
+			gettext_noop("Sets how long Anser consumers wait for producer registration."),
+			gettext_noop("After producer registration, consumers wait for data without this timeout and rely on query cancellation or channel cancellation."),
 			GUC_UNIT_MS | GUC_NOT_IN_SAMPLE
 		},
 		&gp_anser_timeout_ms,
