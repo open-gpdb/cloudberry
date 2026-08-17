@@ -284,8 +284,19 @@ AnserConsume(const AnserChannelKey *channel_key, void *buffer,
 			 Size buffer_size, Size *payload_len, bool *cancelled,
 			 long timeout_ms)
 {
-	if (!AnserWaitForState(channel_key, timeout_ms, false, cancelled))
+	bool		was_cancelled = false;
+
+	if (!AnserWaitForState(channel_key, timeout_ms, false, &was_cancelled))
+	{
+		if (!was_cancelled && channel_key != NULL)
+		{
+			(void) AnserCancelChannel(channel_key);
+			was_cancelled = true;
+		}
+		if (cancelled != NULL)
+			*cancelled = was_cancelled;
 		return false;
+	}
 
 	return AnserConsumeReady(channel_key, buffer, buffer_size, payload_len,
 						  cancelled);
@@ -657,8 +668,10 @@ static bool
 AnserStorePayloadDSM(AnserChannelEntry *entry, const void *payload,
 						   Size payload_len)
 {
-	dsm_segment *seg;
-	void	   *addr;
+	dsm_segment *new_seg;
+	dsm_segment *old_seg = NULL;
+	void	   *new_addr;
+	Size		new_len;
 
 	Assert(LWLockHeldByMeInMode(AnserChannelLock, LW_EXCLUSIVE));
 	Assert(entry != NULL);
@@ -666,19 +679,35 @@ AnserStorePayloadDSM(AnserChannelEntry *entry, const void *payload,
 	if (payload == NULL || payload_len == 0)
 		return true;
 
-	if (entry->dsm_handle != DSM_HANDLE_INVALID)
-		AnserReleasePayloadDSM(entry);
-
-	seg = dsm_create(payload_len, DSM_CREATE_NULL_IF_MAXSEGMENTS);
-	if (seg == NULL)
+	if (payload_len > (Size) gp_anser_max_info_size - entry->data_len)
 		return false;
 
-	addr = dsm_segment_address(seg);
-	memcpy(addr, payload, payload_len);
-	dsm_pin_segment(seg);
-	entry->dsm_handle = dsm_segment_handle(seg);
-	entry->data_len = payload_len;
-	dsm_detach(seg);
+	new_len = entry->data_len + payload_len;
+	new_seg = dsm_create(new_len, DSM_CREATE_NULL_IF_MAXSEGMENTS);
+	if (new_seg == NULL)
+		return false;
+
+	new_addr = dsm_segment_address(new_seg);
+	if (entry->dsm_handle != DSM_HANDLE_INVALID && entry->data_len > 0)
+	{
+		old_seg = dsm_attach(entry->dsm_handle);
+		if (old_seg == NULL)
+		{
+			dsm_detach(new_seg);
+			return false;
+		}
+		memcpy(new_addr, dsm_segment_address(old_seg), entry->data_len);
+	}
+	memcpy((char *) new_addr + entry->data_len, payload, payload_len);
+
+	if (old_seg != NULL)
+		dsm_detach(old_seg);
+	AnserReleasePayloadDSM(entry);
+
+	dsm_pin_segment(new_seg);
+	entry->dsm_handle = dsm_segment_handle(new_seg);
+	entry->data_len = new_len;
+	dsm_detach(new_seg);
 
 	return true;
 }
