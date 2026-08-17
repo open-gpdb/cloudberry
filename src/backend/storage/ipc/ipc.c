@@ -148,7 +148,10 @@ proc_exit(int code)
 		 */
 		mkdir("gprof", S_IRWXU | S_IRWXG | S_IRWXO);
 		mkdir(gprofDirName, S_IRWXU | S_IRWXG | S_IRWXO);
-		chdir(gprofDirName);
+		if (chdir(gprofDirName) == -1) {
+		    perror("chdir");
+		    elog(ERROR, "failed to perform chdir()");
+	        };
 	}
 #endif
 
