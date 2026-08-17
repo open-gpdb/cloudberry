@@ -293,6 +293,91 @@ mod_m(uint32 val, uint64 m)
 	return val & (m - 1);
 }
 
+bloom_filter *
+bloom_create_with_params(uint64 bitset_bits, int k_hash_funcs, uint64 seed)
+{
+	bloom_filter *filter;
+	Size		bitset_bytes;
+
+	if (bitset_bits == 0 || bitset_bits > (PG_UINT32_MAX + UINT64CONST(1)) ||
+		((bitset_bits - 1) & bitset_bits) != 0)
+		return NULL;
+
+	if (k_hash_funcs < 1 || k_hash_funcs > MAX_HASH_FUNCS)
+		return NULL;
+
+	bitset_bytes = (Size) (bitset_bits / BITS_PER_BYTE);
+	filter = palloc0(offsetof(bloom_filter, bitset) + bitset_bytes);
+	filter->k_hash_funcs = k_hash_funcs;
+	filter->seed = seed;
+	filter->m = bitset_bits;
+
+	return filter;
+}
+
+bool
+bloom_union(bloom_filter *dst, const bloom_filter *src)
+{
+	Size		bitset_bytes;
+	Size		i;
+
+	if (dst == NULL || src == NULL)
+		return false;
+
+	if (dst->k_hash_funcs != src->k_hash_funcs ||
+		dst->seed != src->seed ||
+		dst->m != src->m)
+		return false;
+
+	bitset_bytes = (Size) (dst->m / BITS_PER_BYTE);
+	for (i = 0; i < bitset_bytes; i++)
+		dst->bitset[i] |= src->bitset[i];
+
+	return true;
+}
+
+int
+bloom_k_hash_funcs(const bloom_filter *filter)
+{
+	return filter != NULL ? filter->k_hash_funcs : 0;
+}
+
+uint64
+bloom_seed(const bloom_filter *filter)
+{
+	return filter != NULL ? filter->seed : 0;
+}
+
+uint64
+bloom_bitset_bits(const bloom_filter *filter)
+{
+	return filter != NULL ? filter->m : 0;
+}
+
+Size
+bloom_bitset_bytes(const bloom_filter *filter)
+{
+	return filter != NULL ? (Size) (filter->m / BITS_PER_BYTE) : 0;
+}
+
+const unsigned char *
+bloom_bitset_data(const bloom_filter *filter)
+{
+	return filter != NULL ? filter->bitset : NULL;
+}
+
+void
+bloom_set_bitset_data(bloom_filter *filter, const unsigned char *data, Size len)
+{
+	if (filter == NULL || data == NULL)
+		return;
+
+	if (len != bloom_bitset_bytes(filter))
+		return;
+
+	memcpy(filter->bitset, data, len);
+}
+
 double
 bloom_false_positive_rate(bloom_filter *filter)
 {

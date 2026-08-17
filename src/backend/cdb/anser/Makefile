@@ -28,6 +28,6 @@ include $(top_builddir)/src/Makefile.global
 
 override CPPFLAGS := -I$(libpq_srcdir) $(CPPFLAGS)
 
-OBJS = anser.o anserservice.o
+OBJS = anser.o anserservice.o anserfilter.o
 
 include $(top_srcdir)/src/backend/common.mk
