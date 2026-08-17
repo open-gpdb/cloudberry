@@ -35,6 +35,7 @@
 #include "storage/latch.h"
 
 #define ANSER_CONDITION_KEY_SIZE	64
+#define ANSER_INVALID_ARENA_SLOT UINT32_MAX
 
 /*
  * Registered adaptive-information condition for one running command.
@@ -71,6 +72,7 @@ typedef struct AnserChannelEntry
 	uint32		done_consumers;
 	Size		data_len;
 	Size		data_offset;
+	uint32		arena_slot;
 	TimestampTz created_at;
 	TimestampTz updated_at;
 } AnserChannelEntry;
@@ -94,5 +96,27 @@ extern int	gp_anser_timeout_ms;
 /* Shared-memory setup. */
 extern Size AnserShmemSize(void);
 extern void AnserShmemInit(void);
+
+/* Public channel-manager API. */
+extern bool AnserRegisterCondition(int gp_session_id, int gp_command_count,
+								   uint32 condition_id, const char *condition_key,
+								   uint32 expected_producers,
+								   AnserChannelKey *channel_key);
+extern bool AnserSubscribe(const AnserChannelKey *channel_key);
+extern bool AnserPublish(const AnserChannelKey *channel_key,
+						 const void *payload, Size payload_len,
+						 bool cancelled);
+extern bool AnserConsume(const AnserChannelKey *channel_key,
+						 void *buffer, Size buffer_size, Size *payload_len,
+						 bool *cancelled, long timeout_ms);
+extern AnserChannelState AnserChannelGetState(const AnserChannelKey *channel_key,
+										  bool *found);
+extern bool AnserCancelChannel(const AnserChannelKey *channel_key);
+extern void AnserCancelQuery(int gp_session_id, int gp_command_count);
+
+/* Background-service entry points. */
+extern void AnserGatherServiceMain(Datum main_arg);
+extern void AnserSendServiceMain(Datum main_arg);
+extern bool AnserStartRule(Datum main_arg);
 
 #endif							/* CDB_ANSER_H */

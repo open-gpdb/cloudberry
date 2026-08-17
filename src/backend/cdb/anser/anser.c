@@ -29,14 +29,17 @@
 #include "postgres.h"
 
 #include "cdb/anser.h"
+#include "miscadmin.h"
 #include "storage/lwlock.h"
 #include "storage/shmem.h"
 #include "utils/hsearch.h"
 #include "utils/timestamp.h"
+#include "utils/wait_event.h"
 
 #define ANSER_CONTROL_NAME		"Anser Control"
 #define ANSER_CHANNEL_HASH_NAME	"Anser Channel Hash"
 #define ANSER_DATA_ARENA_NAME	"Anser Data Arena"
+#define ANSER_ARENA_SLOTS_NAME	"Anser Arena Slots"
 
 bool		gp_anser_enable = false;
 int			gp_anser_max_channels = 128;
@@ -46,14 +49,26 @@ int			gp_anser_timeout_ms = 1000;
 static AnserControl *AnserCtl = NULL;
 static HTAB *AnserChannelHash = NULL;
 static char *AnserDataArena = NULL;
+static bool *AnserArenaSlotInUse = NULL;
 
 static Size AnserDataArenaSize(void);
+static Size AnserArenaSlotMapSize(void);
 static Size AnserChannelHashSize(void);
 static void AnserInitializeControl(bool found);
 static void AnserInitializeChannelHash(void);
 static void AnserInitializeDataArena(void);
+static void AnserInitializeArenaSlotMap(void);
 static void AnserSweepOrphanChannels(void);
 static bool AnserChannelOwnerIsAlive(const AnserChannelEntry *entry);
+static bool AnserBuildChannelKey(int gp_session_id, int gp_command_count,
+								 uint32 condition_id, const char *condition_key,
+								 AnserChannelKey *channel_key);
+static bool AnserAllocateArenaSlot(AnserChannelEntry *entry);
+static void AnserReleaseArenaSlot(AnserChannelEntry *entry);
+static bool AnserDeliverChannelData(const AnserChannelEntry *entry,
+									void *buffer, Size buffer_size,
+									Size *payload_len);
+static bool AnserInitialized(void);
 
 Size
 AnserShmemSize(void)
@@ -66,6 +81,7 @@ AnserShmemSize(void)
 	size = add_size(size, MAXALIGN(sizeof(AnserControl)));
 	size = add_size(size, AnserChannelHashSize());
 	size = add_size(size, AnserDataArenaSize());
+	size = add_size(size, AnserArenaSlotMapSize());
 
 	return size;
 }
@@ -84,9 +100,345 @@ AnserShmemInit(void)
 	AnserInitializeControl(found);
 	AnserInitializeChannelHash();
 	AnserInitializeDataArena();
+	AnserInitializeArenaSlotMap();
 
 	LWLockAcquire(AnserChannelLock, LW_EXCLUSIVE);
 	AnserSweepOrphanChannels();
+	LWLockRelease(AnserChannelLock);
+}
+
+bool
+AnserRegisterCondition(int gp_session_id, int gp_command_count,
+					   uint32 condition_id, const char *condition_key,
+					   uint32 expected_producers,
+					   AnserChannelKey *channel_key)
+{
+	AnserChannelEntry *entry;
+	bool		found;
+	TimestampTz now;
+
+	if (!AnserInitialized())
+		return false;
+
+	if (!AnserBuildChannelKey(gp_session_id, gp_command_count, condition_id,
+						   condition_key, channel_key))
+		return false;
+
+	LWLockAcquire(AnserChannelLock, LW_EXCLUSIVE);
+	entry = (AnserChannelEntry *) hash_search(AnserChannelHash, channel_key,
+											 HASH_ENTER_NULL, &found);
+	if (entry == NULL)
+	{
+		AnserSweepOrphanChannels();
+		entry = (AnserChannelEntry *) hash_search(AnserChannelHash, channel_key,
+											 HASH_ENTER_NULL, &found);
+	}
+
+	if (entry == NULL)
+	{
+		LWLockRelease(AnserChannelLock);
+		ereport(WARNING,
+				(errmsg("could not register Anser channel: channel map is full")));
+		return false;
+	}
+
+	now = GetCurrentTimestamp();
+	if (!found)
+	{
+		MemSet(entry, 0, sizeof(AnserChannelEntry));
+		entry->key = *channel_key;
+		entry->state = ANSER_CHANNEL_PENDING;
+		entry->expected_producers = expected_producers;
+		entry->arena_slot = ANSER_INVALID_ARENA_SLOT;
+		entry->created_at = now;
+	}
+	else if (entry->state == ANSER_CHANNEL_CANCELLED ||
+			 entry->state == ANSER_CHANNEL_CONSUMED)
+	{
+		AnserReleaseArenaSlot(entry);
+		MemSet(entry, 0, sizeof(AnserChannelEntry));
+		entry->key = *channel_key;
+		entry->state = ANSER_CHANNEL_PENDING;
+		entry->expected_producers = expected_producers;
+		entry->arena_slot = ANSER_INVALID_ARENA_SLOT;
+		entry->created_at = now;
+	}
+	else
+		entry->expected_producers = expected_producers;
+
+	entry->updated_at = now;
+	LWLockRelease(AnserChannelLock);
+
+	return true;
+}
+
+bool
+AnserSubscribe(const AnserChannelKey *channel_key)
+{
+	AnserChannelEntry *entry;
+	bool		found;
+
+	if (!AnserInitialized() || channel_key == NULL)
+		return false;
+
+	LWLockAcquire(AnserChannelLock, LW_EXCLUSIVE);
+	entry = (AnserChannelEntry *) hash_search(AnserChannelHash,
+											 channel_key,
+											 HASH_FIND,
+											 &found);
+	if (!found)
+	{
+		LWLockRelease(AnserChannelLock);
+		return false;
+	}
+
+	entry->consumers++;
+	entry->updated_at = GetCurrentTimestamp();
+	LWLockRelease(AnserChannelLock);
+
+	return true;
+}
+
+bool
+AnserPublish(const AnserChannelKey *channel_key, const void *payload,
+			 Size payload_len, bool cancelled)
+{
+	AnserChannelEntry *entry;
+	bool		found;
+
+	if (!AnserInitialized() || channel_key == NULL)
+		return false;
+
+	LWLockAcquire(AnserChannelLock, LW_EXCLUSIVE);
+	entry = (AnserChannelEntry *) hash_search(AnserChannelHash,
+											 channel_key,
+											 HASH_FIND,
+											 &found);
+	if (!found)
+	{
+		LWLockRelease(AnserChannelLock);
+		return false;
+	}
+
+	if (cancelled)
+	{
+		entry->cancelled = true;
+		entry->state = ANSER_CHANNEL_CANCELLED;
+		entry->updated_at = GetCurrentTimestamp();
+		SetLatch(&AnserCtl->send_latch);
+		LWLockRelease(AnserChannelLock);
+		return true;
+	}
+
+	if (payload_len > (Size) gp_anser_max_info_size)
+	{
+		entry->cancelled = true;
+		entry->state = ANSER_CHANNEL_CANCELLED;
+		entry->updated_at = GetCurrentTimestamp();
+		SetLatch(&AnserCtl->send_latch);
+		LWLockRelease(AnserChannelLock);
+		return false;
+	}
+
+	if (entry->state == ANSER_CHANNEL_PENDING)
+		entry->state = ANSER_CHANNEL_COLLECTING;
+
+	if (entry->arena_slot == ANSER_INVALID_ARENA_SLOT &&
+		!AnserAllocateArenaSlot(entry))
+	{
+		entry->cancelled = true;
+		entry->state = ANSER_CHANNEL_CANCELLED;
+		entry->updated_at = GetCurrentTimestamp();
+		SetLatch(&AnserCtl->send_latch);
+		LWLockRelease(AnserChannelLock);
+		return false;
+	}
+
+	if (payload != NULL && payload_len > 0)
+	{
+		Size		copy_len;
+
+		copy_len = Min(payload_len,
+					   (Size) gp_anser_max_info_size - entry->data_len);
+		memcpy(AnserDataArena + entry->data_offset + entry->data_len,
+			   payload, copy_len);
+		entry->data_len += copy_len;
+	}
+
+	entry->done_producers++;
+	if (entry->done_producers >= entry->expected_producers)
+		entry->state = ANSER_CHANNEL_READY;
+	entry->updated_at = GetCurrentTimestamp();
+
+	SetLatch(&AnserCtl->gather_latch);
+	SetLatch(&AnserCtl->send_latch);
+	LWLockRelease(AnserChannelLock);
+
+	return true;
+}
+
+bool
+AnserConsume(const AnserChannelKey *channel_key, void *buffer,
+			 Size buffer_size, Size *payload_len, bool *cancelled,
+			 long timeout_ms)
+{
+	TimestampTz start_time = GetCurrentTimestamp();
+
+	if (payload_len != NULL)
+		*payload_len = 0;
+	if (cancelled != NULL)
+		*cancelled = false;
+
+	if (!AnserInitialized() || channel_key == NULL)
+		return false;
+
+	for (;;)
+	{
+		AnserChannelEntry *entry;
+		bool		found;
+		bool		ready;
+		bool		is_cancelled;
+
+		LWLockAcquire(AnserChannelLock, LW_EXCLUSIVE);
+		entry = (AnserChannelEntry *) hash_search(AnserChannelHash,
+											 channel_key,
+											 HASH_FIND,
+											 &found);
+		if (!found)
+		{
+			LWLockRelease(AnserChannelLock);
+			return false;
+		}
+
+		ready = (entry->state == ANSER_CHANNEL_READY);
+		is_cancelled = (entry->state == ANSER_CHANNEL_CANCELLED ||
+						entry->cancelled);
+		if (ready || is_cancelled)
+		{
+			if (is_cancelled)
+			{
+				if (cancelled != NULL)
+					*cancelled = true;
+			}
+			else if (!AnserDeliverChannelData(entry, buffer, buffer_size,
+										   payload_len))
+			{
+				LWLockRelease(AnserChannelLock);
+				return false;
+			}
+
+			entry->done_consumers++;
+			if (entry->consumers == 0 ||
+				entry->done_consumers >= entry->consumers)
+			{
+				entry->state = is_cancelled ? ANSER_CHANNEL_CANCELLED :
+					ANSER_CHANNEL_CONSUMED;
+				AnserReleaseArenaSlot(entry);
+			}
+			entry->updated_at = GetCurrentTimestamp();
+			LWLockRelease(AnserChannelLock);
+			return ready;
+		}
+
+		if (timeout_ms >= 0 &&
+			TimestampDifferenceExceeds(start_time, GetCurrentTimestamp(),
+									   timeout_ms))
+		{
+			entry->cancelled = true;
+			entry->state = ANSER_CHANNEL_CANCELLED;
+			entry->updated_at = GetCurrentTimestamp();
+			if (cancelled != NULL)
+				*cancelled = true;
+			LWLockRelease(AnserChannelLock);
+			return false;
+		}
+
+		LWLockRelease(AnserChannelLock);
+		ResetLatch(MyLatch);
+		(void) WaitLatch(MyLatch,
+						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+						 10L,
+						 PG_WAIT_EXTENSION);
+	}
+}
+
+AnserChannelState
+AnserChannelGetState(const AnserChannelKey *channel_key, bool *found)
+{
+	AnserChannelEntry *entry;
+	bool		local_found;
+	AnserChannelState state = ANSER_CHANNEL_CANCELLED;
+
+	if (found != NULL)
+		*found = false;
+
+	if (!AnserInitialized() || channel_key == NULL)
+		return state;
+
+	LWLockAcquire(AnserChannelLock, LW_SHARED);
+	entry = (AnserChannelEntry *) hash_search(AnserChannelHash,
+										 channel_key,
+										 HASH_FIND,
+										 &local_found);
+	if (local_found)
+		state = entry->state;
+	LWLockRelease(AnserChannelLock);
+
+	if (found != NULL)
+		*found = local_found;
+	return state;
+}
+
+bool
+AnserCancelChannel(const AnserChannelKey *channel_key)
+{
+	AnserChannelEntry *entry;
+	bool		found;
+
+	if (!AnserInitialized() || channel_key == NULL)
+		return false;
+
+	LWLockAcquire(AnserChannelLock, LW_EXCLUSIVE);
+	entry = (AnserChannelEntry *) hash_search(AnserChannelHash,
+											 channel_key,
+											 HASH_FIND,
+											 &found);
+	if (found)
+	{
+		entry->cancelled = true;
+		entry->state = ANSER_CHANNEL_CANCELLED;
+		entry->updated_at = GetCurrentTimestamp();
+		AnserReleaseArenaSlot(entry);
+		SetLatch(&AnserCtl->send_latch);
+	}
+	LWLockRelease(AnserChannelLock);
+
+	return found;
+}
+
+void
+AnserCancelQuery(int gp_session_id, int gp_command_count)
+{
+	HASH_SEQ_STATUS status;
+	AnserChannelEntry *entry;
+
+	if (!AnserInitialized())
+		return;
+
+	LWLockAcquire(AnserChannelLock, LW_EXCLUSIVE);
+	hash_seq_init(&status, AnserChannelHash);
+	while ((entry = (AnserChannelEntry *) hash_seq_search(&status)) != NULL)
+	{
+		if (entry->key.gp_session_id == gp_session_id &&
+			entry->key.gp_command_count == gp_command_count)
+		{
+			entry->cancelled = true;
+			entry->state = ANSER_CHANNEL_CANCELLED;
+			entry->updated_at = GetCurrentTimestamp();
+			AnserReleaseArenaSlot(entry);
+		}
+	}
+	SetLatch(&AnserCtl->send_latch);
 	LWLockRelease(AnserChannelLock);
 }
 
@@ -98,6 +450,13 @@ AnserDataArenaSize(void)
 
 	return mul_size((Size) gp_anser_max_channels,
 					(Size) gp_anser_max_info_size);
+}
+
+static Size
+AnserArenaSlotMapSize(void)
+{
+	Assert(gp_anser_max_channels >= 0);
+	return MAXALIGN(sizeof(bool) * (Size) gp_anser_max_channels);
 }
 
 static Size
@@ -152,12 +511,20 @@ AnserInitializeDataArena(void)
 		MemSet(AnserDataArena, 0, AnserDataArenaSize());
 }
 
+static void
+AnserInitializeArenaSlotMap(void)
+{
+	bool		found;
+
+	AnserArenaSlotInUse = (bool *) ShmemInitStruct(ANSER_ARENA_SLOTS_NAME,
+													AnserArenaSlotMapSize(),
+													&found);
+	if (!found)
+		MemSet(AnserArenaSlotInUse, 0, AnserArenaSlotMapSize());
+}
+
 /*
  * Recycle terminal or orphaned channels before declaring registration failure.
- *
- * Chunk 1 only provides the shared-memory sweep skeleton. The public API chunk
- * will call this before returning a fail-open WARNING on channel allocation
- * exhaustion.
  */
 static void
 AnserSweepOrphanChannels(void)
@@ -183,10 +550,13 @@ AnserSweepOrphanChannels(void)
 
 		if (recycle)
 		{
-			(void) hash_search(AnserChannelHash,
-							  &entry->key,
-							  HASH_REMOVE,
-							  NULL);
+			/*
+			 * Do not remove dynahash entries while scanning.  The arena slot is
+			 * the scarce payload resource, so release it here; registration can
+			 * reuse an existing terminal entry with the same key.  Full hash-entry
+			 * eviction can be added later with a separate key collection pass.
+			 */
+			AnserReleaseArenaSlot(entry);
 		}
 	}
 }
@@ -194,12 +564,122 @@ AnserSweepOrphanChannels(void)
 /*
  * Conservative placeholder for liveness checking.
  *
- * Correct ssid/ccnt owner validation is intentionally left for the public API
- * chunk, where query registration and cancellation semantics are introduced.
+ * Correct ssid/ccnt owner validation is intentionally left for a follow-up;
+ * PR 1 has explicit AnserCancelQuery() cleanup at query end/failure.
  */
 static bool
 AnserChannelOwnerIsAlive(const AnserChannelEntry *entry)
 {
 	Assert(entry != NULL);
 	return true;
+}
+
+static bool
+AnserBuildChannelKey(int gp_session_id, int gp_command_count,
+					 uint32 condition_id, const char *condition_key,
+					 AnserChannelKey *channel_key)
+{
+	if (channel_key == NULL || condition_key == NULL)
+		return false;
+
+	MemSet(channel_key, 0, sizeof(AnserChannelKey));
+	channel_key->gp_session_id = gp_session_id;
+	channel_key->gp_command_count = gp_command_count;
+	channel_key->condition_id = condition_id;
+	strlcpy(channel_key->condition_key, condition_key,
+			ANSER_CONDITION_KEY_SIZE);
+
+	return true;
+}
+
+static bool
+AnserAllocateArenaSlot(AnserChannelEntry *entry)
+{
+	uint32		slot;
+
+	Assert(LWLockHeldByMeInMode(AnserChannelLock, LW_EXCLUSIVE));
+	Assert(entry != NULL);
+
+	if (entry->arena_slot != ANSER_INVALID_ARENA_SLOT)
+		return true;
+
+	for (slot = 0; slot < AnserCtl->max_channels; slot++)
+	{
+		if (!AnserArenaSlotInUse[slot])
+		{
+			AnserArenaSlotInUse[slot] = true;
+			entry->arena_slot = slot;
+			entry->data_offset = (Size) slot * AnserCtl->max_info_size;
+			entry->data_len = 0;
+			return true;
+		}
+	}
+
+	AnserSweepOrphanChannels();
+	for (slot = 0; slot < AnserCtl->max_channels; slot++)
+	{
+		if (!AnserArenaSlotInUse[slot])
+		{
+			AnserArenaSlotInUse[slot] = true;
+			entry->arena_slot = slot;
+			entry->data_offset = (Size) slot * AnserCtl->max_info_size;
+			entry->data_len = 0;
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static void
+AnserReleaseArenaSlot(AnserChannelEntry *entry)
+{
+	Assert(LWLockHeldByMeInMode(AnserChannelLock, LW_EXCLUSIVE));
+
+	if (entry == NULL || entry->arena_slot == ANSER_INVALID_ARENA_SLOT)
+		return;
+
+	Assert(entry->arena_slot < AnserCtl->max_channels);
+	AnserArenaSlotInUse[entry->arena_slot] = false;
+	entry->arena_slot = ANSER_INVALID_ARENA_SLOT;
+	entry->data_offset = 0;
+	entry->data_len = 0;
+}
+
+/*
+ * Consume a ready channel payload.
+ *
+ * PR 1 stores opaque bytes and copies them out for the test module. Keep this
+ * logic behind a dedicated helper because later PRs will need different
+ * consumers: bloom-filter union/materialization, direct filter installation,
+ * metadata-only consumption, and possibly payload formats that are not copied
+ * into a caller-owned buffer at all.
+ */
+static bool
+AnserDeliverChannelData(const AnserChannelEntry *entry, void *buffer,
+						Size buffer_size, Size *payload_len)
+{
+	Size		copy_len;
+
+	Assert(LWLockHeldByMe(AnserChannelLock));
+	Assert(entry != NULL);
+
+	if (payload_len != NULL)
+		*payload_len = entry->data_len;
+
+	if (entry->arena_slot == ANSER_INVALID_ARENA_SLOT)
+		return (entry->data_len == 0);
+
+	copy_len = Min(buffer_size, entry->data_len);
+	if (buffer != NULL && copy_len > 0)
+		memcpy(buffer, AnserDataArena + entry->data_offset, copy_len);
+
+	return true;
+}
+
+static bool
+AnserInitialized(void)
+{
+	return gp_anser_enable && AnserCtl != NULL && AnserChannelHash != NULL &&
+		AnserDataArena != NULL && AnserArenaSlotInUse != NULL;
 }

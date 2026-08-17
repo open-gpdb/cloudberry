@@ -24,6 +24,7 @@
 #include "access/transam.h"
 #include "access/url.h"
 #include "access/xlog_internal.h"
+#include "cdb/anser.h"
 #include "cdb/cdbappendonlyam.h"
 #include "cdb/cdbendpoint.h"
 #include "cdb/cdbdisp.h"
@@ -617,6 +618,17 @@ struct config_bool ConfigureNamesBool_gp[] =
 		 NULL
 		},
 		&gp_autostats_lock_wait,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"gp_anser_enable", PGC_POSTMASTER, CUSTOM_OPTIONS,
+			gettext_noop("Enables the Anser adaptive information sharing subsystem."),
+			gettext_noop("When disabled, Anser does not allocate shared memory and its background services are not started."),
+			GUC_NOT_IN_SAMPLE
+		},
+		&gp_anser_enable,
 		false,
 		NULL, NULL, NULL
 	},
@@ -3426,6 +3438,39 @@ struct config_int ConfigureNamesInt_gp[] =
 		},
 		&gp_max_local_distributed_cache,
 		1024, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"gp_anser_max_channels", PGC_POSTMASTER, CUSTOM_OPTIONS,
+			gettext_noop("Sets the maximum number of Anser channels."),
+			gettext_noop("This value sizes the fixed Anser shared-memory channel map at postmaster start."),
+			GUC_NOT_IN_SAMPLE
+		},
+		&gp_anser_max_channels,
+		128, 1, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"gp_anser_max_info_size", PGC_POSTMASTER, CUSTOM_OPTIONS,
+			gettext_noop("Sets the maximum byte size of one Anser information record."),
+			gettext_noop("This value sizes the fixed Anser shared-memory data arena at postmaster start."),
+			GUC_NOT_IN_SAMPLE
+		},
+		&gp_anser_max_info_size,
+		1024 * 1024, 1, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"gp_anser_timeout_ms", PGC_USERSET, CUSTOM_OPTIONS,
+			gettext_noop("Sets how long Anser consumers wait for adaptive information."),
+			gettext_noop("A consumer treats the dependency as weak and continues without data after this timeout."),
+			GUC_UNIT_MS | GUC_NOT_IN_SAMPLE
+		},
+		&gp_anser_timeout_ms,
+		1000, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
 
