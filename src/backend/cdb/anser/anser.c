@@ -531,11 +531,17 @@ AnserSweepOrphanChannels(void)
 {
 	HASH_SEQ_STATUS status;
 	AnserChannelEntry *entry;
+	AnserChannelKey *remove_keys;
+	int			remove_count = 0;
+	int			i;
 
 	Assert(LWLockHeldByMeInMode(AnserChannelLock, LW_EXCLUSIVE));
 
 	if (AnserChannelHash == NULL)
 		return;
+
+	remove_keys = (AnserChannelKey *) palloc(sizeof(AnserChannelKey) *
+											  (Size) gp_anser_max_channels);
 
 	hash_seq_init(&status, AnserChannelHash);
 	while ((entry = (AnserChannelEntry *) hash_seq_search(&status)) != NULL)
@@ -550,15 +556,18 @@ AnserSweepOrphanChannels(void)
 
 		if (recycle)
 		{
-			/*
-			 * Do not remove dynahash entries while scanning.  The arena slot is
-			 * the scarce payload resource, so release it here; registration can
-			 * reuse an existing terminal entry with the same key.  Full hash-entry
-			 * eviction can be added later with a separate key collection pass.
-			 */
 			AnserReleaseArenaSlot(entry);
+			remove_keys[remove_count++] = entry->key;
 		}
 	}
+
+	for (i = 0; i < remove_count; i++)
+		(void) hash_search(AnserChannelHash,
+						  &remove_keys[i],
+						  HASH_REMOVE,
+						  NULL);
+
+	pfree(remove_keys);
 }
 
 /*

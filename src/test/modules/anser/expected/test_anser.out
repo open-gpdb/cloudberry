@@ -1,0 +1,119 @@
+CREATE EXTENSION test_anser;
+-- Happy path: one condition, two producers, two consumers.
+SELECT anser_test_register_condition(1, 1, 1, 'join_a', 2);
+ anser_test_register_condition 
+-------------------------------
+ t
+(1 row)
+
+SELECT anser_test_subscribe(1, 1, 1, 'join_a');
+ anser_test_subscribe 
+----------------------
+ t
+(1 row)
+
+SELECT anser_test_subscribe(1, 1, 1, 'join_a');
+ anser_test_subscribe 
+----------------------
+ t
+(1 row)
+
+SELECT anser_test_publish(1, 1, 1, 'join_a', '\x6161'::bytea, false);
+ anser_test_publish 
+--------------------
+ t
+(1 row)
+
+SELECT anser_test_state(1, 1, 1, 'join_a');
+ anser_test_state 
+------------------
+ COLLECTING
+(1 row)
+
+SELECT anser_test_publish(1, 1, 1, 'join_a', '\x6262'::bytea, false);
+ anser_test_publish 
+--------------------
+ t
+(1 row)
+
+SELECT anser_test_state(1, 1, 1, 'join_a');
+ anser_test_state 
+------------------
+ READY
+(1 row)
+
+SELECT encode(anser_test_consume(1, 1, 1, 'join_a', 0), 'escape');
+ encode 
+--------
+ aabb
+(1 row)
+
+SELECT encode(anser_test_consume(1, 1, 1, 'join_a', 0), 'escape');
+ encode 
+--------
+ aabb
+(1 row)
+
+SELECT anser_test_state(1, 1, 1, 'join_a');
+ anser_test_state 
+------------------
+ CONSUMED
+(1 row)
+
+-- Timeout/cancel path: no producer publishes.
+SELECT anser_test_register_condition(1, 1, 2, 'join_timeout', 1);
+ anser_test_register_condition 
+-------------------------------
+ t
+(1 row)
+
+SELECT anser_test_subscribe(1, 1, 2, 'join_timeout');
+ anser_test_subscribe 
+----------------------
+ t
+(1 row)
+
+SELECT anser_test_consume(1, 1, 2, 'join_timeout', 1) IS NULL;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT anser_test_state(1, 1, 2, 'join_timeout');
+ anser_test_state 
+------------------
+ CANCELLED
+(1 row)
+
+-- Query-level cancellation touches all channels for the command.
+SELECT anser_test_register_condition(1, 2, 1, 'join_b', 1);
+ anser_test_register_condition 
+-------------------------------
+ t
+(1 row)
+
+SELECT anser_test_register_condition(1, 2, 2, 'join_c', 1);
+ anser_test_register_condition 
+-------------------------------
+ t
+(1 row)
+
+SELECT anser_test_cancel_query(1, 2);
+ anser_test_cancel_query 
+-------------------------
+ 
+(1 row)
+
+SELECT anser_test_state(1, 2, 1, 'join_b');
+ anser_test_state 
+------------------
+ CANCELLED
+(1 row)
+
+SELECT anser_test_state(1, 2, 2, 'join_c');
+ anser_test_state 
+------------------
+ CANCELLED
+(1 row)
+
+DROP EXTENSION test_anser;
