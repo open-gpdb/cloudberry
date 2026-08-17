@@ -813,14 +813,7 @@ get_index_paths(PlannerInfo *root, RelOptInfo *rel,
 		 */
 		if (index->amhasgettuple)
 		{
-			/*
-			 * PAX shares AO's planner concern: random TID fetch
-			 * re-decompresses whole stripes and bypasses the buffer pool.
-			 * Treat it as AO-like so only Bitmap paths survive add_path
-			 * here.
-			 */
-			if ((!AMHandlerIsAO(rel->amhandler) &&
-				 !AMHandlerIsPAX(rel->amhandler)) ||
+			if (!AMHandlerIsAO(rel->amhandler) ||
 				index->amcostestimate == bmcostestimate)
 				add_path(rel, (Path *) ipath, root);
 			else if (gp_enable_ao_indexscan && !IsA(ipath, IndexOnlyScan))
