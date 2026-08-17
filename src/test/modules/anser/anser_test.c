@@ -30,6 +30,7 @@
 #include "cdb/anser.h"
 #include "fmgr.h"
 #include "utils/builtins.h"
+#include "varatt.h"
 
 PG_MODULE_MAGIC;
 
