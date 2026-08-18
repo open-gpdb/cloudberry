@@ -32,4 +32,9 @@ SELECT anser_test_cancel_query(1, 2);
 SELECT anser_test_state(1, 2, 1, 'join_b');
 SELECT anser_test_state(1, 2, 2, 'join_c');
 
+-- Bloom payload protocol and standalone producer/consumer helpers.
+SELECT anser_test_bloom_roundtrip('bf_roundtrip', 42);
+SELECT anser_test_bloom_union('bf_union', 42, 84);
+SELECT anser_test_node_roundtrip(168);
+
 DROP EXTENSION test_anser;

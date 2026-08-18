@@ -64,3 +64,23 @@ CREATE FUNCTION anser_test_cancel_query(
 RETURNS void
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT;
+
+CREATE FUNCTION anser_test_bloom_roundtrip(
+    condition_key text,
+    value int4)
+RETURNS bool
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT;
+
+CREATE FUNCTION anser_test_bloom_union(
+    condition_key text,
+    left_value int4,
+    right_value int4)
+RETURNS bool
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT;
+
+CREATE FUNCTION anser_test_node_roundtrip(value int4)
+RETURNS bool
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT;

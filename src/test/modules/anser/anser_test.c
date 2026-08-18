@@ -28,6 +28,8 @@
 #include "postgres.h"
 
 #include "cdb/anser.h"
+#include "cdb/anserfilter.h"
+#include "executor/nodeAnserBloomFilter.h"
 #include "fmgr.h"
 #include "utils/builtins.h"
 #include "varatt.h"
@@ -41,6 +43,9 @@ PG_FUNCTION_INFO_V1(anser_test_consume);
 PG_FUNCTION_INFO_V1(anser_test_state);
 PG_FUNCTION_INFO_V1(anser_test_cancel_channel);
 PG_FUNCTION_INFO_V1(anser_test_cancel_query);
+PG_FUNCTION_INFO_V1(anser_test_bloom_roundtrip);
+PG_FUNCTION_INFO_V1(anser_test_bloom_union);
+PG_FUNCTION_INFO_V1(anser_test_node_roundtrip);
 
 static bool build_test_key(FunctionCallInfo fcinfo, AnserChannelKey *key);
 static const char *state_to_string(AnserChannelState state);
@@ -164,6 +169,129 @@ anser_test_cancel_query(PG_FUNCTION_ARGS)
 
 	AnserCancelQuery(gp_session_id, gp_command_count);
 	PG_RETURN_VOID();
+}
+
+Datum
+anser_test_bloom_roundtrip(PG_FUNCTION_ARGS)
+{
+	char	   *key = text_to_cstring(PG_GETARG_TEXT_PP(0));
+	int32		value = PG_GETARG_INT32(1);
+	uint64		seed = AnserBloomSeed(key);
+	bloom_filter *filter;
+	bloom_filter *roundtrip;
+	char	   *payload;
+	Size		payload_size;
+	Size		payload_len = 0;
+	uint32		part_index = 0;
+	uint32		total_parts = 0;
+	bool		lacks;
+
+	filter = AnserBloomCreate(32, 1024 * 1024, seed);
+	if (filter == NULL)
+		PG_RETURN_BOOL(false);
+
+	bloom_add_element(filter, (unsigned char *) &value, sizeof(Datum));
+	payload_size = AnserBloomSerializedSize(filter);
+	payload = palloc(payload_size);
+	if (!AnserBloomSerializePart(filter, 0, 1, payload, payload_size,
+								  &payload_len))
+		PG_RETURN_BOOL(false);
+
+	roundtrip = AnserBloomDeserializePart(payload, payload_len,
+									   &part_index, &total_parts);
+	if (roundtrip == NULL)
+		PG_RETURN_BOOL(false);
+
+	lacks = bloom_lacks_element(roundtrip, (unsigned char *) &value,
+							 sizeof(Datum));
+	bloom_free(filter);
+	bloom_free(roundtrip);
+	PG_RETURN_BOOL(!lacks && part_index == 0 && total_parts == 1);
+}
+
+Datum
+anser_test_bloom_union(PG_FUNCTION_ARGS)
+{
+	char	   *key = text_to_cstring(PG_GETARG_TEXT_PP(0));
+	int32		left_value = PG_GETARG_INT32(1);
+	int32		right_value = PG_GETARG_INT32(2);
+	uint64		seed = AnserBloomSeed(key);
+	bloom_filter *left;
+	bloom_filter *right;
+	bloom_filter *united;
+	char	   *payload;
+	Size		left_size;
+	Size		right_size;
+	Size		left_len = 0;
+	Size		right_len = 0;
+	uint32		received = 0;
+	bool		ok;
+
+	left = AnserBloomCreate(32, 1024 * 1024, seed);
+	right = AnserBloomCreate(32, 1024 * 1024, seed);
+	if (left == NULL || right == NULL)
+		PG_RETURN_BOOL(false);
+
+	bloom_add_element(left, (unsigned char *) &left_value, sizeof(Datum));
+	bloom_add_element(right, (unsigned char *) &right_value, sizeof(Datum));
+	left_size = AnserBloomSerializedSize(left);
+	right_size = AnserBloomSerializedSize(right);
+	payload = palloc(left_size + right_size);
+	ok = AnserBloomSerializePart(left, 0, 2, payload, left_size, &left_len) &&
+		AnserBloomSerializePart(right, 1, 2, payload + left_len, right_size,
+								&right_len);
+	if (!ok)
+		PG_RETURN_BOOL(false);
+
+	united = AnserBloomUnionParts(payload, left_len + right_len, 2, &received);
+	if (united == NULL)
+		PG_RETURN_BOOL(false);
+
+	ok = received == 2 &&
+		!bloom_lacks_element(united, (unsigned char *) &left_value,
+							 sizeof(Datum)) &&
+		!bloom_lacks_element(united, (unsigned char *) &right_value,
+							 sizeof(Datum));
+	bloom_free(left);
+	bloom_free(right);
+	bloom_free(united);
+	PG_RETURN_BOOL(ok);
+}
+
+Datum
+anser_test_node_roundtrip(PG_FUNCTION_ARGS)
+{
+	AnserChannelKey key;
+	AnserBloomFilterProduceState *producer;
+	AnserBloomFilterConsumeState *consumer;
+	int32		value = PG_GETARG_INT32(0);
+	bool		ok;
+
+	if (!AnserRegisterCondition(99, 1, 1, "node_roundtrip", 1, &key))
+		PG_RETURN_BOOL(false);
+	if (!AnserSubscribe(&key))
+		PG_RETURN_BOOL(false);
+
+	producer = ExecInitAnserBloomFilterProduce(&key, 32, 1024 * 1024, 0, 1);
+	if (producer == NULL)
+		PG_RETURN_BOOL(false);
+	ExecAnserBloomFilterProduceAddDatum(producer, Int32GetDatum(value), false);
+	ok = ExecAnserBloomFilterProducePublish(producer);
+	ExecEndAnserBloomFilterProduce(producer);
+	if (!ok)
+		PG_RETURN_BOOL(false);
+
+	consumer = ExecInitAnserBloomFilterConsume(&key, 1);
+	if (consumer == NULL)
+		PG_RETURN_BOOL(false);
+	ok = ExecAnserBloomFilterConsume(consumer, 1000) &&
+		ExecAnserBloomFilterConsumerGetFilter(consumer) != NULL &&
+		ExecAnserBloomFilterConsumerReceivedParts(consumer) == 1 &&
+		!ExecAnserBloomFilterConsumerWasCancelled(consumer) &&
+		!bloom_lacks_element(ExecAnserBloomFilterConsumerGetFilter(consumer),
+							 (unsigned char *) &value, sizeof(Datum));
+	ExecEndAnserBloomFilterConsume(consumer);
+	PG_RETURN_BOOL(ok);
 }
 
 static bool
