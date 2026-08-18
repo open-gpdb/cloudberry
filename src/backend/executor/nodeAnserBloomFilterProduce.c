@@ -1,0 +1,136 @@
+/*-------------------------------------------------------------------------
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ *
+ * nodeAnserBloomFilterProduce.c
+ *	  Standalone Anser Bloom filter producer executor helper.
+ *
+ * IDENTIFICATION
+ *	  src/backend/executor/nodeAnserBloomFilterProduce.c
+ *
+ *-------------------------------------------------------------------------
+ */
+#include "postgres.h"
+
+#include "cdb/anser.h"
+#include "cdb/anserfilter.h"
+#include "executor/nodeAnserBloomFilter.h"
+
+struct AnserBloomFilterProduceState
+{
+	AnserChannelKey channel_key;
+	bloom_filter *filter;
+	uint32		part_index;
+	uint32		total_parts;
+	bool		published;
+	bool		cancelled;
+};
+
+AnserBloomFilterProduceState *
+ExecInitAnserBloomFilterProduce(const AnserChannelKey *channel_key,
+								int64 total_elems,
+								Size max_payload_bytes,
+								uint32 part_index,
+								uint32 total_parts)
+{
+	AnserBloomFilterProduceState *state;
+	uint64		seed;
+
+	if (channel_key == NULL || total_parts == 0 || part_index >= total_parts)
+		return NULL;
+
+	state = palloc0(sizeof(AnserBloomFilterProduceState));
+	state->channel_key = *channel_key;
+	state->part_index = part_index;
+	state->total_parts = total_parts;
+	seed = AnserBloomSeed(channel_key->condition_key);
+	state->filter = AnserBloomCreate(total_elems, max_payload_bytes, seed);
+
+	if (state->filter == NULL)
+		state->cancelled = true;
+
+	return state;
+}
+
+void
+ExecAnserBloomFilterProduceAddDatum(AnserBloomFilterProduceState *state,
+									Datum value, bool isnull)
+{
+	if (state == NULL || state->filter == NULL || state->published || isnull)
+		return;
+
+	bloom_add_element(state->filter, (unsigned char *) &value, sizeof(Datum));
+}
+
+bool
+ExecAnserBloomFilterProducePublish(AnserBloomFilterProduceState *state)
+{
+	Size		payload_size;
+	Size		payload_len = 0;
+	void	   *payload;
+	bool		ok;
+
+	if (state == NULL || state->published)
+		return false;
+
+	if (state->cancelled || state->filter == NULL)
+	{
+		state->published = true;
+		return AnserPublish(&state->channel_key, NULL, 0, true);
+	}
+
+	payload_size = AnserBloomSerializedSize(state->filter);
+	payload = palloc(payload_size);
+	ok = AnserBloomSerializePart(state->filter,
+								  state->part_index,
+								  state->total_parts,
+								  payload,
+								  payload_size,
+								  &payload_len);
+	if (ok)
+		ok = AnserPublish(&state->channel_key, payload, payload_len, false);
+
+	pfree(payload);
+	state->published = true;
+	return ok;
+}
+
+bool
+ExecAnserBloomFilterProduceCancel(AnserBloomFilterProduceState *state)
+{
+	if (state == NULL || state->published)
+		return false;
+
+	state->cancelled = true;
+	state->published = true;
+	return AnserPublish(&state->channel_key, NULL, 0, true);
+}
+
+void
+ExecEndAnserBloomFilterProduce(AnserBloomFilterProduceState *state)
+{
+	if (state == NULL)
+		return;
+
+	if (!state->published)
+		(void) ExecAnserBloomFilterProduceCancel(state);
+
+	if (state->filter != NULL)
+		bloom_free(state->filter);
+	pfree(state);
+}
