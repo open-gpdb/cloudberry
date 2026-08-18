@@ -142,26 +142,26 @@ SELECT anser_test_state(1, 2, 1, 'join_b');
 (1 row)
 
 SELECT anser_test_state(1, 2, 2, 'join_c');
- anser_test_state
+ anser_test_state 
 ------------------
  CANCELLED
 (1 row)
 
 -- Bloom payload protocol and standalone producer/consumer helpers.
 SELECT anser_test_bloom_roundtrip('bf_roundtrip', 42);
- anser_test_bloom_roundtrip
+ anser_test_bloom_roundtrip 
 ----------------------------
  t
 (1 row)
 
 SELECT anser_test_bloom_union('bf_union', 42, 84);
- anser_test_bloom_union
+ anser_test_bloom_union 
 ------------------------
  t
 (1 row)
 
 SELECT anser_test_node_roundtrip(168);
- anser_test_node_roundtrip
+ anser_test_node_roundtrip 
 ---------------------------
  t
 (1 row)
