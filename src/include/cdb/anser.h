@@ -86,6 +86,7 @@ typedef struct AnserControl
 
 /* GUCs */
 extern bool gp_anser_enable;
+extern bool gp_anser_runtime_filter;
 extern int	gp_anser_max_channels;
 extern int	gp_anser_max_info_size;
 extern int	gp_anser_timeout_ms;

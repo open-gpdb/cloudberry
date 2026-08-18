@@ -634,6 +634,17 @@ struct config_bool ConfigureNamesBool_gp[] =
 	},
 
 	{
+		{"gp_anser_runtime_filter", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Enables Anser-backed runtime bloom filter helpers."),
+			gettext_noop("This GUC is a no-op until Anser bloom filter plan nodes are inserted into the plan tree."),
+			GUC_NOT_IN_SAMPLE
+		},
+		&gp_anser_runtime_filter,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"gp_maintenance_conn", PGC_BACKEND, CUSTOM_OPTIONS,
 			gettext_noop("Maintenance Connection"),
 			NULL,

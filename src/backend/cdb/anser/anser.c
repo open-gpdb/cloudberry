@@ -41,6 +41,7 @@
 #define ANSER_CHANNEL_HASH_NAME	"Anser Channel Hash"
 
 bool		gp_anser_enable = false;
+bool		gp_anser_runtime_filter = false;
 int			gp_anser_max_channels = 128;
 int			gp_anser_max_info_size = 16 * 1024 * 1024;
 int			gp_anser_timeout_ms = 1000;
