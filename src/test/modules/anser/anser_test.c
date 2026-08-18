@@ -175,7 +175,8 @@ Datum
 anser_test_bloom_roundtrip(PG_FUNCTION_ARGS)
 {
 	char	   *key = text_to_cstring(PG_GETARG_TEXT_PP(0));
-	int32		value = PG_GETARG_INT32(1);
+	int32		value_arg = PG_GETARG_INT32(1);
+	Datum		value = Int32GetDatum(value_arg);
 	uint64		seed = AnserBloomSeed(key);
 	bloom_filter *filter;
 	bloom_filter *roundtrip;
@@ -213,8 +214,10 @@ Datum
 anser_test_bloom_union(PG_FUNCTION_ARGS)
 {
 	char	   *key = text_to_cstring(PG_GETARG_TEXT_PP(0));
-	int32		left_value = PG_GETARG_INT32(1);
-	int32		right_value = PG_GETARG_INT32(2);
+	int32		left_arg = PG_GETARG_INT32(1);
+	int32		right_arg = PG_GETARG_INT32(2);
+	Datum		left_value = Int32GetDatum(left_arg);
+	Datum		right_value = Int32GetDatum(right_arg);
 	uint64		seed = AnserBloomSeed(key);
 	bloom_filter *left;
 	bloom_filter *right;
@@ -264,7 +267,8 @@ anser_test_node_roundtrip(PG_FUNCTION_ARGS)
 	AnserChannelKey key;
 	AnserBloomFilterProduceState *producer;
 	AnserBloomFilterConsumeState *consumer;
-	int32		value = PG_GETARG_INT32(0);
+	int32		value_arg = PG_GETARG_INT32(0);
+	Datum		value = Int32GetDatum(value_arg);
 	bool		ok;
 
 	if (!AnserRegisterCondition(99, 1, 1, "node_roundtrip", 1, &key))
@@ -275,7 +279,7 @@ anser_test_node_roundtrip(PG_FUNCTION_ARGS)
 	producer = ExecInitAnserBloomFilterProduce(&key, 32, 1024 * 1024, 0, 1);
 	if (producer == NULL)
 		PG_RETURN_BOOL(false);
-	ExecAnserBloomFilterProduceAddDatum(producer, Int32GetDatum(value), false);
+	ExecAnserBloomFilterProduceAddDatum(producer, value, false);
 	ok = ExecAnserBloomFilterProducePublish(producer);
 	ExecEndAnserBloomFilterProduce(producer);
 	if (!ok)
