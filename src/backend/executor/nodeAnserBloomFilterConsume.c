@@ -28,7 +28,9 @@
 #include "postgres.h"
 
 #include "cdb/anser.h"
+#include "cdb/anserclient.h"
 #include "cdb/anserfilter.h"
+#include "cdb/cdbvars.h"
 #include "executor/nodeAnserBloomFilter.h"
 
 struct AnserBloomFilterConsumeState
@@ -40,6 +42,10 @@ struct AnserBloomFilterConsumeState
 	bool		consumed;
 	bool		cancelled;
 };
+
+static bool ExecAnserBloomFilterConsumeDirect(AnserBloomFilterConsumeState *state,
+											  long registration_timeout_ms);
+static bool ExecAnserBloomFilterConsumeClient(AnserBloomFilterConsumeState *state);
 
 AnserBloomFilterConsumeState *
 ExecInitAnserBloomFilterConsume(const AnserChannelKey *channel_key,
@@ -60,16 +66,36 @@ bool
 ExecAnserBloomFilterConsume(AnserBloomFilterConsumeState *state,
 							long registration_timeout_ms)
 {
-	void	   *payload;
-	Size		payload_len = 0;
-	bool		cancelled = false;
-	bool		ready;
-
 	if (state == NULL)
 		return false;
 
 	if (state->consumed)
 		return state->filter != NULL;
+
+	/*
+	 * Coordinator-local consumers read the channel map directly; segment
+	 * executors block on the send service over libpq to the QD.  The signatures
+	 * are identical -- only the transport differs.
+	 */
+	if (Gp_role == GP_ROLE_EXECUTE)
+		return ExecAnserBloomFilterConsumeClient(state);
+
+	return ExecAnserBloomFilterConsumeDirect(state, registration_timeout_ms);
+}
+
+/*
+ * Direct shared-memory consume path (coordinator).  Unchanged from the
+ * pre-network behavior: wait for producer registration, wait for READY, copy the
+ * payload out, and union the parts.
+ */
+static bool
+ExecAnserBloomFilterConsumeDirect(AnserBloomFilterConsumeState *state,
+								  long registration_timeout_ms)
+{
+	void	   *payload;
+	Size		payload_len = 0;
+	bool		cancelled = false;
+	bool		ready;
 
 	if (!AnserWaitProducersRegistered(&state->channel_key,
 								   registration_timeout_ms))
@@ -103,6 +129,38 @@ ExecAnserBloomFilterConsume(AnserBloomFilterConsumeState *state,
 									   state->expected_parts,
 									   &state->received_parts);
 	pfree(payload);
+	state->consumed = true;
+	return state->filter != NULL;
+}
+
+/*
+ * Network consume path (segment).  Blocks in the coordinator backend via libpq
+ * until the send service delivers the whole payload (or cancels this consumer);
+ * there is no registration/ready polling here -- the wait is unbounded and
+ * cancellation is the backstop, per the agreed two-phase consumer semantics.
+ */
+static bool
+ExecAnserBloomFilterConsumeClient(AnserBloomFilterConsumeState *state)
+{
+	void	   *payload = NULL;
+	Size		payload_len = 0;
+	bool		cancelled = false;
+
+	if (!AnserClientConsumeWait(&state->channel_key, &payload, &payload_len,
+								&cancelled) || cancelled)
+	{
+		if (payload != NULL)
+			pfree(payload);
+		state->cancelled = cancelled;
+		state->consumed = true;
+		return false;
+	}
+
+	state->filter = AnserBloomUnionParts(payload, payload_len,
+									   state->expected_parts,
+									   &state->received_parts);
+	if (payload != NULL)
+		pfree(payload);
 	state->consumed = true;
 	return state->filter != NULL;
 }

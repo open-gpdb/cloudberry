@@ -27,7 +27,9 @@ endif
 
 test_anser = shared_module('test_anser',
   test_anser_sources,
-  kwargs: pg_test_mod_args,
+  kwargs: pg_test_mod_args + {
+    'dependencies': pg_test_mod_args['dependencies'] + [libpq],
+  },
 )
 test_install_libs += test_anser
 

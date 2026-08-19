@@ -28,7 +28,9 @@
 #include "postgres.h"
 
 #include "cdb/anser.h"
+#include "cdb/anserclient.h"
 #include "cdb/anserfilter.h"
+#include "cdb/cdbvars.h"
 #include "executor/nodeAnserBloomFilter.h"
 
 struct AnserBloomFilterProduceState
@@ -40,6 +42,23 @@ struct AnserBloomFilterProduceState
 	bool		published;
 	bool		cancelled;
 };
+
+/*
+ * Publish one part, choosing the transport by role: coordinator-local callers
+ * touch the channel map directly (no self-connection), while segment executors
+ * go over libpq to the QD.  total_parts doubles as expected_producers: each
+ * producer contributes exactly one part.
+ */
+static bool
+AnserProducePublishPart(AnserBloomFilterProduceState *state,
+						const void *payload, Size payload_len, bool cancelled)
+{
+	if (Gp_role == GP_ROLE_EXECUTE)
+		return AnserClientPublish(&state->channel_key, state->total_parts,
+								  payload, payload_len, cancelled);
+
+	return AnserPublish(&state->channel_key, payload, payload_len, cancelled);
+}
 
 AnserBloomFilterProduceState *
 ExecInitAnserBloomFilterProduce(const AnserChannelKey *channel_key,
@@ -91,7 +110,7 @@ ExecAnserBloomFilterProducePublish(AnserBloomFilterProduceState *state)
 	if (state->cancelled || state->filter == NULL)
 	{
 		state->published = true;
-		return AnserPublish(&state->channel_key, NULL, 0, true);
+		return AnserProducePublishPart(state, NULL, 0, true);
 	}
 
 	payload_size = AnserBloomSerializedSize(state->filter);
@@ -103,7 +122,7 @@ ExecAnserBloomFilterProducePublish(AnserBloomFilterProduceState *state)
 								  payload_size,
 								  &payload_len);
 	if (ok)
-		ok = AnserPublish(&state->channel_key, payload, payload_len, false);
+		ok = AnserProducePublishPart(state, payload, payload_len, false);
 
 	pfree(payload);
 	state->published = true;
@@ -118,7 +137,7 @@ ExecAnserBloomFilterProduceCancel(AnserBloomFilterProduceState *state)
 
 	state->cancelled = true;
 	state->published = true;
-	return AnserPublish(&state->channel_key, NULL, 0, true);
+	return AnserProducePublishPart(state, NULL, 0, true);
 }
 
 void

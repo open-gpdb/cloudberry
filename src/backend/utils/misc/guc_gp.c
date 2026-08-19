@@ -3486,6 +3486,17 @@ struct config_int ConfigureNamesInt_gp[] =
 	},
 
 	{
+		{"gp_anser_max_consumers_per_channel", PGC_POSTMASTER, CUSTOM_OPTIONS,
+			gettext_noop("Sets the maximum number of waiting Anser consumers per channel."),
+			gettext_noop("This value sizes the fixed Anser consumer wait table at postmaster start."),
+			GUC_NOT_IN_SAMPLE
+		},
+		&gp_anser_max_consumers_per_channel,
+		64, 1, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"gp_predicate_pushdown_sample_rows", PGC_USERSET, DEVELOPER_OPTIONS,
 			gettext_noop("Max sample rows during predicate pushdown"),
 			NULL,

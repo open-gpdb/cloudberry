@@ -27,6 +27,12 @@ OBJS = \
 	anser_test.o
 PGFILEDESC = "test_anser - test helpers for Anser"
 
+# anser_test.c drives loopback libpq connections for the client/multi-consumer
+# round-trip tests.
+PG_CPPFLAGS = -I$(libpq_srcdir)
+SHLIB_LINK_INTERNAL = $(libpq)
+SHLIB_PREREQS = submake-libpq
+
 EXTENSION = test_anser
 DATA = test_anser--1.0.sql
 

@@ -161,8 +161,70 @@ SELECT anser_test_bloom_union('bf_union', 42, 84);
 (1 row)
 
 SELECT anser_test_node_roundtrip(168);
- anser_test_node_roundtrip 
+ anser_test_node_roundtrip
 ---------------------------
+ t
+(1 row)
+
+-- Built-in round trip through the live services: producer_begin -> publish
+-- (gather service appends, channel goes READY) -> consume_wait (send service
+-- delivers) returns the payload.  Proves the full producer -> gather -> send ->
+-- consumer chain, not just the map.
+SELECT gp_anser_producer_begin(10, 1, 1, 'svc_roundtrip', 1) AS begin_ok;
+ begin_ok
+----------
+ t
+(1 row)
+
+SELECT gp_anser_publish(10, 1, 1, 'svc_roundtrip', '\x6162'::bytea, false) AS publish_ok;
+ publish_ok
+------------
+ t
+(1 row)
+
+SELECT encode(gp_anser_consume_wait(10, 1, 1, 'svc_roundtrip'), 'escape') AS payload;
+ payload
+---------
+ ab
+(1 row)
+
+-- Producer-begin timeout: begin arms the produce deadline (COLLECTING) but no
+-- producer publishes; the gather maintenance pass cancels the whole dataset
+-- after gp_anser_timeout_ms, so the waiting consumer is delivered a cancel and
+-- consume_wait returns NULL.
+SELECT gp_anser_producer_begin(11, 1, 1, 'svc_timeout', 1) AS begin_ok;
+ begin_ok
+----------
+ t
+(1 row)
+
+SELECT anser_test_state(11, 1, 1, 'svc_timeout') AS state_after_begin;
+ state_after_begin
+-------------------
+ COLLECTING
+(1 row)
+
+SELECT gp_anser_consume_wait(11, 1, 1, 'svc_timeout') IS NULL AS consume_cancelled;
+ consume_cancelled
+-------------------
+ t
+(1 row)
+
+-- Client helper loopback: drive AnserClientPublish / AnserClientConsumeWait
+-- against the local coordinator over libpq, proving the client transport
+-- end-to-end without a multi-node cluster.
+SELECT anser_test_client_roundtrip(4242) AS client_ok;
+ client_ok
+-----------
+ t
+(1 row)
+
+-- Multi-consumer partial delivery: two consumers block concurrently on one
+-- channel (loopback libpq); one is cancelled mid-wait while the other still
+-- receives the intact payload.  Proves delivery is per-consumer.
+SELECT anser_test_multi_consumer(24680) AS partial_delivery_ok;
+ partial_delivery_ok
+---------------------
  t
 (1 row)
 
