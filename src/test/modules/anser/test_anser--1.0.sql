@@ -94,3 +94,13 @@ CREATE FUNCTION anser_test_multi_consumer(value int4)
 RETURNS bool
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT;
+
+CREATE FUNCTION anser_test_set_sweep(enabled bool)
+RETURNS void
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT;
+
+CREATE FUNCTION anser_test_sweep()
+RETURNS void
+AS 'MODULE_PATHNAME'
+LANGUAGE C;

@@ -1,5 +1,11 @@
 CREATE EXTENSION test_anser;
 
+-- Pause the background maintenance sweep so terminal (CANCELLED/CONSUMED)
+-- channels stay observable and the state assertions below are deterministic
+-- rather than racing the live gather/send services.  Re-enabled at the end,
+-- where we prove the sweep actually reclaims them.
+SELECT anser_test_set_sweep(false);
+
 -- Happy path: one condition, two producers, two consumers.
 SELECT anser_test_register_condition(1, 1, 1, 'join_a', 2);
 SELECT anser_test_subscribe(1, 1, 1, 'join_a');
@@ -62,5 +68,13 @@ SELECT anser_test_client_roundtrip(4242) AS client_ok;
 -- channel (loopback libpq); one is cancelled mid-wait while the other still
 -- receives the intact payload.  Proves delivery is per-consumer.
 SELECT anser_test_multi_consumer(24680) AS partial_delivery_ok;
+
+-- Clearing works: with the sweep paused, the cancelled channel above is still
+-- present as CANCELLED.  Re-enable the sweep and run one synchronously; the
+-- terminal channel is then reclaimed (NOT_FOUND), proving maintenance clears it.
+SELECT anser_test_state(1, 1, 2, 'join_timeout') AS before_clear;
+SELECT anser_test_set_sweep(true);
+SELECT anser_test_sweep();
+SELECT anser_test_state(1, 1, 2, 'join_timeout') AS after_clear;
 
 DROP EXTENSION test_anser;

@@ -85,6 +85,11 @@ typedef struct AnserControl
 	Size		max_info_size;
 	Latch		gather_latch;
 	Latch		send_latch;
+	bool		sweep_enabled;	/* when false, the periodic maintenance sweep
+								 * leaves terminal channels in place; a test-only
+								 * knob so terminal state can be observed
+								 * deterministically.  Emergency (map-full)
+								 * reclamation is unaffected. */
 } AnserControl;
 
 /* GUCs */
@@ -128,6 +133,7 @@ extern void AnserDetachServiceLatch(bool gather_service);
 extern void AnserWaitServiceLatch(bool gather_service, long timeout_ms);
 extern void AnserWakeServiceLatch(bool gather_service);
 extern void AnserServiceMaintenance(void);
+extern void AnserSetSweepEnabled(bool enabled);
 
 /*
  * Network-path API.

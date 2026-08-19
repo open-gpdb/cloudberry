@@ -59,6 +59,8 @@ PG_FUNCTION_INFO_V1(anser_test_bloom_union);
 PG_FUNCTION_INFO_V1(anser_test_node_roundtrip);
 PG_FUNCTION_INFO_V1(anser_test_client_roundtrip);
 PG_FUNCTION_INFO_V1(anser_test_multi_consumer);
+PG_FUNCTION_INFO_V1(anser_test_set_sweep);
+PG_FUNCTION_INFO_V1(anser_test_sweep);
 
 static bool build_test_key(FunctionCallInfo fcinfo, AnserChannelKey *key);
 static const char *state_to_string(AnserChannelState state);
@@ -639,6 +641,31 @@ anser_consumer_returned_row(PGconn *conn)
 	}
 
 	return got_row;
+}
+
+/*
+ * Pause or resume the background maintenance sweep.  With it paused, terminal
+ * (CANCELLED/CONSUMED) channels stay in the map so tests can assert their state
+ * without racing the gather/send services.
+ */
+Datum
+anser_test_set_sweep(PG_FUNCTION_ARGS)
+{
+	bool		enabled = PG_GETARG_BOOL(0);
+
+	AnserSetSweepEnabled(enabled);
+	PG_RETURN_VOID();
+}
+
+/*
+ * Run one maintenance sweep synchronously in this backend (respects the enable
+ * flag), so a test can prove that reclamation clears terminal channels.
+ */
+Datum
+anser_test_sweep(PG_FUNCTION_ARGS)
+{
+	AnserServiceMaintenance();
+	PG_RETURN_VOID();
 }
 
 static bool

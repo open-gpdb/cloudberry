@@ -612,8 +612,33 @@ AnserServiceMaintenance(void)
 	if (!AnserInitialized())
 		return;
 
+	/*
+	 * The periodic sweep is gated so tests can pause reclamation and observe
+	 * terminal (CANCELLED/CONSUMED) channels deterministically.  Emergency
+	 * reclamation on a full map is not gated -- it calls the sweep directly.
+	 */
+	if (!AnserCtl->sweep_enabled)
+		return;
+
 	LWLockAcquire(AnserChannelLock, LW_EXCLUSIVE);
 	AnserSweepOrphanChannels();
+	LWLockRelease(AnserChannelLock);
+}
+
+/*
+ * Enable or disable the periodic maintenance sweep.  Test-only: production
+ * always leaves it enabled.  Toggling it lets a test freeze terminal channels
+ * in place (to assert their state) and then re-enable + force a sweep to prove
+ * reclamation works.
+ */
+void
+AnserSetSweepEnabled(bool enabled)
+{
+	if (!AnserInitialized())
+		return;
+
+	LWLockAcquire(AnserChannelLock, LW_EXCLUSIVE);
+	AnserCtl->sweep_enabled = enabled;
 	LWLockRelease(AnserChannelLock);
 }
 
@@ -1654,6 +1679,7 @@ AnserInitializeControl(bool found)
 		AnserCtl->max_info_size = gp_anser_max_info_size;
 		InitSharedLatch(&AnserCtl->gather_latch);
 		InitSharedLatch(&AnserCtl->send_latch);
+		AnserCtl->sweep_enabled = true;
 	}
 }
 
