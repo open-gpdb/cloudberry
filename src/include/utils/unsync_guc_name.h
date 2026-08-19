@@ -163,6 +163,7 @@
 		"gp_allow_non_uniform_partitioning_ddl",
 		"gp_anser_enable",
 		"gp_anser_max_channels",
+		"gp_anser_max_consumers_per_channel",
 		"gp_anser_max_info_size",
 		"gp_anser_runtime_filter",
 		"gp_anser_timeout_ms",
