@@ -59,6 +59,7 @@ PG_FUNCTION_INFO_V1(anser_test_bloom_union);
 PG_FUNCTION_INFO_V1(anser_test_node_roundtrip);
 PG_FUNCTION_INFO_V1(anser_test_client_roundtrip);
 PG_FUNCTION_INFO_V1(anser_test_multi_consumer);
+PG_FUNCTION_INFO_V1(anser_test_abandoned_consumer_recycles);
 PG_FUNCTION_INFO_V1(anser_test_set_sweep);
 PG_FUNCTION_INFO_V1(anser_test_sweep);
 
@@ -72,6 +73,7 @@ static bool anser_drain_until_idle(PGconn *conn);
 static bool anser_consumer_got_payload(PGconn *conn, const unsigned char *expected,
 									   Size expected_len);
 static bool anser_consumer_returned_row(PGconn *conn);
+static bool anser_wait_channel_consumed(const AnserChannelKey *key);
 
 Datum
 anser_test_register_condition(PG_FUNCTION_ARGS)
@@ -472,6 +474,73 @@ anser_test_multi_consumer(PG_FUNCTION_ARGS)
 }
 
 /*
+ * Regression guard for the abandoned-consumer recycle bug.
+ *
+ * Same shape as anser_test_multi_consumer, but the assertion is specifically
+ * that the channel does NOT leave stale data behind: after one consumer is
+ * cancelled mid-wait and the surviving consumer is delivered, the channel must
+ * recycle to CONSUMED.  Before the fix, the cancelled consumer kept counting
+ * toward the expected consumer total, so done_consumers never caught up and the
+ * channel lingered in READY forever (and was never reclaimable) -- this helper
+ * would then time out waiting for CONSUMED and return false.
+ */
+Datum
+anser_test_abandoned_consumer_recycles(PG_FUNCTION_ARGS)
+{
+	int32		value_arg = PG_GETARG_INT32(0);
+	char	   *saved_host = qdHostname;
+	int			saved_port = qdPostmasterPort;
+	AnserChannelKey key;
+	unsigned char payload[sizeof(int32)];
+	PGconn	   *keep = NULL;
+	PGconn	   *lost = NULL;
+	bool		ok = false;
+
+	qdHostname = anser_loopback_host();
+	qdPostmasterPort = PostPortNumber;
+
+	MemSet(&key, 0, sizeof(key));
+	key.gp_session_id = 32;
+	key.gp_command_count = 1;
+	key.condition_id = 1;
+	strlcpy(key.condition_key, "abandon_recycle", ANSER_CONDITION_KEY_SIZE);
+
+	memcpy(payload, &value_arg, sizeof(payload));
+
+	PG_TRY();
+	{
+		if (AnserProducerBegin(&key, 1, GetUserId(), superuser()))
+		{
+			keep = anser_open_consumer(&key);
+			lost = anser_open_consumer(&key);
+
+			if (keep != NULL && lost != NULL &&
+				anser_wait_consumer_count(&key, 2))
+			{
+				anser_cancel_conn(lost);
+				(void) anser_consumer_returned_row(lost);
+
+				if (AnserPublish(&key, payload, sizeof(payload), false) &&
+					anser_consumer_got_payload(keep, payload, sizeof(payload)))
+					ok = anser_wait_channel_consumed(&key);
+			}
+		}
+	}
+	PG_FINALLY();
+	{
+		if (keep != NULL)
+			PQfinish(keep);
+		if (lost != NULL)
+			PQfinish(lost);
+		qdHostname = saved_host;
+		qdPostmasterPort = saved_port;
+	}
+	PG_END_TRY();
+
+	PG_RETURN_BOOL(ok);
+}
+
+/*
  * Open a loopback connection to our coordinator and fire gp_anser_consume_wait
  * asynchronously (binary result), leaving the connection blocked server-side.
  */
@@ -641,6 +710,31 @@ anser_consumer_returned_row(PGconn *conn)
 	}
 
 	return got_row;
+}
+
+/*
+ * Poll (bounded) until the channel recycles to CONSUMED, or has already been
+ * reclaimed entirely.  Either outcome means it did not leave stale data behind;
+ * a channel wedged in READY never reaches this and the poll times out.
+ */
+static bool
+anser_wait_channel_consumed(const AnserChannelKey *key)
+{
+	int			i;
+
+	for (i = 0; i < 1000; i++)	/* up to ~10s */
+	{
+		bool		found = false;
+		AnserChannelState state = AnserChannelGetState(key, &found);
+
+		if (!found || state == ANSER_CHANNEL_CONSUMED)
+			return true;
+
+		CHECK_FOR_INTERRUPTS();
+		pg_usleep(10000);		/* 10ms */
+	}
+
+	return false;
 }
 
 /*

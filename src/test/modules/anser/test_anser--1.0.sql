@@ -95,6 +95,11 @@ RETURNS bool
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT;
 
+CREATE FUNCTION anser_test_abandoned_consumer_recycles(value int4)
+RETURNS bool
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT;
+
 CREATE FUNCTION anser_test_set_sweep(enabled bool)
 RETURNS void
 AS 'MODULE_PATHNAME'

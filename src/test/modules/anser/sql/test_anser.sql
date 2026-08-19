@@ -69,6 +69,12 @@ SELECT anser_test_client_roundtrip(4242) AS client_ok;
 -- receives the intact payload.  Proves delivery is per-consumer.
 SELECT anser_test_multi_consumer(24680) AS partial_delivery_ok;
 
+-- Regression guard (abandoned-consumer recycle): a consumer cancelled mid-wait
+-- must stop counting toward the channel's expected consumers, so the channel
+-- still recycles to CONSUMED after the surviving consumer is delivered instead
+-- of lingering forever in READY with stale data.
+SELECT anser_test_abandoned_consumer_recycles(13579) AS recycled_no_stale_data;
+
 -- Clearing works: with the sweep paused, the cancelled channel above is still
 -- present as CANCELLED.  Re-enable the sweep and run one synchronously; the
 -- terminal channel is then reclaimed (NOT_FOUND), proving maintenance clears it.

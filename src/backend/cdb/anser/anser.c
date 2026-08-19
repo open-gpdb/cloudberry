@@ -1063,6 +1063,8 @@ static void
 AnserAbandonWaitSlot(int slot)
 {
 	AnserWaitSlot *s = &AnserWaitTable[slot];
+	AnserChannelKey key;
+	bool		was_waiting = false;
 
 	LWLockAcquire(AnserRingLock, LW_EXCLUSIVE);
 	if (s->consumer_pid == MyProcPid && s->state != ANSER_WAIT_FREE)
@@ -1070,11 +1072,38 @@ AnserAbandonWaitSlot(int slot)
 		if (s->state == ANSER_WAIT_DELIVERED &&
 			s->dsm_handle != DSM_HANDLE_INVALID)
 			dsm_unpin_segment(s->dsm_handle);
+		was_waiting = (s->state == ANSER_WAIT_WAITING);
+		key = s->key;
 		s->dsm_handle = DSM_HANDLE_INVALID;
 		s->len = 0;
 		s->state = ANSER_WAIT_FREE;
 	}
 	LWLockRelease(AnserRingLock);
+
+	/*
+	 * A consumer that abandons before any data was delivered to it must no
+	 * longer count toward the channel's expected consumer total; otherwise the
+	 * send service's "delivered to every consumer" recycle test can never be
+	 * satisfied and the channel lingers in READY forever.  (A slot that was
+	 * already DELIVERED is left counted: the send service incremented
+	 * done_consumers for it, so the accounting still balances.)
+	 */
+	if (was_waiting)
+	{
+		AnserChannelEntry *entry;
+		bool		found;
+
+		LWLockAcquire(AnserChannelLock, LW_EXCLUSIVE);
+		entry = (AnserChannelEntry *) hash_search(AnserChannelHash, &key,
+												  HASH_FIND, &found);
+		if (found && entry->consumers > 0)
+		{
+			entry->consumers--;
+			/* Let the send service re-evaluate recycling. */
+			SetLatch(&AnserCtl->send_latch);
+		}
+		LWLockRelease(AnserChannelLock);
+	}
 }
 
 /*
