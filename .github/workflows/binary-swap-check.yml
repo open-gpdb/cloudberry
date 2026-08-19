@@ -82,7 +82,7 @@ jobs:
       baseline_version: ${{ steps.resolve.outputs.baseline_version }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
 
@@ -163,7 +163,7 @@ jobs:
           df -h /
 
       - name: Checkout Baseline Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: open-gpdb/cloudberry
           ref: ${{ needs.resolve-baseline.outputs.baseline_version }}
@@ -171,7 +171,7 @@ jobs:
           submodules: recursive
 
       - name: Checkout Build Tools
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: REL_2_STABLE
           path: build_tools
@@ -263,7 +263,7 @@ jobs:
           cp "${RPM_FILE}" "${GITHUB_WORKSPACE}/"
 
       - name: Upload Baseline RPM
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: baseline-rpm
           retention-days: ${{ env.LOG_RETENTION_DAYS }}
@@ -310,13 +310,13 @@ jobs:
           df -h /
 
       - name: Checkout Current Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
           submodules: recursive
 
       - name: Checkout Build Tools
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: REL_2_STABLE
           path: build_tools
@@ -425,14 +425,14 @@ jobs:
           cp -r "${SRC_DIR}/src/test/regress" "${GITHUB_WORKSPACE}/regress_bin"
 
       - name: Upload pg_regress
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pg-regress-bin
           retention-days: ${{ env.LOG_RETENTION_DAYS }}
           path: ${{ github.workspace }}/regress_bin/
 
       - name: Upload Current RPM
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: current-rpm
           retention-days: ${{ env.LOG_RETENTION_DAYS }}
@@ -483,7 +483,7 @@ jobs:
           df -h /
 
       - name: Checkout Current Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
 
@@ -501,19 +501,19 @@ jobs:
           echo "LOGS_DIR=${GITHUB_WORKSPACE}/binary-swap-logs" >> "$GITHUB_ENV"
 
       - name: Download Baseline RPM
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: baseline-rpm
           path: ${{ github.workspace }}/baseline_rpm
 
       - name: Download Current RPM
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: current-rpm
           path: ${{ github.workspace }}/current_rpm
 
       - name: Download pg_regress
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: pg-regress-bin
           path: ${{ github.workspace }}/regress_bin
@@ -776,7 +776,7 @@ jobs:
 
       - name: Upload Logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: binary-swap-logs
           retention-days: ${{ env.LOG_RETENTION_DAYS }}
