@@ -85,7 +85,7 @@ AnserServiceLoop(const char *service_name, bool gather_service)
 	 * it, and under a resource owner so a failed cycle's attached/created DSM
 	 * segments are reclaimed rather than leaked.
 	 */
-	service_ctx = AllocSetContextCreate(TopMemoryContext, service_name,
+	service_ctx = AllocSetContextCreate(TopMemoryContext, "Anser service",
 										ALLOCSET_DEFAULT_SIZES);
 	MemoryContextSwitchTo(service_ctx);
 	if (CurrentResourceOwner == NULL)
