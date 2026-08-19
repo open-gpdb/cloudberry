@@ -243,7 +243,7 @@ SELECT anser_test_multi_consumer(24680) AS partial_delivery_ok;
 -- still recycles to CONSUMED after the surviving consumer is delivered instead
 -- of lingering forever in READY with stale data.
 SELECT anser_test_abandoned_consumer_recycles(13579) AS recycled_no_stale_data;
- recycled_no_stale_data
+ recycled_no_stale_data 
 ------------------------
  t
 (1 row)
