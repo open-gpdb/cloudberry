@@ -4,9 +4,9 @@ CREATE EXTENSION test_anser;
 -- rather than racing the live gather/send services.  Re-enabled at the end,
 -- where we prove the sweep actually reclaims them.
 SELECT anser_test_set_sweep(false);
- anser_test_set_sweep
+ anser_test_set_sweep 
 ----------------------
-
+ 
 (1 row)
 
 -- Happy path: one condition, two producers, two consumers.
@@ -171,7 +171,7 @@ SELECT anser_test_bloom_union('bf_union', 42, 84);
 (1 row)
 
 SELECT anser_test_node_roundtrip(168);
- anser_test_node_roundtrip
+ anser_test_node_roundtrip 
 ---------------------------
  t
 (1 row)
@@ -181,19 +181,19 @@ SELECT anser_test_node_roundtrip(168);
 -- delivers) returns the payload.  Proves the full producer -> gather -> send ->
 -- consumer chain, not just the map.
 SELECT gp_anser_producer_begin(10, 1, 1, 'svc_roundtrip', 1) AS begin_ok;
- begin_ok
+ begin_ok 
 ----------
  t
 (1 row)
 
 SELECT gp_anser_publish(10, 1, 1, 'svc_roundtrip', '\x6162'::bytea, false) AS publish_ok;
- publish_ok
+ publish_ok 
 ------------
  t
 (1 row)
 
 SELECT encode(gp_anser_consume_wait(10, 1, 1, 'svc_roundtrip'), 'escape') AS payload;
- payload
+ payload 
 ---------
  ab
 (1 row)
@@ -203,19 +203,19 @@ SELECT encode(gp_anser_consume_wait(10, 1, 1, 'svc_roundtrip'), 'escape') AS pay
 -- after gp_anser_timeout_ms, so the waiting consumer is delivered a cancel and
 -- consume_wait returns NULL.
 SELECT gp_anser_producer_begin(11, 1, 1, 'svc_timeout', 1) AS begin_ok;
- begin_ok
+ begin_ok 
 ----------
  t
 (1 row)
 
 SELECT anser_test_state(11, 1, 1, 'svc_timeout') AS state_after_begin;
- state_after_begin
+ state_after_begin 
 -------------------
  COLLECTING
 (1 row)
 
 SELECT gp_anser_consume_wait(11, 1, 1, 'svc_timeout') IS NULL AS consume_cancelled;
- consume_cancelled
+ consume_cancelled 
 -------------------
  t
 (1 row)
@@ -224,7 +224,7 @@ SELECT gp_anser_consume_wait(11, 1, 1, 'svc_timeout') IS NULL AS consume_cancell
 -- against the local coordinator over libpq, proving the client transport
 -- end-to-end without a multi-node cluster.
 SELECT anser_test_client_roundtrip(4242) AS client_ok;
- client_ok
+ client_ok 
 -----------
  t
 (1 row)
@@ -233,7 +233,7 @@ SELECT anser_test_client_roundtrip(4242) AS client_ok;
 -- channel (loopback libpq); one is cancelled mid-wait while the other still
 -- receives the intact payload.  Proves delivery is per-consumer.
 SELECT anser_test_multi_consumer(24680) AS partial_delivery_ok;
- partial_delivery_ok
+ partial_delivery_ok 
 ---------------------
  t
 (1 row)
@@ -242,25 +242,25 @@ SELECT anser_test_multi_consumer(24680) AS partial_delivery_ok;
 -- present as CANCELLED.  Re-enable the sweep and run one synchronously; the
 -- terminal channel is then reclaimed (NOT_FOUND), proving maintenance clears it.
 SELECT anser_test_state(1, 1, 2, 'join_timeout') AS before_clear;
- before_clear
+ before_clear 
 --------------
  CANCELLED
 (1 row)
 
 SELECT anser_test_set_sweep(true);
- anser_test_set_sweep
+ anser_test_set_sweep 
 ----------------------
-
+ 
 (1 row)
 
 SELECT anser_test_sweep();
- anser_test_sweep
+ anser_test_sweep 
 ------------------
-
+ 
 (1 row)
 
 SELECT anser_test_state(1, 1, 2, 'join_timeout') AS after_clear;
- after_clear
+ after_clear 
 -------------
  NOT_FOUND
 (1 row)
