@@ -24,7 +24,7 @@ SET optimizer = off;
 SET gp_anser_runtime_filter = on;
 EXPLAIN (COSTS OFF)
 SELECT b.name, p.payload FROM anser_rf_build b LEFT JOIN anser_rf_probe p ON b.id = p.id;
-                            QUERY PLAN
+                            QUERY PLAN                            
 ------------------------------------------------------------------
  Gather Motion 3:1  (slice1; segments: 3)
    ->  Hash Right Join
@@ -39,13 +39,13 @@ SELECT b.name, p.payload FROM anser_rf_build b LEFT JOIN anser_rf_probe p ON b.i
                            Bloom Filter Size: 8192 bytes
                            ->  Seq Scan on anser_rf_build b
  Optimizer: Postgres query optimizer
-(14 rows)
+(13 rows)
 
 SET gp_anser_runtime_filter = off;
 EXPLAIN (COSTS OFF)
 SELECT b.name, p.payload FROM anser_rf_build b LEFT JOIN anser_rf_probe p ON b.id = p.id;
-                         QUERY PLAN
--------------------------------------------------------------
+                            QUERY PLAN                            
+------------------------------------------------------------------
  Gather Motion 3:1  (slice1; segments: 3)
    ->  Hash Right Join
          Hash Cond: (p.id = b.id)
@@ -67,27 +67,27 @@ CREATE TEMP TABLE anser_rf_r_off AS
     SELECT b.name, p.payload FROM anser_rf_build b LEFT JOIN anser_rf_probe p ON b.id = p.id
     DISTRIBUTED BY (name);
 SELECT count(*) AS rows_on FROM anser_rf_r_on;
- rows_on
+ rows_on 
 ---------
      200
 (1 row)
 
 SELECT count(*) AS rows_off FROM anser_rf_r_off;
- rows_off
+ rows_off 
 ----------
       200
 (1 row)
 
 SELECT count(*) AS only_on
     FROM (SELECT * FROM anser_rf_r_on EXCEPT ALL SELECT * FROM anser_rf_r_off) d;
- only_on
+ only_on 
 ---------
        0
 (1 row)
 
 SELECT count(*) AS only_off
     FROM (SELECT * FROM anser_rf_r_off EXCEPT ALL SELECT * FROM anser_rf_r_on) d;
- only_off
+ only_off 
 ----------
         0
 (1 row)
@@ -100,14 +100,14 @@ CREATE TEMP TABLE anser_rf_r_orca AS
     DISTRIBUTED BY (name);
 SELECT count(*) AS only_orca
     FROM (SELECT * FROM anser_rf_r_orca EXCEPT ALL SELECT * FROM anser_rf_r_off) d;
- only_orca
+ only_orca 
 -----------
          0
 (1 row)
 
 SELECT count(*) AS only_off_orca
     FROM (SELECT * FROM anser_rf_r_off EXCEPT ALL SELECT * FROM anser_rf_r_orca) d;
- only_off_orca
+ only_off_orca 
 ---------------
              0
 (1 row)
