@@ -33,13 +33,13 @@ SELECT b.name, p.payload FROM anser_rf_build b LEFT JOIN anser_rf_probe p ON b.i
                Bloom Filter Size: 8192 bytes
                ->  Seq Scan on anser_rf_probe p
          ->  Hash
-               ->  Custom Scan (Anser Bloom Producer)
-                     Bloom Filter Size: 8192 bytes
-                     ->  Redistribute Motion 3:3  (slice2; segments: 3)
-                           Hash Key: b.id
+               ->  Redistribute Motion 3:3  (slice2; segments: 3)
+                     Hash Key: b.id
+                     ->  Custom Scan (Anser Bloom Producer)
+                           Bloom Filter Size: 8192 bytes
                            ->  Seq Scan on anser_rf_build b
  Optimizer: Postgres query optimizer
-(13 rows)
+(14 rows)
 
 SET gp_anser_runtime_filter = off;
 EXPLAIN (COSTS OFF)

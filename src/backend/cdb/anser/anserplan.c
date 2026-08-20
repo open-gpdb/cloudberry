@@ -57,6 +57,9 @@ static bool anser_rf_size(double est_rows, int64 *total_elems,
 						  int64 *max_payload, int64 *planned_bytes);
 static bool anser_hashjoin_keys(HashJoin *hj, AttrNumber *inner_attno,
 								AttrNumber *outer_attno);
+static bool anser_resolve_build_scan(Plan *hash, AttrNumber inner_attno,
+									 Plan **parent_out, Plan **scan_out,
+									 AttrNumber *attno_out);
 static void anser_try_inject(HashJoin *hj, AnserInjectCtx *ctx);
 static void anser_inject_walk(Plan *plan, AnserInjectCtx *ctx);
 
@@ -214,17 +217,71 @@ anser_hashjoin_keys(HashJoin *hj, AttrNumber *inner_attno, AttrNumber *outer_att
 }
 
 /*
- * If this HashJoin is the supported shape, inject a producer on the hash build
- * input and a consumer above the probe SeqScan.
+ * Follow the build side down from the Hash to the base SeqScan, mapping the key
+ * attno through each passthrough targetlist.  Wrapping the base scan (rather than
+ * an intermediate Motion) keeps the injected CustomScan's custom_scan_tlist made
+ * of base-relation Vars, which (a) deparses cleanly in EXPLAIN and (b) is the
+ * proven-safe "leaf child" case for MPP slice/gang setup.  Only plain single-
+ * child passthroughs (Hash, Motion) with Var targetlist entries are supported.
+ * On success *parent_out is the node whose outerPlan is the base scan.
+ */
+static bool
+anser_resolve_build_scan(Plan *hash, AttrNumber inner_attno, Plan **parent_out,
+						 Plan **scan_out, AttrNumber *attno_out)
+{
+	Plan	   *node = hash;
+	AttrNumber	attno = inner_attno;
+
+	for (;;)
+	{
+		TargetEntry *tle;
+		Var		   *var;
+		Plan	   *child;
+
+		if (node == NULL ||
+			attno < 1 || attno > list_length(node->targetlist))
+			return false;
+
+		tle = (TargetEntry *) list_nth(node->targetlist, attno - 1);
+		if (tle == NULL || !IsA(tle->expr, Var))
+			return false;
+		var = (Var *) tle->expr;
+		if (var->varno != OUTER_VAR)	/* single-child passthrough only */
+			return false;
+
+		child = outerPlan(node);
+		if (child == NULL)
+			return false;
+
+		if (IsA(child, SeqScan))
+		{
+			*parent_out = node;
+			*scan_out = child;
+			*attno_out = var->varattno;
+			return true;
+		}
+		if (!IsA(child, Hash) && !IsA(child, Motion))
+			return false;
+
+		node = child;
+		attno = var->varattno;
+	}
+}
+
+/*
+ * If this HashJoin is the supported shape, inject a producer above the build
+ * base scan and a consumer above the probe scan.
  */
 static void
 anser_try_inject(HashJoin *hj, AnserInjectCtx *ctx)
 {
 	Plan	   *hash = innerPlan(hj);	/* build side */
 	Plan	   *probe = outerPlan(hj);	/* probe side */
-	Plan	   *build_input;
+	Plan	   *build_parent;
+	Plan	   *build_scan;
 	AttrNumber	inner_attno;
 	AttrNumber	outer_attno;
+	AttrNumber	build_attno;
 	int64		total_elems;
 	int64		max_payload;
 	int64		planned_bytes;
@@ -240,11 +297,10 @@ anser_try_inject(HashJoin *hj, AnserInjectCtx *ctx)
 	if (probe == NULL || !IsA(probe, SeqScan))
 		return;
 
-	build_input = outerPlan(hash);
-	if (build_input == NULL)
-		return;
-
 	if (!anser_hashjoin_keys(hj, &inner_attno, &outer_attno))
+		return;
+	if (!anser_resolve_build_scan(hash, inner_attno, &build_parent, &build_scan,
+								  &build_attno))
 		return;
 	if (!anser_rf_size(hash->plan_rows, &total_elems, &max_payload, &planned_bytes))
 		return;
@@ -252,12 +308,12 @@ anser_try_inject(HashJoin *hj, AnserInjectCtx *ctx)
 	condition_id = ctx->next_condition_id++;
 	snprintf(condition_key, sizeof(condition_key), "anser_rf_%u", condition_id);
 
-	/* Producer wraps the hash build input; keyed by the inner (build) attno. */
-	producer = AnserBuildBloomProducerScan(build_input, inner_attno, condition_id,
+	/* Producer wraps the build base scan; keyed by the mapped build attno. */
+	producer = AnserBuildBloomProducerScan(build_scan, build_attno, condition_id,
 										   condition_key, total_elems, max_payload,
 										   planned_bytes);
 	producer->scan.plan.plan_node_id = ctx->next_plan_node_id++;
-	outerPlan(hash) = (Plan *) producer;
+	outerPlan(build_parent) = (Plan *) producer;
 
 	/* Consumer wraps the probe scan; keyed by the outer (probe) attno. */
 	consumer = AnserBuildBloomConsumerScan(probe, outer_attno, condition_id,
