@@ -274,7 +274,7 @@ AnserBloomValidateHeader(const AnserBloomPartHeader *header, Size payload_len)
 	if (header->total_parts == 0 || header->part_index >= header->total_parts)
 		return false;
 
-	if (header->bitset_bits == 0 ||
+	if (header->bitset_bits < ANSER_BLOOM_MIN_BITSET_BITS ||
 		header->bitset_bits > (PG_UINT32_MAX + UINT64CONST(1)) ||
 		((header->bitset_bits - 1) & header->bitset_bits) != 0)
 		return false;

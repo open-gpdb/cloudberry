@@ -299,7 +299,13 @@ bloom_create_with_params(uint64 bitset_bits, int k_hash_funcs, uint64 seed)
 	bloom_filter *filter;
 	Size		bitset_bytes;
 
-	if (bitset_bits == 0 || bitset_bits > (PG_UINT32_MAX + UINT64CONST(1)) ||
+	/*
+	 * Require at least one full byte of bitset.  1/2/4 are powers of two but
+	 * give bitset_bytes == 0 (no flexible-array storage allocated), and
+	 * membership tests would then index filter->bitset[...] out of bounds.
+	 */
+	if (bitset_bits < BITS_PER_BYTE ||
+		bitset_bits > (PG_UINT32_MAX + UINT64CONST(1)) ||
 		((bitset_bits - 1) & bitset_bits) != 0)
 		return NULL;
 

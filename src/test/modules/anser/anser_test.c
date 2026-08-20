@@ -36,6 +36,7 @@
 #include "commands/dbcommands.h"
 #include "executor/nodeAnserBloomFilter.h"
 #include "fmgr.h"
+#include "lib/bloomfilter.h"
 #include "miscadmin.h"
 #include "postmaster/postmaster.h"
 #include "storage/latch.h"
@@ -56,6 +57,7 @@ PG_FUNCTION_INFO_V1(anser_test_cancel_channel);
 PG_FUNCTION_INFO_V1(anser_test_cancel_query);
 PG_FUNCTION_INFO_V1(anser_test_bloom_roundtrip);
 PG_FUNCTION_INFO_V1(anser_test_bloom_union);
+PG_FUNCTION_INFO_V1(anser_test_bloom_rejects_tiny);
 PG_FUNCTION_INFO_V1(anser_test_node_roundtrip);
 PG_FUNCTION_INFO_V1(anser_test_client_roundtrip);
 PG_FUNCTION_INFO_V1(anser_test_multi_consumer);
@@ -283,6 +285,54 @@ anser_test_bloom_union(PG_FUNCTION_ARGS)
 	bloom_free(left);
 	bloom_free(right);
 	bloom_free(united);
+	PG_RETURN_BOOL(ok);
+}
+
+/*
+ * Security regression: a crafted bloom part with a tiny bitset (e.g. bits = 4,
+ * so bitset_bytes == 0) must be rejected rather than producing a filter with no
+ * bitset storage (which membership tests would index out of bounds).  This
+ * payload path is reachable from the PUBLIC gp_anser_publish builtin, so all
+ * three entry points must return NULL for such a header.  Returns true iff the
+ * crafted header is safely rejected everywhere (no crash, no filter built).
+ */
+Datum
+anser_test_bloom_rejects_tiny(PG_FUNCTION_ARGS)
+{
+	int32		bits_arg = PG_GETARG_INT32(0);
+	AnserBloomPartHeader header;
+	uint32		part_index = 0;
+	uint32		total_parts = 0;
+	uint32		received = 0;
+	bloom_filter *from_part;
+	bloom_filter *from_union;
+	bloom_filter *from_params;
+	bool		ok;
+
+	MemSet(&header, 0, sizeof(header));
+	header.magic = ANSER_BLOOM_PART_MAGIC;
+	header.version = ANSER_BLOOM_PART_VERSION;
+	header.k_hash_funcs = 3;
+	header.seed = 0;
+	header.bitset_bits = (uint64) bits_arg;	/* tiny -> bitset_bytes == 0 */
+	header.part_index = 0;
+	header.total_parts = 1;
+
+	/* The header itself is the whole payload (bitset_bytes == 0). */
+	from_part = AnserBloomDeserializePart(&header, sizeof(header),
+										  &part_index, &total_parts);
+	from_union = AnserBloomUnionParts(&header, sizeof(header), 1, &received);
+	from_params = bloom_create_with_params(header.bitset_bits, 3, 0);
+
+	ok = (from_part == NULL && from_union == NULL && from_params == NULL);
+
+	if (from_part != NULL)
+		bloom_free(from_part);
+	if (from_union != NULL)
+		bloom_free(from_union);
+	if (from_params != NULL)
+		bloom_free(from_params);
+
 	PG_RETURN_BOOL(ok);
 }
 

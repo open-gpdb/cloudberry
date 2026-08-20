@@ -171,8 +171,28 @@ SELECT anser_test_bloom_union('bf_union', 42, 84);
 (1 row)
 
 SELECT anser_test_node_roundtrip(168);
- anser_test_node_roundtrip 
+ anser_test_node_roundtrip
 ---------------------------
+ t
+(1 row)
+
+-- Security regression: a crafted part header with a tiny bitset (bitset_bytes
+-- == 0) must be rejected, not turned into a filter with no bitset storage.
+SELECT anser_test_bloom_rejects_tiny(0) AS reject_0;
+ reject_0
+----------
+ t
+(1 row)
+
+SELECT anser_test_bloom_rejects_tiny(2) AS reject_2;
+ reject_2
+----------
+ t
+(1 row)
+
+SELECT anser_test_bloom_rejects_tiny(4) AS reject_4;
+ reject_4
+----------
  t
 (1 row)
 

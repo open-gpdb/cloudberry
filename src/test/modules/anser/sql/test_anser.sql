@@ -43,6 +43,12 @@ SELECT anser_test_bloom_roundtrip('bf_roundtrip', 42);
 SELECT anser_test_bloom_union('bf_union', 42, 84);
 SELECT anser_test_node_roundtrip(168);
 
+-- Security regression: a crafted part header with a tiny bitset (bitset_bytes
+-- == 0) must be rejected, not turned into a filter with no bitset storage.
+SELECT anser_test_bloom_rejects_tiny(0) AS reject_0;
+SELECT anser_test_bloom_rejects_tiny(2) AS reject_2;
+SELECT anser_test_bloom_rejects_tiny(4) AS reject_4;
+
 -- Built-in round trip through the live services: producer_begin -> publish
 -- (gather service appends, channel goes READY) -> consume_wait (send service
 -- delivers) returns the payload.  Proves the full producer -> gather -> send ->

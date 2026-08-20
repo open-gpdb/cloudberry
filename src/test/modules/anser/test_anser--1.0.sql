@@ -80,6 +80,11 @@ RETURNS bool
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT;
 
+CREATE FUNCTION anser_test_bloom_rejects_tiny(bits int4)
+RETURNS bool
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT;
+
 CREATE FUNCTION anser_test_node_roundtrip(value int4)
 RETURNS bool
 AS 'MODULE_PATHNAME'
