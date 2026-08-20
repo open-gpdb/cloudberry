@@ -46,6 +46,7 @@
 #include "libpq/auth.h"
 #include "libpq/hba.h"
 #include "libpq/libpq-be.h"
+#include "cdb/anserplan.h"
 #include "cdb/cdbendpoint.h"
 #include "cdb/cdbtm.h"
 #include "cdb/cdbvars.h"
@@ -1397,6 +1398,13 @@ InitPostgres(const char *in_dbname, Oid dboid,
 
 	/* Initialize this backend's session state. */
 	InitializeSession();
+
+	/*
+	 * Register the Anser runtime-filter CustomScan providers so their methods
+	 * resolve by name when a dispatched plan carrying them is deserialized.
+	 * Harmless (a hash insert) when the feature is unused.
+	 */
+	AnserRegisterRuntimeFilterMethods();
 
 	/*
 	 * report this backend in the PgBackendStatus array, meanwhile, we do not
