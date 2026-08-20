@@ -1148,6 +1148,7 @@ AnserWaitSlotResult(int slot, void **payload, Size *payload_len,
 					bool *cancelled)
 {
 	AnserWaitSlot *s = &AnserWaitTable[slot];
+	AnserChannelKey slot_key = s->key;
 
 	for (;;)
 	{
@@ -1208,6 +1209,35 @@ AnserWaitSlotResult(int slot, void **payload, Size *payload_len,
 			if (payload_len != NULL)
 				*payload_len = len;
 			return true;
+		}
+
+		/*
+		 * Still WAITING.  Guard against the registration/recycle race: if our
+		 * channel has already been recycled (CONSUMED/CANCELLED) or swept out of
+		 * the map between AnserWaitProducersRegistered and our slot
+		 * registration, the send service will never resolve this slot -- there
+		 * is no live payload to deliver.  Reclaim the slot ourselves and fail
+		 * open rather than block forever.
+		 */
+		if (st == ANSER_WAIT_WAITING)
+		{
+			bool		found = false;
+			AnserChannelState cstate = AnserChannelGetState(&slot_key, &found);
+
+			if (!found ||
+				cstate == ANSER_CHANNEL_CANCELLED ||
+				cstate == ANSER_CHANNEL_CONSUMED)
+			{
+				LWLockAcquire(AnserRingLock, LW_EXCLUSIVE);
+				if (s->consumer_pid == MyProcPid &&
+					s->state == ANSER_WAIT_WAITING)
+					s->state = ANSER_WAIT_FREE;
+				LWLockRelease(AnserRingLock);
+
+				if (cancelled != NULL)
+					*cancelled = true;
+				return false;
+			}
 		}
 
 		ResetLatch(MyLatch);

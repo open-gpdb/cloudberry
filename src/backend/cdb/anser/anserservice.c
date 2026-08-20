@@ -32,10 +32,12 @@
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "postmaster/bgworker.h"
+#include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/latch.h"
 #include "storage/lwlock.h"
 #include "utils/guc.h"
+#include "utils/hsearch.h"
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
 #include "utils/resowner.h"
@@ -119,6 +121,16 @@ AnserServiceLoop(const char *service_name, bool gather_service)
 			ResourceOwnerRelease(CurrentResourceOwner,
 								 RESOURCE_RELEASE_AFTER_LOCKS, false, false);
 		}
+
+		/*
+		 * Release any hash_seq_search scan and temp files abandoned when the
+		 * error interrupted a cycle mid-scan.  Missing the hash-table reset here
+		 * leaks dynahash scan registrations across errors until hash_seq_init
+		 * itself fails, permanently wedging the service (it could then never
+		 * scan the channel map to deliver to consumers).
+		 */
+		AtEOXact_Files(false);
+		AtEOXact_HashTables(false);
 
 		MemoryContextSwitchTo(service_ctx);
 		FlushErrorState();
