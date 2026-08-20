@@ -72,6 +72,8 @@ typedef struct AnserChannelEntry
 	uint32		expected_producers;
 	uint32		done_producers;
 	uint32		consumers;
+	uint32		expected_consumers;	/* consumers to deliver before recycling the
+									 * payload (one per segment); 0 = unknown */
 	uint32		done_consumers;
 	Size		data_len;
 	dsm_handle	dsm_handle;

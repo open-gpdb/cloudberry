@@ -452,6 +452,17 @@ anser_consume_receive(AnserBloomConsumeScanState *st)
 		st->filter = ExecAnserBloomFilterConsumerGetFilter(st->consume);
 	else
 		st->filter = NULL;
+
+	/*
+	 * Diagnostic: a NULL filter means we fail open (no pruning).  Log why --
+	 * cancelled delivery vs. too few bloom parts unioned -- so runtime-filter
+	 * misbehavior is visible in the server log.
+	 */
+	if (st->filter == NULL)
+		elog(LOG,
+			 "anser bloom consumer: no filter, failing open (cancelled=%d, received_parts=%u)",
+			 ExecAnserBloomFilterConsumerWasCancelled(st->consume),
+			 ExecAnserBloomFilterConsumerReceivedParts(st->consume));
 }
 
 static TupleTableSlot *

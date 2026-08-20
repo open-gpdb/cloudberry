@@ -29,6 +29,7 @@
 #include "postgres.h"
 
 #include "cdb/anser.h"
+#include "cdb/cdbutil.h"
 #include "miscadmin.h"
 #include "storage/dsm_impl.h"
 #include "storage/lwlock.h"
@@ -1025,6 +1026,30 @@ AnserConsumerWait(const AnserChannelKey *channel_key, void **payload,
 	if (!AnserSubscribe(channel_key))
 		return false;
 
+	/*
+	 * Record how many consumers to expect (one per segment).  The send service
+	 * must deliver to all of them before recycling the payload; using the live
+	 * subscribe count instead would recycle after the first consumer and starve
+	 * the rest (they would fail open and do no filtering).
+	 */
+	{
+		int			nseg = getgpsegmentCount();
+
+		if (nseg > 0)
+		{
+			AnserChannelEntry *entry;
+			bool		found;
+
+			LWLockAcquire(AnserChannelLock, LW_EXCLUSIVE);
+			entry = (AnserChannelEntry *) hash_search(AnserChannelHash,
+													  channel_key, HASH_FIND,
+													  &found);
+			if (found && entry->expected_consumers < (uint32) nseg)
+				entry->expected_consumers = (uint32) nseg;
+			LWLockRelease(AnserChannelLock);
+		}
+	}
+
 	slot = AnserRegisterWaitSlot(channel_key);
 	if (slot < 0)
 	{
@@ -1552,9 +1577,9 @@ AnserSendServiceCycle(void)
 		if (src != NULL)
 			dsm_detach(src);
 
-		/* Recycle once every subscribed consumer has been delivered. */
-		if (ready && entry->consumers > 0 &&
-			entry->done_consumers >= entry->consumers)
+		/* Recycle once every expected consumer (one per segment) is delivered. */
+		if (ready && entry->expected_consumers > 0 &&
+			entry->done_consumers >= entry->expected_consumers)
 		{
 			entry->state = ANSER_CHANNEL_CONSUMED;
 			AnserReleasePayloadDSM(entry);

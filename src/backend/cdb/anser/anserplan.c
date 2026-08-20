@@ -150,9 +150,14 @@ anser_rf_size(double est_rows, int64 *total_elems, int64 *max_payload,
 	while ((cap_pow2 << 1) <= cap)
 		cap_pow2 <<= 1;
 
+	/*
+	 * Target ~2 bytes per estimated element, then round DOWN to a power of two
+	 * (rounding up would nearly double the size -- e.g. 17033 rows -> ~34 KB ->
+	 * 64 KB).  Clamped to [8 KB, cap].
+	 */
 	target = (est_rows > 0 ? est_rows : 1.0) * 2.0;
 	t = ANSER_RF_MIN_BYTES;
-	while (t < target && t < cap_pow2)
+	while ((double) (t << 1) <= target && (t << 1) <= cap_pow2)
 		t <<= 1;
 
 	*total_elems = t / 2;
