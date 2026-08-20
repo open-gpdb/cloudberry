@@ -47,6 +47,8 @@
 #include "executor/nodeAnserBloomFilter.h"
 #include "lib/bloomfilter.h"
 #include "nodes/extensible.h"
+#include "nodes/makefuncs.h"
+#include "nodes/nodeFuncs.h"
 #include "nodes/pg_list.h"
 #include "nodes/value.h"
 
@@ -142,6 +144,102 @@ AnserRegisterRuntimeFilterMethods(void)
 {
 	RegisterCustomScanMethods(&anser_produce_scan_methods);
 	RegisterCustomScanMethods(&anser_consume_scan_methods);
+}
+
+/* ---- node builders (called from the injection pass in anserplan.c) ---- */
+
+/*
+ * Identity output targetlist for a pass-through CustomScan: a Var per child
+ * column referencing the scan tuple via INDEX_VAR, so ExecScan projects the
+ * child tuple through unchanged.  (Post-setrefs we build this by hand rather
+ * than relying on set_customscan_references.)
+ */
+static List *
+anser_rf_identity_tlist(List *child_tlist)
+{
+	List	   *tlist = NIL;
+	ListCell   *lc;
+	AttrNumber	attno = 0;
+
+	foreach(lc, child_tlist)
+	{
+		TargetEntry *tle = (TargetEntry *) lfirst(lc);
+		Var		   *var;
+
+		attno++;
+		var = makeVar(INDEX_VAR, attno,
+					  exprType((Node *) tle->expr),
+					  exprTypmod((Node *) tle->expr),
+					  exprCollation((Node *) tle->expr),
+					  0);
+		tlist = lappend(tlist,
+						makeTargetEntry((Expr *) var, attno,
+										tle->resname ? pstrdup(tle->resname) : NULL,
+										tle->resjunk));
+	}
+
+	return tlist;
+}
+
+static CustomScan *
+anser_build_rf_scan(const CustomScanMethods *methods, Plan *child,
+					AttrNumber key_attno, uint32 condition_id,
+					const char *condition_key, int64 total_elems,
+					Size max_payload_bytes, int64 planned_bytes)
+{
+	CustomScan *cs = makeNode(CustomScan);
+	List	   *priv = NIL;
+
+	/* custom_private, in AnserRfPrivateIndex order. */
+	priv = lappend(priv, makeInteger((int) condition_id));
+	priv = lappend(priv, makeInteger((int) key_attno));
+	priv = lappend(priv, makeInteger((int) total_elems));
+	priv = lappend(priv, makeInteger((int) max_payload_bytes));
+	priv = lappend(priv, makeInteger((int) planned_bytes));
+	priv = lappend(priv, makeString(pstrdup(condition_key)));
+
+	cs->scan.plan.targetlist = anser_rf_identity_tlist(child->targetlist);
+	cs->scan.plan.qual = NIL;
+	cs->scan.plan.lefttree = NULL;
+	cs->scan.plan.righttree = NULL;
+	cs->scan.plan.startup_cost = child->startup_cost;
+	cs->scan.plan.total_cost = child->total_cost;
+	cs->scan.plan.plan_rows = child->plan_rows;
+	cs->scan.plan.plan_width = child->plan_width;
+	cs->scan.plan.parallel_aware = false;
+	cs->scan.plan.parallel_safe = child->parallel_safe;
+	cs->scan.plan.flow = (Flow *) copyObject(child->flow);
+	cs->scan.scanrelid = 0;
+	cs->flags = 0;
+	cs->custom_plans = list_make1(child);
+	cs->custom_exprs = NIL;
+	cs->custom_private = priv;
+	cs->custom_scan_tlist = copyObject(child->targetlist);
+	cs->methods = methods;
+
+	return cs;
+}
+
+CustomScan *
+AnserBuildBloomProducerScan(Plan *child, AttrNumber key_attno,
+							uint32 condition_id, const char *condition_key,
+							int64 total_elems, Size max_payload_bytes,
+							int64 planned_bytes)
+{
+	return anser_build_rf_scan(&anser_produce_scan_methods, child, key_attno,
+							   condition_id, condition_key, total_elems,
+							   max_payload_bytes, planned_bytes);
+}
+
+CustomScan *
+AnserBuildBloomConsumerScan(Plan *child, AttrNumber key_attno,
+							uint32 condition_id, const char *condition_key,
+							int64 total_elems, Size max_payload_bytes,
+							int64 planned_bytes)
+{
+	return anser_build_rf_scan(&anser_consume_scan_methods, child, key_attno,
+							   condition_id, condition_key, total_elems,
+							   max_payload_bytes, planned_bytes);
 }
 
 /* ---- shared helpers ---- */

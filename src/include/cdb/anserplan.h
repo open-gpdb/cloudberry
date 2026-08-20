@@ -47,4 +47,24 @@ extern void AnserApplyRuntimeFilters(PlannedStmt *stmt);
  */
 extern void AnserRegisterRuntimeFilterMethods(void);
 
+/*
+ * Node builders (implemented in anserplanexec.c, where the CustomScan method
+ * tables live).  Each wraps `child` in a pass-through CustomScan carrying the
+ * runtime-filter parameters in custom_private; the caller assigns plan_node_id.
+ * `key_attno` is the build (producer) / probe (consumer) join-key attno in the
+ * child's output tuple.
+ */
+extern CustomScan *AnserBuildBloomProducerScan(Plan *child, AttrNumber key_attno,
+											   uint32 condition_id,
+											   const char *condition_key,
+											   int64 total_elems,
+											   Size max_payload_bytes,
+											   int64 planned_bytes);
+extern CustomScan *AnserBuildBloomConsumerScan(Plan *child, AttrNumber key_attno,
+											   uint32 condition_id,
+											   const char *condition_key,
+											   int64 total_elems,
+											   Size max_payload_bytes,
+											   int64 planned_bytes);
+
 #endif							/* CDB_ANSERPLAN_H */

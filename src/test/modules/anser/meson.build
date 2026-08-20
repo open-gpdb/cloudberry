@@ -45,6 +45,7 @@ tests += {
   'regress': {
     'sql': [
       'test_anser',
+      'anser_runtime_filter',
     ],
   },
 }

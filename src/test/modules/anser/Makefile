@@ -36,7 +36,7 @@ SHLIB_PREREQS = submake-libpq
 EXTENSION = test_anser
 DATA = test_anser--1.0.sql
 
-REGRESS = test_anser
+REGRESS = test_anser anser_runtime_filter
 
 ifdef USE_PGXS
 PG_CONFIG = pg_config
