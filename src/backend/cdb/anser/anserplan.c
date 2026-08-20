@@ -60,13 +60,3 @@ AnserApplyRuntimeFilters(PlannedStmt *stmt)
 	 * consumer CustomScan nodes.  Scaffolding only for now.
 	 */
 }
-
-void
-AnserRegisterRuntimeFilterMethods(void)
-{
-	/*
-	 * TODO(PR4 chunk 2): RegisterCustomScanMethods() for the producer and
-	 * consumer providers so their methods resolve by name on plan
-	 * deserialization.  Scaffolding only for now.
-	 */
-}
