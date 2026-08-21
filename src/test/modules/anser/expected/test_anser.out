@@ -157,6 +157,15 @@ SELECT anser_test_state(1, 2, 2, 'join_c');
  CANCELLED
 (1 row)
 
+-- GUC sizing guard: AnserMaxChannels() is memoized at postmaster start, so a
+-- per-session SET gp_max_slices must not change the reported channel-map size
+-- (otherwise the shared arrays and the Len functions would disagree).
+SELECT anser_test_max_channels_stable_across_slices() AS max_channels_stable;
+ max_channels_stable 
+---------------------
+ t
+(1 row)
+
 -- Bloom payload protocol and standalone producer/consumer helpers.
 SELECT anser_test_bloom_roundtrip('bf_roundtrip', 42);
  anser_test_bloom_roundtrip 
@@ -170,6 +179,13 @@ SELECT anser_test_bloom_union('bf_union', 42, 84);
  t
 (1 row)
 
+-- Coordinator-side fold: parts combined into one merged chunk (union on master).
+SELECT anser_test_bloom_fold('bf_fold', 42, 84);
+ anser_test_bloom_fold 
+-----------------------
+ t
+(1 row)
+
 SELECT anser_test_node_roundtrip(168);
  anser_test_node_roundtrip
 ---------------------------
@@ -179,19 +195,19 @@ SELECT anser_test_node_roundtrip(168);
 -- Security regression: a crafted part header with a tiny bitset (bitset_bytes
 -- == 0) must be rejected, not turned into a filter with no bitset storage.
 SELECT anser_test_bloom_rejects_tiny(0) AS reject_0;
- reject_0
+ reject_0 
 ----------
  t
 (1 row)
 
 SELECT anser_test_bloom_rejects_tiny(2) AS reject_2;
- reject_2
+ reject_2 
 ----------
  t
 (1 row)
 
 SELECT anser_test_bloom_rejects_tiny(4) AS reject_4;
- reject_4
+ reject_4 
 ----------
  t
 (1 row)

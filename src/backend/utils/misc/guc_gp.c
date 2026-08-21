@@ -3455,11 +3455,13 @@ struct config_int ConfigureNamesInt_gp[] =
 	{
 		{"gp_anser_max_channels", PGC_POSTMASTER, CUSTOM_OPTIONS,
 			gettext_noop("Sets the maximum number of Anser channels."),
-			gettext_noop("This value sizes the fixed Anser shared-memory channel map at postmaster start."),
+			gettext_noop("This value sizes the fixed Anser shared-memory channel map at postmaster start. "
+						 "0 (the default) auto-sizes it to max_connections * gp_max_slices, "
+						 "falling back to a fixed per-connection budget when gp_max_slices is unbounded."),
 			GUC_NOT_IN_SAMPLE
 		},
 		&gp_anser_max_channels,
-		128, 1, INT_MAX,
+		0, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
 
@@ -3488,7 +3490,13 @@ struct config_int ConfigureNamesInt_gp[] =
 	{
 		{"gp_anser_max_consumers_per_channel", PGC_POSTMASTER, CUSTOM_OPTIONS,
 			gettext_noop("Sets the maximum number of waiting Anser consumers per channel."),
-			gettext_noop("This value sizes the fixed Anser consumer wait table at postmaster start."),
+			gettext_noop("This value sizes the fixed Anser consumer wait table at postmaster start "
+						 "(gp_anser_max_channels * this). Each channel has one consumer per segment, "
+						 "so it should be set to the number of primary segments; the plan pass injects "
+						 "at most one consumer per channel. It cannot be auto-derived because the "
+						 "segment count is a catalog value unavailable at postmaster start. Over-sizing "
+						 "only wastes shared memory; under-sizing makes surplus consumers fail open "
+						 "(unfiltered), never wrong results."),
 			GUC_NOT_IN_SAMPLE
 		},
 		&gp_anser_max_consumers_per_channel,

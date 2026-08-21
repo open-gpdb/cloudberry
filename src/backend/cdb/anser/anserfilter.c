@@ -95,6 +95,99 @@ AnserBloomSerializedSize(const bloom_filter *filter)
 	return sizeof(AnserBloomPartHeader) + bloom_bitset_bytes(filter);
 }
 
+/*
+ * Does this payload look like a serialized bloom part?  Used by the coordinator
+ * to tell a runtime-filter part (which it folds/unions) from opaque channel
+ * bytes (which it concatenates).  A false positive is effectively impossible: a
+ * part must carry the ABF1 magic, a known version, a power-of-two bitset, and a
+ * self-consistent length.
+ */
+bool
+AnserBloomLooksLikePart(const void *payload, Size payload_len)
+{
+	if (payload == NULL || payload_len < sizeof(AnserBloomPartHeader))
+		return false;
+
+	return AnserBloomValidateHeader((const AnserBloomPartHeader *) payload,
+									payload_len);
+}
+
+/*
+ * Fold one serialized bloom part into a running accumulator, on the coordinator.
+ *
+ * `acc`/`acc_len` is the current merged part (acc_len == 0 for the first fold);
+ * `part`/`part_len` is the incoming per-segment part.  Both are unioned (bitwise
+ * OR -- the parts share bitset params derived from the condition key) and the
+ * result is returned as a freshly palloc'd single merged part (caller frees),
+ * with part_index 0 and total_parts set to how many parts have been folded so
+ * far.  This keeps the channel payload a single filter-sized chunk regardless of
+ * the segment count, and lets consumers deserialize one part instead of unioning
+ * N.  Returns NULL on malformed input or a parameter mismatch (the caller then
+ * cancels the channel and consumers fail open).
+ */
+void *
+AnserBloomFoldPart(const void *acc, Size acc_len,
+				   const void *part, Size part_len, Size *out_len)
+{
+	bloom_filter *bf_part;
+	bloom_filter *result;
+	uint32		pi;
+	uint32		tp;
+	uint32		folded;
+	Size		sz;
+	Size		written = 0;
+	void	   *out;
+
+	if (out_len != NULL)
+		*out_len = 0;
+
+	bf_part = AnserBloomDeserializePart(part, part_len, &pi, &tp);
+	if (bf_part == NULL)
+		return NULL;
+
+	if (acc == NULL || acc_len == 0)
+	{
+		result = bf_part;
+		folded = 1;
+	}
+	else
+	{
+		uint32		acc_pi;
+		uint32		acc_tp;
+		bloom_filter *bf_acc;
+
+		bf_acc = AnserBloomDeserializePart(acc, acc_len, &acc_pi, &acc_tp);
+		if (bf_acc == NULL)
+		{
+			bloom_free(bf_part);
+			return NULL;
+		}
+		if (!bloom_union(bf_acc, bf_part))
+		{
+			bloom_free(bf_acc);
+			bloom_free(bf_part);
+			return NULL;
+		}
+		bloom_free(bf_part);
+		result = bf_acc;
+		folded = acc_tp + 1;
+	}
+
+	sz = AnserBloomSerializedSize(result);
+	out = palloc(sz);
+	if (!AnserBloomSerializePart(result, 0, folded, out, sz, &written))
+	{
+		pfree(out);
+		bloom_free(result);
+		return NULL;
+	}
+	bloom_free(result);
+
+	if (out_len != NULL)
+		*out_len = written;
+	return out;
+}
+
 bool
 AnserBloomSerializePart(const bloom_filter *filter, uint32 part_index,
 						uint32 total_parts, void *buffer, Size buffer_size,

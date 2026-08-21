@@ -57,6 +57,7 @@ PG_FUNCTION_INFO_V1(anser_test_cancel_channel);
 PG_FUNCTION_INFO_V1(anser_test_cancel_query);
 PG_FUNCTION_INFO_V1(anser_test_bloom_roundtrip);
 PG_FUNCTION_INFO_V1(anser_test_bloom_union);
+PG_FUNCTION_INFO_V1(anser_test_bloom_fold);
 PG_FUNCTION_INFO_V1(anser_test_bloom_rejects_tiny);
 PG_FUNCTION_INFO_V1(anser_test_node_roundtrip);
 PG_FUNCTION_INFO_V1(anser_test_client_roundtrip);
@@ -64,6 +65,7 @@ PG_FUNCTION_INFO_V1(anser_test_multi_consumer);
 PG_FUNCTION_INFO_V1(anser_test_abandoned_consumer_recycles);
 PG_FUNCTION_INFO_V1(anser_test_set_sweep);
 PG_FUNCTION_INFO_V1(anser_test_sweep);
+PG_FUNCTION_INFO_V1(anser_test_max_channels_stable_across_slices);
 
 static bool build_test_key(FunctionCallInfo fcinfo, AnserChannelKey *key);
 static const char *state_to_string(AnserChannelState state);
@@ -97,7 +99,7 @@ anser_test_register_condition(PG_FUNCTION_ARGS)
 										gp_command_count,
 										(uint32) condition_id_arg,
 										condition_key,
-										(uint32) expected_producers_arg,
+										expected_producers_arg,
 										&channel_key));
 }
 
@@ -285,6 +287,83 @@ anser_test_bloom_union(PG_FUNCTION_ARGS)
 	bloom_free(left);
 	bloom_free(right);
 	bloom_free(united);
+	PG_RETURN_BOOL(ok);
+}
+
+/*
+ * Coordinator-side fold: two segment parts folded (one at a time) must yield a
+ * single merged part -- sized like one part regardless of the fold count, with
+ * total_parts recording how many were combined -- whose filter contains both
+ * segments' elements.  This is the master-side union that lets each consumer
+ * receive one chunk instead of N.
+ */
+Datum
+anser_test_bloom_fold(PG_FUNCTION_ARGS)
+{
+	char	   *key = text_to_cstring(PG_GETARG_TEXT_PP(0));
+	int32		left_arg = PG_GETARG_INT32(1);
+	int32		right_arg = PG_GETARG_INT32(2);
+	Datum		left_value = Int32GetDatum(left_arg);
+	Datum		right_value = Int32GetDatum(right_arg);
+	uint64		seed = AnserBloomSeed(key);
+	bloom_filter *left;
+	bloom_filter *right;
+	bloom_filter *merged_filter;
+	char	   *left_payload;
+	char	   *right_payload;
+	void	   *merged1;
+	void	   *merged2;
+	Size		left_size;
+	Size		right_size;
+	Size		left_len = 0;
+	Size		right_len = 0;
+	Size		merged1_len = 0;
+	Size		merged2_len = 0;
+	uint32		part_index = 0;
+	uint32		total_parts = 0;
+	bool		ok;
+
+	left = AnserBloomCreate(32, 1024 * 1024, seed);
+	right = AnserBloomCreate(32, 1024 * 1024, seed);
+	if (left == NULL || right == NULL)
+		PG_RETURN_BOOL(false);
+
+	bloom_add_element(left, (unsigned char *) &left_value, sizeof(Datum));
+	bloom_add_element(right, (unsigned char *) &right_value, sizeof(Datum));
+	left_size = AnserBloomSerializedSize(left);
+	right_size = AnserBloomSerializedSize(right);
+	left_payload = palloc(left_size);
+	right_payload = palloc(right_size);
+	ok = AnserBloomSerializePart(left, 0, 2, left_payload, left_size, &left_len) &&
+		AnserBloomSerializePart(right, 1, 2, right_payload, right_size,
+								&right_len);
+	bloom_free(left);
+	bloom_free(right);
+	if (!ok)
+		PG_RETURN_BOOL(false);
+
+	merged1 = AnserBloomFoldPart(NULL, 0, left_payload, left_len, &merged1_len);
+	if (merged1 == NULL)
+		PG_RETURN_BOOL(false);
+	merged2 = AnserBloomFoldPart(merged1, merged1_len, right_payload, right_len,
+								 &merged2_len);
+	pfree(merged1);
+	if (merged2 == NULL)
+		PG_RETURN_BOOL(false);
+
+	merged_filter = AnserBloomDeserializePart(merged2, merged2_len,
+											  &part_index, &total_parts);
+	ok = merged_filter != NULL &&
+		AnserBloomLooksLikePart(merged2, merged2_len) &&
+		merged2_len == left_size &&		/* one chunk, size independent of count */
+		part_index == 0 &&
+		total_parts == 2 &&
+		!bloom_lacks_element(merged_filter, (unsigned char *) &left_value,
+							 sizeof(Datum)) &&
+		!bloom_lacks_element(merged_filter, (unsigned char *) &right_value,
+							 sizeof(Datum));
+	if (merged_filter != NULL)
+		bloom_free(merged_filter);
 	PG_RETURN_BOOL(ok);
 }
 
@@ -799,6 +878,37 @@ anser_test_set_sweep(PG_FUNCTION_ARGS)
 
 	AnserSetSweepEnabled(enabled);
 	PG_RETURN_VOID();
+}
+
+/*
+ * Guard regression for AnserMaxChannels()'s memoization.
+ *
+ * The channel map is sized once at postmaster start; AnserMaxChannels() caches
+ * that result so a later per-session SET gp_max_slices cannot report a size that
+ * disagrees with the shared memory actually allocated (which would let the Len
+ * functions index past the arrays).  Read the effective size, change
+ * gp_max_slices to a value that -- absent the cache -- would grow the auto-sized
+ * map by orders of magnitude, read again, and assert it did not budge.  Runs
+ * entirely inside this one backend so the two reads bracket the SET.
+ */
+Datum
+anser_test_max_channels_stable_across_slices(PG_FUNCTION_ARGS)
+{
+	int			before = AnserMaxChannels();
+	char		saved[32];
+	bool		stable;
+
+	/* Preserve the session value so the test leaves no residue behind. */
+	snprintf(saved, sizeof(saved), "%d", gp_max_slices);
+
+	/* MaxConnections * 1000000 would dwarf any real map if recomputed live. */
+	SetConfigOption("gp_max_slices", "1000000", PGC_USERSET, PGC_S_SESSION);
+
+	stable = (AnserMaxChannels() == before && before > 0);
+
+	SetConfigOption("gp_max_slices", saved, PGC_USERSET, PGC_S_SESSION);
+
+	PG_RETURN_BOOL(stable);
 }
 
 /*

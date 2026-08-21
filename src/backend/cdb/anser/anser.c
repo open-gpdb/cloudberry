@@ -29,6 +29,7 @@
 #include "postgres.h"
 
 #include "cdb/anser.h"
+#include "cdb/anserfilter.h"
 #include "cdb/cdbutil.h"
 #include "miscadmin.h"
 #include "storage/dsm_impl.h"
@@ -36,6 +37,7 @@
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "storage/shmem.h"
+#include "utils/guc.h"
 #include "utils/hsearch.h"
 #include "utils/timestamp.h"
 #include "utils/wait_event.h"
@@ -47,10 +49,20 @@
 
 bool		gp_anser_enable = false;
 bool		gp_anser_runtime_filter = false;
-int			gp_anser_max_channels = 128;
+int			gp_anser_max_channels = 0;	/* 0 = auto (see AnserMaxChannels) */
 int			gp_anser_max_info_size = 16 * 1024 * 1024;
 int			gp_anser_timeout_ms = 1000;
 int			gp_anser_max_consumers_per_channel = 64;
+
+/*
+ * Fallback per-connection channel budget used to auto-size the channel map when
+ * gp_max_slices is left unbounded (0).  Each concurrent query can open at most
+ * one channel per runtime-filter slice, so the map is sized for
+ * max_connections * max_slices; when max_slices is unbounded we assume this many
+ * filter-carrying slices per query.  Only used to derive the default; an
+ * explicit gp_anser_max_channels overrides it entirely.
+ */
+#define ANSER_AUTO_SLICES_PER_CONN	8
 
 /*
  * Inbound submission queue.
@@ -73,7 +85,7 @@ typedef struct AnserSubmissionEntry
 {
 	AnserSubmissionState state;
 	AnserChannelKey key;
-	uint32		expected_producers;
+	int32		expected_producers;
 	dsm_handle	dsm_handle;		/* producer's part, DSM_HANDLE_INVALID if none */
 	Size		len;
 	bool		cancelled;
@@ -123,13 +135,13 @@ static void AnserInitializeChannelHash(void);
 static void AnserInitializeSubmissionQueue(bool found);
 static void AnserInitializeWaitTable(bool found);
 static int	AnserEnqueueSubmission(const AnserChannelKey *channel_key,
-								   uint32 expected_producers, dsm_handle handle,
+								   int expected_producers, dsm_handle handle,
 								   Size len, bool cancelled);
 static bool AnserWaitSubmissionAck(int slot);
 static void AnserAbandonSubmission(int slot);
 static void AnserAbandonWaitSlot(int slot);
 static bool AnserGatherApply(const AnserChannelKey *channel_key,
-							 uint32 expected_producers, dsm_handle handle,
+							 int expected_producers, dsm_handle handle,
 							 Size len, bool cancelled);
 static void AnserCancelStaleChannels(void);
 static void AnserReapSubmissionSlots(void);
@@ -206,7 +218,7 @@ AnserShmemInit(void)
 bool
 AnserRegisterCondition(int gp_session_id, int gp_command_count,
 					   uint32 condition_id, const char *condition_key,
-					   uint32 expected_producers,
+					   int expected_producers,
 					   AnserChannelKey *channel_key)
 {
 	AnserChannelEntry *entry;
@@ -216,7 +228,7 @@ AnserRegisterCondition(int gp_session_id, int gp_command_count,
 	if (!AnserInitialized())
 		return false;
 
-	if (expected_producers == 0)
+	if (expected_producers <= 0)
 	{
 		ereport(WARNING,
 				(errmsg("could not register Anser channel: expected producers must be greater than zero")));
@@ -329,7 +341,6 @@ AnserPublish(const AnserChannelKey *channel_key, const void *payload,
 
 	if (cancelled)
 	{
-		entry->cancelled = true;
 		entry->state = ANSER_CHANNEL_CANCELLED;
 		entry->updated_at = GetCurrentTimestamp();
 		SetLatch(&AnserCtl->send_latch);
@@ -339,7 +350,6 @@ AnserPublish(const AnserChannelKey *channel_key, const void *payload,
 
 	if (payload_len > (Size) gp_anser_max_info_size)
 	{
-		entry->cancelled = true;
 		entry->state = ANSER_CHANNEL_CANCELLED;
 		entry->updated_at = GetCurrentTimestamp();
 		SetLatch(&AnserCtl->send_latch);
@@ -354,7 +364,6 @@ AnserPublish(const AnserChannelKey *channel_key, const void *payload,
 	{
 		if (!AnserStorePayloadDSM(entry, payload, payload_len))
 		{
-			entry->cancelled = true;
 			entry->state = ANSER_CHANNEL_CANCELLED;
 			entry->updated_at = GetCurrentTimestamp();
 			SetLatch(&AnserCtl->send_latch);
@@ -443,7 +452,7 @@ AnserConsumeReady(const AnserChannelKey *channel_key, void *buffer,
 	}
 
 	ready = (entry->state == ANSER_CHANNEL_READY);
-	is_cancelled = (entry->state == ANSER_CHANNEL_CANCELLED || entry->cancelled);
+	is_cancelled = (entry->state == ANSER_CHANNEL_CANCELLED);
 	if (ready && !is_cancelled)
 		delivered = AnserDeliverChannelData(entry, buffer, buffer_size,
 										 payload_len);
@@ -467,7 +476,7 @@ AnserConsumeReady(const AnserChannelKey *channel_key, void *buffer,
 		return false;
 	}
 
-	is_cancelled = (entry->state == ANSER_CHANNEL_CANCELLED || entry->cancelled);
+	is_cancelled = (entry->state == ANSER_CHANNEL_CANCELLED);
 	if (is_cancelled)
 	{
 		if (cancelled != NULL)
@@ -540,7 +549,7 @@ AnserChannelConsumerCount(const AnserChannelKey *channel_key)
 	entry = (AnserChannelEntry *) hash_search(AnserChannelHash, channel_key,
 											  HASH_FIND, &found);
 	if (found)
-		count = (int) entry->consumers;
+		count = entry->consumers;
 	LWLockRelease(AnserChannelLock);
 
 	return count;
@@ -659,7 +668,6 @@ AnserCancelChannel(const AnserChannelKey *channel_key)
 											 &found);
 	if (found)
 	{
-		entry->cancelled = true;
 		entry->state = ANSER_CHANNEL_CANCELLED;
 		entry->updated_at = GetCurrentTimestamp();
 		AnserReleasePayloadDSM(entry);
@@ -686,7 +694,6 @@ AnserCancelQuery(int gp_session_id, int gp_command_count)
 		if (entry->key.gp_session_id == gp_session_id &&
 			entry->key.gp_command_count == gp_command_count)
 		{
-			entry->cancelled = true;
 			entry->state = ANSER_CHANNEL_CANCELLED;
 			entry->updated_at = GetCurrentTimestamp();
 			AnserReleasePayloadDSM(entry);
@@ -703,7 +710,7 @@ AnserCancelQuery(int gp_session_id, int gp_command_count)
  * deadline.  This is the "a producer opened a connection" signal.
  */
 bool
-AnserProducerBegin(const AnserChannelKey *channel_key, uint32 expected_producers,
+AnserProducerBegin(const AnserChannelKey *channel_key, int expected_producers,
 				   Oid caller_role, bool caller_is_super)
 {
 	AnserChannelEntry *entry;
@@ -713,7 +720,7 @@ AnserProducerBegin(const AnserChannelKey *channel_key, uint32 expected_producers
 	if (!AnserInitialized() || channel_key == NULL)
 		return false;
 
-	if (expected_producers == 0)
+	if (expected_producers <= 0)
 	{
 		ereport(WARNING,
 				(errmsg("could not begin Anser channel: expected producers must be greater than zero")));
@@ -795,7 +802,7 @@ AnserProducerBegin(const AnserChannelKey *channel_key, uint32 expected_producers
  */
 bool
 AnserProducerSubmit(const AnserChannelKey *channel_key,
-					uint32 expected_producers, const void *payload,
+					int expected_producers, const void *payload,
 					Size payload_len, bool cancelled,
 					Oid caller_role, bool caller_is_super)
 {
@@ -898,7 +905,7 @@ AnserAbandonSubmission(int slot)
  */
 static int
 AnserEnqueueSubmission(const AnserChannelKey *channel_key,
-					   uint32 expected_producers, dsm_handle handle,
+					   int expected_producers, dsm_handle handle,
 					   Size len, bool cancelled)
 {
 	int			len_slots = AnserSubmissionQueueLen();
@@ -1044,8 +1051,8 @@ AnserConsumerWait(const AnserChannelKey *channel_key, void **payload,
 			entry = (AnserChannelEntry *) hash_search(AnserChannelHash,
 													  channel_key, HASH_FIND,
 													  &found);
-			if (found && entry->expected_consumers < (uint32) nseg)
-				entry->expected_consumers = (uint32) nseg;
+			if (found && entry->expected_consumers < nseg)
+				entry->expected_consumers = nseg;
 			LWLockRelease(AnserChannelLock);
 		}
 	}
@@ -1291,7 +1298,7 @@ AnserGatherServiceCycle(void)
 	{
 		AnserSubmissionEntry *e = &AnserSubmissionQueue[i];
 		AnserChannelKey key;
-		uint32		expected_producers;
+		int32		expected_producers;
 		dsm_handle	handle;
 		Size		len;
 		bool		cancelled;
@@ -1331,7 +1338,7 @@ AnserGatherServiceCycle(void)
  * direct AnserPublish path but sourced from a DSM handle.
  */
 static bool
-AnserGatherApply(const AnserChannelKey *channel_key, uint32 expected_producers,
+AnserGatherApply(const AnserChannelKey *channel_key, int expected_producers,
 				 dsm_handle handle, Size len, bool cancelled)
 {
 	AnserChannelEntry *entry;
@@ -1374,7 +1381,6 @@ AnserGatherApply(const AnserChannelKey *channel_key, uint32 expected_producers,
 
 	if (cancelled)
 	{
-		entry->cancelled = true;
 		entry->state = ANSER_CHANNEL_CANCELLED;
 		entry->updated_at = GetCurrentTimestamp();
 		AnserReleasePayloadDSM(entry);
@@ -1392,7 +1398,6 @@ AnserGatherApply(const AnserChannelKey *channel_key, uint32 expected_producers,
 	{
 		if (!AnserStorePayloadDSM(entry, addr, len))
 		{
-			entry->cancelled = true;
 			entry->state = ANSER_CHANNEL_CANCELLED;
 			entry->updated_at = GetCurrentTimestamp();
 			AnserReleasePayloadDSM(entry);
@@ -1438,7 +1443,6 @@ AnserCancelStaleChannels(void)
 			TimestampDifferenceExceeds(entry->updated_at, now,
 									   gp_anser_timeout_ms))
 		{
-			entry->cancelled = true;
 			entry->state = ANSER_CHANNEL_CANCELLED;
 			entry->updated_at = now;
 			AnserReleasePayloadDSM(entry);
@@ -1503,7 +1507,6 @@ AnserSendServiceCycle(void)
 		 * forever on a channel the sweep would otherwise never reclaim.
 		 */
 		bool		cancel_waiters = (entry->state == ANSER_CHANNEL_CANCELLED ||
-									  entry->cancelled ||
 									  entry->state == ANSER_CHANNEL_CONSUMED);
 		dsm_segment *src = NULL;
 		void	   *src_addr = NULL;
@@ -1622,30 +1625,83 @@ AnserReapWaitSlots(void)
 	LWLockRelease(AnserRingLock);
 }
 
+/*
+ * Effective size of the channel map.
+ *
+ * When gp_anser_max_channels is set explicitly (> 0) it wins.  Otherwise the map
+ * is auto-sized to max_connections * max_slices: at most MaxConnections
+ * concurrent queries, each opening up to gp_max_slices runtime-filter channels.
+ * gp_max_slices == 0 means "unbounded", for which we substitute a fixed
+ * per-connection budget (ANSER_AUTO_SLICES_PER_CONN) so the map stays finite.
+ *
+ * This value sizes fixed shared memory at postmaster start, so it must be stable
+ * for the life of the postmaster and identical in every backend.  MaxConnections
+ * is PGC_POSTMASTER (stable), but gp_max_slices is PGC_USERSET, so we cache the
+ * computed value on first use.  That first use is the postmaster's shmem-sizing
+ * pass (before any backend forks or any session runs SET), so the cache captures
+ * the postmaster-level gp_max_slices and is inherited unchanged by every
+ * backend -- a later per-session SET gp_max_slices cannot resize the map.
+ *
+ * Exposed (non-static) so the regression suite can prove the cache holds: see
+ * anser_test_max_channels_stable_across_slices().
+ */
+int
+AnserMaxChannels(void)
+{
+	static int	cached = 0;
+	int			slices;
+	int64		v;
+
+	if (gp_anser_max_channels > 0)
+		return gp_anser_max_channels;
+
+	if (cached > 0)
+		return cached;
+
+	slices = (gp_max_slices > 0) ? gp_max_slices : ANSER_AUTO_SLICES_PER_CONN;
+	v = (int64) MaxConnections * (int64) slices;
+
+	if (v < 1)
+		v = 1;
+	if (v > INT_MAX)
+		v = INT_MAX;
+
+	cached = (int) v;
+	return cached;
+}
+
 static Size
 AnserChannelHashSize(void)
 {
-	Assert(gp_anser_max_channels >= 0);
-
-	return hash_estimate_size(gp_anser_max_channels,
+	return hash_estimate_size(AnserMaxChannels(),
 							  sizeof(AnserChannelEntry));
 }
 
 /*
- * The submission queue only needs to hold parts that are in flight between a
- * blocked producer and the gather service; producers that find it full wait for
- * a free slot rather than failing, so one slot per channel is sufficient.
+ * The submission queue holds parts in flight between blocked producers and the
+ * gather service.  Every segment producing for a channel submits its own part,
+ * and they hand off concurrently, so -- like the consumer wait table -- we size
+ * for one in-flight slot per producer per channel (channels * per-channel
+ * producers, which mirrors the per-channel consumer count = segment count).
+ * Producers that still find it full wait for a free slot rather than failing.
  */
 static int
 AnserSubmissionQueueLen(void)
 {
-	return gp_anser_max_channels;
+	int64		len = (int64) AnserMaxChannels() *
+		(int64) gp_anser_max_consumers_per_channel;
+
+	/* Guard against int overflow from extreme GUC settings. */
+	if (len > INT_MAX)
+		len = INT_MAX;
+
+	return (int) len;
 }
 
 static int
 AnserWaitTableLen(void)
 {
-	int64		len = (int64) gp_anser_max_channels *
+	int64		len = (int64) AnserMaxChannels() *
 		(int64) gp_anser_max_consumers_per_channel;
 
 	/* Guard against int overflow from extreme GUC settings. */
@@ -1759,7 +1815,7 @@ AnserInitializeControl(bool found)
 	if (!found)
 	{
 		MemSet(AnserCtl, 0, sizeof(AnserControl));
-		AnserCtl->max_channels = gp_anser_max_channels;
+		AnserCtl->max_channels = AnserMaxChannels();
 		AnserCtl->max_info_size = gp_anser_max_info_size;
 		InitSharedLatch(&AnserCtl->gather_latch);
 		InitSharedLatch(&AnserCtl->send_latch);
@@ -1777,8 +1833,8 @@ AnserInitializeChannelHash(void)
 	hctl.entrysize = sizeof(AnserChannelEntry);
 
 	AnserChannelHash = ShmemInitHash(ANSER_CHANNEL_HASH_NAME,
-									  gp_anser_max_channels,
-									  gp_anser_max_channels,
+									  AnserMaxChannels(),
+									  AnserMaxChannels(),
 									  &hctl,
 									  HASH_ELEM | HASH_BLOBS);
 }
@@ -1801,7 +1857,7 @@ AnserSweepOrphanChannels(void)
 		return;
 
 	remove_keys = (AnserChannelKey *) palloc(sizeof(AnserChannelKey) *
-											  (Size) gp_anser_max_channels);
+											  (Size) AnserMaxChannels());
 
 	hash_seq_init(&status, AnserChannelHash);
 	while ((entry = (AnserChannelEntry *) hash_seq_search(&status)) != NULL)
@@ -1892,31 +1948,75 @@ AnserStorePayloadDSM(AnserChannelEntry *entry, const void *payload,
 	if (payload == NULL || payload_len == 0)
 		return true;
 
-	if (payload_len > (Size) gp_anser_max_info_size - entry->data_len)
-		return false;
-
-	new_len = entry->data_len + payload_len;
-	new_seg = dsm_create(new_len, DSM_CREATE_NULL_IF_MAXSEGMENTS);
-	if (new_seg == NULL)
-		return false;
-
-	new_addr = dsm_segment_address(new_seg);
-	if (entry->dsm_handle != DSM_HANDLE_INVALID && entry->data_len > 0)
+	if (AnserBloomLooksLikePart(payload, payload_len))
 	{
-		old_seg = dsm_attach(entry->dsm_handle);
-		if (old_seg == NULL)
+		/*
+		 * Runtime-filter parts are combined on the coordinator: fold (union)
+		 * each incoming part into the single merged part kept as the channel
+		 * payload, so it stays one filter-sized chunk no matter how many
+		 * segments produce, and each consumer receives one part instead of N.
+		 */
+		void	   *acc_addr = NULL;
+		void	   *merged;
+		Size		merged_len = 0;
+
+		if (entry->dsm_handle != DSM_HANDLE_INVALID && entry->data_len > 0)
 		{
-			dsm_detach(new_seg);
+			old_seg = dsm_attach(entry->dsm_handle);
+			if (old_seg == NULL)
+				return false;
+			acc_addr = dsm_segment_address(old_seg);
+		}
+
+		merged = AnserBloomFoldPart(acc_addr, entry->data_len,
+									payload, payload_len, &merged_len);
+		if (old_seg != NULL)
+			dsm_detach(old_seg);
+		if (merged == NULL || merged_len == 0 ||
+			merged_len > (Size) gp_anser_max_info_size)
+		{
+			if (merged != NULL)
+				pfree(merged);
 			return false;
 		}
-		memcpy(new_addr, dsm_segment_address(old_seg), entry->data_len);
+
+		new_len = merged_len;
+		new_seg = dsm_create(new_len, DSM_CREATE_NULL_IF_MAXSEGMENTS);
+		if (new_seg == NULL)
+		{
+			pfree(merged);
+			return false;
+		}
+		memcpy(dsm_segment_address(new_seg), merged, new_len);
+		pfree(merged);
 	}
-	memcpy((char *) new_addr + entry->data_len, payload, payload_len);
+	else
+	{
+		/* Opaque payload: append (concatenate), preserving generic semantics. */
+		if (payload_len > (Size) gp_anser_max_info_size - entry->data_len)
+			return false;
 
-	if (old_seg != NULL)
-		dsm_detach(old_seg);
+		new_len = entry->data_len + payload_len;
+		new_seg = dsm_create(new_len, DSM_CREATE_NULL_IF_MAXSEGMENTS);
+		if (new_seg == NULL)
+			return false;
+
+		new_addr = dsm_segment_address(new_seg);
+		if (entry->dsm_handle != DSM_HANDLE_INVALID && entry->data_len > 0)
+		{
+			old_seg = dsm_attach(entry->dsm_handle);
+			if (old_seg == NULL)
+			{
+				dsm_detach(new_seg);
+				return false;
+			}
+			memcpy(new_addr, dsm_segment_address(old_seg), entry->data_len);
+			dsm_detach(old_seg);
+		}
+		memcpy((char *) new_addr + entry->data_len, payload, payload_len);
+	}
+
 	AnserReleasePayloadDSM(entry);
-
 	dsm_pin_segment(new_seg);
 	entry->dsm_handle = dsm_segment_handle(new_seg);
 	entry->data_len = new_len;
@@ -2014,8 +2114,7 @@ AnserWaitForState(const AnserChannelKey *channel_key, long timeout_ms,
 										 &found);
 		registered = found && entry->expected_producers > 0;
 		ready = found && entry->state == ANSER_CHANNEL_READY;
-		is_cancelled = found &&
-			(entry->state == ANSER_CHANNEL_CANCELLED || entry->cancelled);
+		is_cancelled = found && entry->state == ANSER_CHANNEL_CANCELLED;
 		LWLockRelease(AnserChannelLock);
 
 		if (is_cancelled)

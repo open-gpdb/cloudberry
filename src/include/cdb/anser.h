@@ -65,16 +65,15 @@ typedef struct AnserChannelEntry
 {
 	AnserChannelKey key;
 	AnserChannelState state;
-	bool		cancelled;
 	Oid			creator_role;	/* authenticated role that created the channel;
 								 * only this role (or a superuser) may
 								 * produce/consume on it -- see anserfuncs.c */
-	uint32		expected_producers;
-	uint32		done_producers;
-	uint32		consumers;
-	uint32		expected_consumers;	/* consumers to deliver before recycling the
+	int32		expected_producers;
+	int32		done_producers;
+	int32		consumers;
+	int32		expected_consumers;	/* consumers to deliver before recycling the
 									 * payload (one per segment); 0 = unknown */
-	uint32		done_consumers;
+	int32		done_consumers;
 	Size		data_len;
 	dsm_handle	dsm_handle;
 	TimestampTz created_at;
@@ -106,10 +105,17 @@ extern int	gp_anser_max_consumers_per_channel;
 extern Size AnserShmemSize(void);
 extern void AnserShmemInit(void);
 
+/*
+ * Effective channel-map size (gp_anser_max_channels, or its auto-sizing from
+ * max_connections * gp_max_slices).  Computed once and cached for the life of
+ * the process; see the definition in anser.c.
+ */
+extern int	AnserMaxChannels(void);
+
 /* Public channel-manager API. */
 extern bool AnserRegisterCondition(int gp_session_id, int gp_command_count,
 								   uint32 condition_id, const char *condition_key,
-								   uint32 expected_producers,
+								   int expected_producers,
 								   AnserChannelKey *channel_key);
 extern bool AnserSubscribe(const AnserChannelKey *channel_key);
 extern bool AnserPublish(const AnserChannelKey *channel_key,
@@ -148,10 +154,10 @@ extern void AnserSetSweepEnabled(bool enabled);
  * a wait slot and block until the send service delivers or cancels it.
  */
 extern bool AnserProducerBegin(const AnserChannelKey *channel_key,
-							   uint32 expected_producers,
+							   int expected_producers,
 							   Oid caller_role, bool caller_is_super);
 extern bool AnserProducerSubmit(const AnserChannelKey *channel_key,
-								uint32 expected_producers,
+								int expected_producers,
 								const void *payload, Size payload_len,
 								bool cancelled,
 								Oid caller_role, bool caller_is_super);

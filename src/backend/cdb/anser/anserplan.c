@@ -50,6 +50,9 @@ typedef struct AnserInjectCtx
 {
 	uint32		next_condition_id;
 	int			next_plan_node_id;
+	List	   *consumer_keys;	/* condition_keys already given a consumer node;
+								 * enforces one consumer per channel (see
+								 * anser_try_inject) */
 } AnserInjectCtx;
 
 static int	anser_max_plan_node_id(Plan *plan);
@@ -95,6 +98,7 @@ AnserApplyRuntimeFilters(PlannedStmt *stmt)
 
 		ctx.next_condition_id = 0;
 		ctx.next_plan_node_id = maxid + 1;
+		ctx.consumer_keys = NIL;
 
 		anser_inject_walk(stmt->planTree, &ctx);
 	}
@@ -294,6 +298,7 @@ anser_try_inject(HashJoin *hj, AnserInjectCtx *ctx)
 	char		condition_key[ANSER_CONDITION_KEY_SIZE];
 	CustomScan *producer;
 	CustomScan *consumer;
+	ListCell   *lc;
 
 	if (hj->join.jointype != JOIN_INNER && hj->join.jointype != JOIN_RIGHT)
 		return;
@@ -313,6 +318,25 @@ anser_try_inject(HashJoin *hj, AnserInjectCtx *ctx)
 	condition_id = ctx->next_condition_id++;
 	snprintf(condition_key, sizeof(condition_key), "anser_rf_%u", condition_id);
 
+	/*
+	 * One consumer per channel.  The consumer wait table budgets exactly
+	 * gp_anser_max_consumers_per_channel slots per channel, sized for one
+	 * consumer instance per segment (nseg).  A second consumer plan node on the
+	 * same channel would need 2*nseg slots and could exhaust that budget, so we
+	 * never inject one -- skip the whole join and fail open instead.
+	 *
+	 * Minting a unique condition_id per injection makes this hold by
+	 * construction today, so the check never fires.  It becomes load-bearing if
+	 * the channel key is ever derived from the build's semantic identity (the
+	 * equivalence-class direction), where two joins could legitimately collide
+	 * on one channel.
+	 */
+	foreach(lc, ctx->consumer_keys)
+	{
+		if (strcmp((const char *) lfirst(lc), condition_key) == 0)
+			return;
+	}
+
 	/* Producer wraps the build base scan; keyed by the mapped build attno. */
 	producer = AnserBuildBloomProducerScan(build_scan, build_attno, condition_id,
 										   condition_key, total_elems, max_payload,
@@ -326,6 +350,9 @@ anser_try_inject(HashJoin *hj, AnserInjectCtx *ctx)
 										   planned_bytes);
 	consumer->scan.plan.plan_node_id = ctx->next_plan_node_id++;
 	outerPlan(hj) = (Plan *) consumer;
+
+	/* Record the channel so no later join can add a second consumer on it. */
+	ctx->consumer_keys = lappend(ctx->consumer_keys, pstrdup(condition_key));
 }
 
 /*

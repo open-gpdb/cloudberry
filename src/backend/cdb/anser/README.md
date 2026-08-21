@@ -1,0 +1,184 @@
+# Anser — adaptive information sharing
+
+Anser is a runtime pub/sub facility for MPP query execution. Producers on the
+segments publish a small piece of information about a query (today: a bloom
+filter over a join-build key), the coordinator unions the per-segment parts into
+one global payload, and consumers on the segments receive it and use it to prune
+work (today: skip probe rows that cannot join). The shared state lives in a
+fixed coordinator-resident shared-memory **channel map**, serviced by two
+background workers (gather + send).
+
+This document covers the configuration surface, what a *channel* is, and the
+*channel state machine*. For the plan-tree integration see `anserplan.c`; for the
+payload/bloom protocol see `anserfilter.c` and `lib/bloomfilter.c`.
+
+## GUCs
+
+| GUC | Default | Context | Meaning |
+| --- | --- | --- | --- |
+| `gp_anser_enable` | `off` | POSTMASTER | Master switch. When on, the channel-map shared memory is sized/created and the gather + send background workers are started at postmaster start. Off = the whole subsystem is absent (zero shmem, no workers). |
+| `gp_anser_runtime_filter` | `off` | USERSET | Enables the post-planning pass that injects bloom-filter producer/consumer nodes into a matching plan. Requires `gp_anser_enable`; without it the pass is a no-op even when the subsystem is up. |
+| `gp_anser_max_channels` | `0` (auto) | POSTMASTER | Number of channels the map can hold; sizes the channel hash, the producer submission queue, and (× `gp_anser_max_consumers_per_channel`) the consumer wait table. `0` auto-sizes to `max_connections * gp_max_slices` — at most `max_connections` concurrent queries, each opening up to `gp_max_slices` runtime-filter channels — falling back to a fixed per-connection budget (8) when `gp_max_slices` is unbounded (`0`). Captured once at postmaster start so it is stable across all backends. |
+| `gp_anser_max_info_size` | `16 MB` | POSTMASTER | Maximum serialized payload (unioned bloom filter) a channel may hold; caps per-channel memory and bounds the effective bloom-filter size. |
+| `gp_anser_max_consumers_per_channel` | `64` | POSTMASTER | Wait-table slots reserved per channel; the consumer wait table is sized `gp_anser_max_channels * this`. Bounds how many consumers can block on one channel at once. |
+| `gp_anser_timeout_ms` | `1000` | USERSET | Produce/collect deadline. A channel that is still collecting parts when this elapses is cancelled by the maintenance sweep, so waiting consumers fail open (run unfiltered) rather than hang. |
+
+## Data flow: producer → gather (bitwise union) → consumer
+
+The parts from all segments are combined into **one** payload by a **bitwise OR
+on the coordinator**, and that single combined payload is delivered to every
+consumer. This is the core of Anser and worth stating precisely, because it is
+*not* a concatenation:
+
+```
+segment 0 producer:  bitset 0000 0001  ┐
+segment 1 producer:  bitset 0000 0010  ├─ libpq ─► gather service (coordinator)
+segment N producer:        ...         ┘             │
+                                                     │  fold each part into the
+                                                     │  running merged bitset:
+                                                     │     0000 0001
+                                                     │  OR 0000 0010
+                                                     ▼  = 0000 0011   (one part)
+                                            channel payload = single merged bitset
+                                                     │
+                              send service ──────────┼───────────────┐
+                                       ▼             ▼               ▼
+                              consumer seg 0   consumer seg 1 ... consumer seg N
+                              each receives the SAME combined 0000 0011
+```
+
+Step by step:
+
+1. **Produce (per segment, in parallel).** Each segment's producer builds a bloom
+   filter over its local build keys and serializes it as one *part* (all parts
+   share the same bitset size / seed / hash count, derived from the channel's
+   `condition_key`). Segment producers push their parts to the coordinator
+   concurrently over their own libpq connections — the network transfer is
+   parallel, and the submission queue is sized `channels * per-channel producers`
+   so they hand off without serializing.
+
+2. **Gather (coordinator, once per part).** The gather service folds each
+   incoming part into the channel's payload with a **bitwise OR**
+   (`bloom_union` → `dst->bitset[i] |= src->bitset[i]`, `lib/bloomfilter.c`; driven
+   by `AnserBloomFoldPart` in `anserfilter.c`, called from `AnserStorePayloadDSM`
+   in `anser.c`). The payload is therefore always a **single merged bitset**, the
+   size of one filter — it does **not** grow with the segment count. The OR is
+   only valid because every part shares identical parameters; a mismatch makes
+   the fold fail and the channel is cancelled (consumers fail open). Non-bloom
+   opaque payloads (used only by lower-level tests) fall back to concatenation.
+
+3. **Deliver (coordinator → every consumer).** Once every expected part is folded
+   (channel `READY`), the send service delivers a copy of that one combined
+   bitset to each waiting consumer. Delivery is O(segments) bytes, not
+   O(segments²), and the union work is done once on the master rather than
+   repeated in every consumer.
+
+4. **Consume (per segment).** Each consumer deserializes the single merged part
+   (`AnserBloomDeserializePart`) and uses it to prune probe rows. It does **not**
+   re-union anything; the merged header's part count is surfaced as the
+   `Rows Removed by Bloom Filter` / parts-received EXPLAIN stats.
+
+Correctness note: the combined filter is the OR (super-set) of every segment's
+build keys, so it can only ever have *false positives*, never false negatives —
+a probe row it rejects genuinely cannot join. Anser therefore only changes
+performance, never results; any failure along this path degrades to "no filter"
+(fail open).
+
+## Channel
+
+A **channel** is one rendezvous point between the producers and consumers of a
+single piece of runtime information, for a single query. It is a shared-memory
+entry (`AnserChannelEntry`) in the coordinator's channel hash, addressed by an
+`AnserChannelKey`:
+
+```
+AnserChannelKey = { gp_session_id, gp_command_count, condition_id, condition_key[64] }
+```
+
+- `gp_session_id` + `gp_command_count` scope the channel to one query execution,
+  so keys never collide across sessions or across statements in a session.
+- `condition_id` distinguishes multiple filters within the same query.
+- `condition_key` is an opaque string describing the filtered condition (today a
+  synthetic `rf:<build>.<attno>=<probe>.<attno>` string). Both sides derive it
+  independently and must agree — it is what makes a producer and a consumer meet
+  on the same channel.
+
+The entry also tracks bookkeeping used by the state machine: `expected_producers`
+/ `done_producers` (one part per segment), `consumers` / `expected_consumers` /
+`done_consumers` (delivery accounting), the `creator_role` (only that role or a
+superuser may produce/consume on it), the payload (`dsm_handle` + `data_len`),
+and `created_at` / `updated_at` timestamps used by the maintenance sweep.
+
+The channel map is finite and fixed-size. Terminal channels are reclaimed by the
+background maintenance sweep (or, under map pressure, by emergency reclamation on
+registration) so their slots can be reused; a fresh registration landing on a
+terminal entry resets it in place.
+
+## `AnserChannelState` and the state flow
+
+A channel moves through five states (`AnserChannelState`):
+
+| State | Meaning |
+| --- | --- |
+| `PENDING` | Registered; no producer part received yet. |
+| `COLLECTING` | At least one part received; still waiting for the rest. |
+| `READY` | All expected parts collected and unioned; payload deliverable. |
+| `CANCELLED` | Aborted (timeout / explicit cancel / owner death / query cancel). Terminal. Consumers fail open. |
+| `CONSUMED` | Every expected consumer has been delivered the payload. Terminal. |
+
+```
+                         register (RegisterCondition / ProducerBegin)
+                                    │
+                                    ▼
+                             ┌─────────────┐
+                             │   PENDING   │
+                             └─────────────┘
+                                    │  first part published
+                                    ▼
+                             ┌─────────────┐
+              ┌──────────────│ COLLECTING  │
+              │              └─────────────┘
+              │                     │  done_producers == expected_producers
+              │                     ▼
+              │              ┌─────────────┐
+   cancel /   │              │    READY    │
+   timeout /  │              └─────────────┘
+   owner death│                     │  done_consumers == expected_consumers
+   / query    │                     ▼
+   cancel     │              ┌─────────────┐
+              │              │  CONSUMED   │ (terminal)
+              ▼              └─────────────┘
+       ┌─────────────┐              │
+       │  CANCELLED  │ (terminal)   │
+       └─────────────┘              │
+              │                     │
+              └──────────┬──────────┘
+                         ▼
+             maintenance sweep reclaims slot  (→ NOT_FOUND)
+             or a fresh register() resets the entry to PENDING
+```
+
+**Transitions:**
+
+- **create → `PENDING`** — `AnserRegisterCondition` / `AnserProducerBegin` insert
+  the entry (or reset a terminal one) with `expected_producers` set.
+- **`PENDING` → `COLLECTING`** — the first part is published (`AnserPublish` /
+  the gather service applying a submitted part). The part is unioned into the
+  payload and `done_producers` is incremented.
+- **`COLLECTING` → `READY`** — the part that makes `done_producers` reach
+  `expected_producers` completes the union; the global payload is now
+  deliverable and the send service wakes waiting consumers.
+- **`READY` → `CONSUMED`** — the send service delivers the payload to each
+  waiting consumer; when `done_consumers` reaches `expected_consumers` (one per
+  segment) the channel is recycled to `CONSUMED` and its payload freed. Abandoned
+  consumers (cancelled mid-wait) stop counting so this can still be reached.
+- **`PENDING`/`COLLECTING` → `CANCELLED`** — via `gp_anser_timeout_ms` expiry
+  (maintenance sweep on a still-`COLLECTING` channel), a producer publishing a
+  cancel, an explicit `AnserCancelChannel`, a whole-query `AnserCancelQuery`, or
+  the creator backend dying. Any consumer blocked on the channel is woken with a
+  cancel and **fails open** (runs unfiltered) — Anser never changes results, only
+  performance.
+- **terminal (`CANCELLED`/`CONSUMED`) → gone** — the background maintenance sweep
+  (unless paused via the test-only `sweep_enabled` knob) removes terminal and
+  orphaned channels, freeing the slot; a later registration reusing the same key
+  starts over at `PENDING`.

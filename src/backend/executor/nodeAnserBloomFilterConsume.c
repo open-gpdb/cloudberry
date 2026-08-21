@@ -125,9 +125,20 @@ ExecAnserBloomFilterConsumeDirect(AnserBloomFilterConsumeState *state,
 		return false;
 	}
 
-	state->filter = AnserBloomUnionParts(payload, payload_len,
-									   state->expected_parts,
-									   &state->received_parts);
+	/*
+	 * The coordinator has already unioned every segment's part into one merged
+	 * part (see AnserStorePayloadDSM), so we deserialize a single chunk rather
+	 * than unioning N.  The merged header's total_parts records how many parts
+	 * were folded, which we surface as the received count.
+	 */
+	{
+		uint32		part_index = 0;
+		uint32		folded = 0;
+
+		state->filter = AnserBloomDeserializePart(payload, payload_len,
+												  &part_index, &folded);
+		state->received_parts = (state->filter != NULL) ? folded : 0;
+	}
 	pfree(payload);
 	state->consumed = true;
 	return state->filter != NULL;
@@ -156,9 +167,20 @@ ExecAnserBloomFilterConsumeClient(AnserBloomFilterConsumeState *state)
 		return false;
 	}
 
-	state->filter = AnserBloomUnionParts(payload, payload_len,
-									   state->expected_parts,
-									   &state->received_parts);
+	/*
+	 * The coordinator has already unioned every segment's part into one merged
+	 * part (see AnserStorePayloadDSM), so we deserialize a single chunk rather
+	 * than unioning N.  The merged header's total_parts records how many parts
+	 * were folded, which we surface as the received count.
+	 */
+	{
+		uint32		part_index = 0;
+		uint32		folded = 0;
+
+		state->filter = AnserBloomDeserializePart(payload, payload_len,
+												  &part_index, &folded);
+		state->received_parts = (state->filter != NULL) ? folded : 0;
+	}
 	if (payload != NULL)
 		pfree(payload);
 	state->consumed = true;

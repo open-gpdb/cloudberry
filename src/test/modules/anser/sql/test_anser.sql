@@ -38,9 +38,16 @@ SELECT anser_test_cancel_query(1, 2);
 SELECT anser_test_state(1, 2, 1, 'join_b');
 SELECT anser_test_state(1, 2, 2, 'join_c');
 
+-- GUC sizing guard: AnserMaxChannels() is memoized at postmaster start, so a
+-- per-session SET gp_max_slices must not change the reported channel-map size
+-- (otherwise the shared arrays and the Len functions would disagree).
+SELECT anser_test_max_channels_stable_across_slices() AS max_channels_stable;
+
 -- Bloom payload protocol and standalone producer/consumer helpers.
 SELECT anser_test_bloom_roundtrip('bf_roundtrip', 42);
 SELECT anser_test_bloom_union('bf_union', 42, 84);
+-- Coordinator-side fold: parts combined into one merged chunk (union on master).
+SELECT anser_test_bloom_fold('bf_fold', 42, 84);
 SELECT anser_test_node_roundtrip(168);
 
 -- Security regression: a crafted part header with a tiny bitset (bitset_bytes

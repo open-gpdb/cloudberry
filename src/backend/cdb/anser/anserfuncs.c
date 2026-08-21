@@ -88,7 +88,7 @@ gp_anser_producer_begin(PG_FUNCTION_ARGS)
 								 condition_key, &key))
 		PG_RETURN_BOOL(false);
 
-	PG_RETURN_BOOL(AnserProducerBegin(&key, (uint32) expected_producers,
+	PG_RETURN_BOOL(AnserProducerBegin(&key, expected_producers,
 									  GetUserId(), superuser()));
 }
 

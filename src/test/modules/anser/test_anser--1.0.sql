@@ -80,6 +80,14 @@ RETURNS bool
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT;
 
+CREATE FUNCTION anser_test_bloom_fold(
+    condition_key text,
+    left_value int4,
+    right_value int4)
+RETURNS bool
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT;
+
 CREATE FUNCTION anser_test_bloom_rejects_tiny(bits int4)
 RETURNS bool
 AS 'MODULE_PATHNAME'
@@ -112,5 +120,10 @@ LANGUAGE C STRICT;
 
 CREATE FUNCTION anser_test_sweep()
 RETURNS void
+AS 'MODULE_PATHNAME'
+LANGUAGE C;
+
+CREATE FUNCTION anser_test_max_channels_stable_across_slices()
+RETURNS bool
 AS 'MODULE_PATHNAME'
 LANGUAGE C;
