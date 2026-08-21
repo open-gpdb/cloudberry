@@ -271,14 +271,17 @@ AnserRegisterCondition(int gp_session_id, int gp_command_count,
 	else if (entry->state == ANSER_CHANNEL_CANCELLED ||
 			 entry->state == ANSER_CHANNEL_CONSUMED)
 	{
-		AnserReleasePayloadDSM(entry);
-		MemSet(entry, 0, sizeof(AnserChannelEntry));
-		entry->key = *channel_key;
-		entry->state = ANSER_CHANNEL_PENDING;
-		entry->creator_role = GetUserId();
-		entry->expected_producers = expected_producers;
-		entry->dsm_handle = DSM_HANDLE_INVALID;
-		entry->created_at = now;
+		/*
+		 * A terminal channel already holds this key.  Channel keys are unique
+		 * per (session, command, condition), so a live registration should
+		 * never collide with a completed/aborted one -- this is a leftover the
+		 * sweep has not reclaimed yet (or a genuine key collision).  Do NOT
+		 * resurrect it: reviving a terminal channel could strand a straggler
+		 * wait slot or hand one query's data to another.  Fail instead; the
+		 * caller falls open and the sweep reclaims the terminal channel.
+		 */
+		LWLockRelease(AnserChannelLock);
+		return false;
 	}
 	else
 		entry->expected_producers = expected_producers;
@@ -773,13 +776,14 @@ AnserProducerBegin(const AnserChannelKey *channel_key, int expected_producers,
 	else if (entry->state == ANSER_CHANNEL_CANCELLED ||
 			 entry->state == ANSER_CHANNEL_CONSUMED)
 	{
-		AnserReleasePayloadDSM(entry);
-		MemSet(entry, 0, sizeof(AnserChannelEntry));
-		entry->key = *channel_key;
-		entry->state = ANSER_CHANNEL_PENDING;
-		entry->creator_role = caller_role;
-		entry->dsm_handle = DSM_HANDLE_INVALID;
-		entry->created_at = now;
+		/*
+		 * Terminal channel already on this key -- an anomaly, since keys are
+		 * unique per (session, command, condition).  Do not resurrect it (see
+		 * AnserRegisterCondition); fail so the caller falls open and the sweep
+		 * reclaims the leftover.
+		 */
+		LWLockRelease(AnserChannelLock);
+		return false;
 	}
 
 	entry->expected_producers = expected_producers;
@@ -1905,7 +1909,24 @@ static bool
 AnserChannelOwnerIsAlive(const AnserChannelEntry *entry)
 {
 	Assert(entry != NULL);
-	return true;
+
+	/*
+	 * A channel belongs to one query, identified by gp_session_id.  It is alive
+	 * as long as that coordinator (QD) session still has a backend in the proc
+	 * array; once the session is gone -- query finished/aborted, or a fixed test
+	 * session id that never maps to a live backend -- the channel is orphaned and
+	 * may be reclaimed.
+	 *
+	 * Liveness is deliberately tied to the session, NOT to the backend that
+	 * created the channel: network-path producers create it from a short-lived
+	 * libpq request backend (AnserClientPublish PQfinish's the connection right
+	 * after publishing), so that backend is normally already gone while the
+	 * channel is still needed by consumers.
+	 */
+	if (entry->key.gp_session_id <= 0)
+		return true;			/* no session to check against; keep it */
+
+	return FindProcByGpSessionId((long) entry->key.gp_session_id) != NULL;
 }
 
 static bool

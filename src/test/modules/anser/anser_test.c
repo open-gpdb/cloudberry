@@ -32,6 +32,7 @@
 #include "cdb/anser.h"
 #include "cdb/anserclient.h"
 #include "cdb/anserfilter.h"
+#include "cdb/cdbutil.h"
 #include "cdb/cdbvars.h"
 #include "commands/dbcommands.h"
 #include "executor/nodeAnserBloomFilter.h"
@@ -621,9 +622,14 @@ anser_test_abandoned_consumer_recycles(PG_FUNCTION_ARGS)
 	int			saved_port = qdPostmasterPort;
 	AnserChannelKey key;
 	unsigned char payload[sizeof(int32)];
-	PGconn	   *keep = NULL;
+	int			nseg = getgpsegmentCount();
+	PGconn	  **keep;
 	PGconn	   *lost = NULL;
+	int			i;
 	bool		ok = false;
+
+	if (nseg < 1)
+		nseg = 1;
 
 	qdHostname = anser_loopback_host();
 	qdPostmasterPort = PostPortNumber;
@@ -636,29 +642,55 @@ anser_test_abandoned_consumer_recycles(PG_FUNCTION_ARGS)
 
 	memcpy(payload, &value_arg, sizeof(payload));
 
+	/*
+	 * A channel recycles to CONSUMED once expected_consumers (== segment count,
+	 * one consumer per segment) have been delivered.  Open exactly that many
+	 * surviving consumers plus one that abandons mid-wait: the abandoned one must
+	 * neither receive data nor block the recycle once the survivors are served.
+	 */
+	keep = (PGconn **) palloc0(sizeof(PGconn *) * nseg);
+
 	PG_TRY();
 	{
+		bool		all_open = true;
+
 		if (AnserProducerBegin(&key, 1, GetUserId(), superuser()))
 		{
-			keep = anser_open_consumer(&key);
+			for (i = 0; i < nseg; i++)
+			{
+				keep[i] = anser_open_consumer(&key);
+				if (keep[i] == NULL)
+					all_open = false;
+			}
 			lost = anser_open_consumer(&key);
 
-			if (keep != NULL && lost != NULL &&
-				anser_wait_consumer_count(&key, 2))
+			if (all_open && lost != NULL &&
+				anser_wait_consumer_count(&key, nseg + 1))
 			{
 				anser_cancel_conn(lost);
 				(void) anser_consumer_returned_row(lost);
 
-				if (AnserPublish(&key, payload, sizeof(payload), false) &&
-					anser_consumer_got_payload(keep, payload, sizeof(payload)))
-					ok = anser_wait_channel_consumed(&key);
+				if (AnserPublish(&key, payload, sizeof(payload), false))
+				{
+					bool		all_got = true;
+
+					for (i = 0; i < nseg; i++)
+					{
+						if (!anser_consumer_got_payload(keep[i], payload,
+														sizeof(payload)))
+							all_got = false;
+					}
+					if (all_got)
+						ok = anser_wait_channel_consumed(&key);
+				}
 			}
 		}
 	}
 	PG_FINALLY();
 	{
-		if (keep != NULL)
-			PQfinish(keep);
+		for (i = 0; i < nseg; i++)
+			if (keep[i] != NULL)
+				PQfinish(keep[i]);
 		if (lost != NULL)
 			PQfinish(lost);
 		qdHostname = saved_host;

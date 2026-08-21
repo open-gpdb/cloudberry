@@ -187,7 +187,7 @@ SELECT anser_test_bloom_fold('bf_fold', 42, 84);
 (1 row)
 
 SELECT anser_test_node_roundtrip(168);
- anser_test_node_roundtrip
+ anser_test_node_roundtrip 
 ---------------------------
  t
 (1 row)
