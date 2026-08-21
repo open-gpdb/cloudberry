@@ -186,6 +186,13 @@ SELECT anser_test_bloom_fold('bf_fold', 42, 84);
  t
 (1 row)
 
+-- Payload-combine policy: opaque payloads append, bloom parts union (one chunk).
+SELECT anser_test_payload_combine() AS combine_ok;
+ combine_ok 
+------------
+ t
+(1 row)
+
 SELECT anser_test_node_roundtrip(168);
  anser_test_node_roundtrip 
 ---------------------------

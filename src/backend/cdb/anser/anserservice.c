@@ -166,7 +166,7 @@ AnserServiceLoop(const char *service_name, bool gather_service)
 			AnserSendServiceCycle();
 
 		AnserServiceMaintenance();
-		AnserWaitServiceLatch(gather_service, 1000L);
+		AnserWaitServiceLatch(gather_service, ANSER_SERVICE_WAKEUP_INTERVAL_MS);
 
 		/* Reclaim any transient allocations made during this cycle. */
 		MemoryContextReset(service_ctx);

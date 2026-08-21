@@ -48,6 +48,8 @@ SELECT anser_test_bloom_roundtrip('bf_roundtrip', 42);
 SELECT anser_test_bloom_union('bf_union', 42, 84);
 -- Coordinator-side fold: parts combined into one merged chunk (union on master).
 SELECT anser_test_bloom_fold('bf_fold', 42, 84);
+-- Payload-combine policy: opaque payloads append, bloom parts union (one chunk).
+SELECT anser_test_payload_combine() AS combine_ok;
 SELECT anser_test_node_roundtrip(168);
 
 -- Security regression: a crafted part header with a tiny bitset (bitset_bytes

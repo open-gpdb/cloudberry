@@ -88,6 +88,11 @@ RETURNS bool
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT;
 
+CREATE FUNCTION anser_test_payload_combine()
+RETURNS bool
+AS 'MODULE_PATHNAME'
+LANGUAGE C;
+
 CREATE FUNCTION anser_test_bloom_rejects_tiny(bits int4)
 RETURNS bool
 AS 'MODULE_PATHNAME'

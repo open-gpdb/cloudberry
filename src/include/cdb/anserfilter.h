@@ -71,5 +71,8 @@ extern bool AnserBloomLooksLikePart(const void *payload, Size payload_len);
 extern void *AnserBloomFoldPart(const void *acc, Size acc_len,
 								const void *part, Size part_len,
 								Size *out_len);
+extern void *AnserCombinePayload(const void *acc, Size acc_len,
+								 const void *incoming, Size incoming_len,
+								 Size *out_len);
 
 #endif							/* CDB_ANSERFILTER_H */

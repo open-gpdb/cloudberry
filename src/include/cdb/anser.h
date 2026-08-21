@@ -38,6 +38,31 @@
 #define ANSER_CONDITION_KEY_SIZE	64
 
 /*
+ * Poll interval (milliseconds) a backend sleeps on its latch between rechecks
+ * when the awaited change does NOT set its latch, so it must recheck shared
+ * state itself (waiting for a channel state in AnserWaitForState, or for a free
+ * submission slot in AnserEnqueueSubmission).  Kept small so waits stay
+ * responsive without busy-looping.
+ */
+#define ANSER_WAIT_POLL_INTERVAL_MS	10L
+
+/*
+ * Safety wakeup (milliseconds) for latch-driven waits where the event always
+ * sets the waiter's latch (a producer's submission ACK in AnserWaitSubmissionAck,
+ * a consumer's delivery in AnserWaitSlotResult).  The wait normally ends on the
+ * latch; this timeout only bounds how long a lost wakeup could stall it.
+ */
+#define ANSER_WAIT_LATCH_TIMEOUT_MS	1000L
+
+/*
+ * Wakeup interval (milliseconds) for a background service's main loop.  Each
+ * service runs its data-path pass whenever its latch fires; this timed wakeup
+ * additionally bounds how long a stale COLLECTING channel or a dead-backend slot
+ * can linger between latches before periodic maintenance reclaims it.
+ */
+#define ANSER_SERVICE_WAKEUP_INTERVAL_MS	1000L
+
+/*
  * Registered adaptive-information condition for one running command.
  *
  * The planner integration will eventually populate condition_key with the

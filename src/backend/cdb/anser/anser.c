@@ -945,7 +945,7 @@ AnserEnqueueSubmission(const AnserChannelKey *channel_key,
 		ResetLatch(MyLatch);
 		(void) WaitLatch(MyLatch,
 						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-						 10L, PG_WAIT_EXTENSION);
+						 ANSER_WAIT_POLL_INTERVAL_MS, PG_WAIT_EXTENSION);
 	}
 }
 
@@ -977,7 +977,7 @@ AnserWaitSubmissionAck(int slot)
 		ResetLatch(MyLatch);
 		(void) WaitLatch(MyLatch,
 						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-						 1000L, PG_WAIT_EXTENSION);
+						 ANSER_WAIT_LATCH_TIMEOUT_MS, PG_WAIT_EXTENSION);
 	}
 }
 
@@ -1279,7 +1279,7 @@ AnserWaitSlotResult(int slot, void **payload, Size *payload_len,
 		ResetLatch(MyLatch);
 		(void) WaitLatch(MyLatch,
 						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-						 1000L, PG_WAIT_EXTENSION);
+						 ANSER_WAIT_LATCH_TIMEOUT_MS, PG_WAIT_EXTENSION);
 	}
 }
 
@@ -1958,10 +1958,11 @@ static bool
 AnserStorePayloadDSM(AnserChannelEntry *entry, const void *payload,
 						   Size payload_len)
 {
+	dsm_segment *acc_seg = NULL;
 	dsm_segment *new_seg;
-	dsm_segment *old_seg = NULL;
-	void	   *new_addr;
-	Size		new_len;
+	void	   *acc_addr = NULL;
+	void	   *combined;
+	Size		combined_len = 0;
 
 	Assert(LWLockHeldByMeInMode(AnserChannelLock, LW_EXCLUSIVE));
 	Assert(entry != NULL);
@@ -1969,78 +1970,47 @@ AnserStorePayloadDSM(AnserChannelEntry *entry, const void *payload,
 	if (payload == NULL || payload_len == 0)
 		return true;
 
-	if (AnserBloomLooksLikePart(payload, payload_len))
+	/*
+	 * Combine the incoming payload with the channel's current one -- bloom parts
+	 * are folded (unioned) into a single merged part, opaque payloads are
+	 * appended (see AnserCombinePayload).  The combine works on plain bytes, so
+	 * we hand it the current payload's address and install the result into a
+	 * fresh DSM segment; the store mechanics are the same for both kinds.
+	 */
+	if (entry->dsm_handle != DSM_HANDLE_INVALID && entry->data_len > 0)
 	{
-		/*
-		 * Runtime-filter parts are combined on the coordinator: fold (union)
-		 * each incoming part into the single merged part kept as the channel
-		 * payload, so it stays one filter-sized chunk no matter how many
-		 * segments produce, and each consumer receives one part instead of N.
-		 */
-		void	   *acc_addr = NULL;
-		void	   *merged;
-		Size		merged_len = 0;
-
-		if (entry->dsm_handle != DSM_HANDLE_INVALID && entry->data_len > 0)
-		{
-			old_seg = dsm_attach(entry->dsm_handle);
-			if (old_seg == NULL)
-				return false;
-			acc_addr = dsm_segment_address(old_seg);
-		}
-
-		merged = AnserBloomFoldPart(acc_addr, entry->data_len,
-									payload, payload_len, &merged_len);
-		if (old_seg != NULL)
-			dsm_detach(old_seg);
-		if (merged == NULL || merged_len == 0 ||
-			merged_len > (Size) gp_anser_max_info_size)
-		{
-			if (merged != NULL)
-				pfree(merged);
+		acc_seg = dsm_attach(entry->dsm_handle);
+		if (acc_seg == NULL)
 			return false;
-		}
-
-		new_len = merged_len;
-		new_seg = dsm_create(new_len, DSM_CREATE_NULL_IF_MAXSEGMENTS);
-		if (new_seg == NULL)
-		{
-			pfree(merged);
-			return false;
-		}
-		memcpy(dsm_segment_address(new_seg), merged, new_len);
-		pfree(merged);
+		acc_addr = dsm_segment_address(acc_seg);
 	}
-	else
+
+	combined = AnserCombinePayload(acc_addr, entry->data_len,
+								   payload, payload_len, &combined_len);
+	if (acc_seg != NULL)
+		dsm_detach(acc_seg);
+
+	if (combined == NULL || combined_len == 0 ||
+		combined_len > (Size) gp_anser_max_info_size)
 	{
-		/* Opaque payload: append (concatenate), preserving generic semantics. */
-		if (payload_len > (Size) gp_anser_max_info_size - entry->data_len)
-			return false;
-
-		new_len = entry->data_len + payload_len;
-		new_seg = dsm_create(new_len, DSM_CREATE_NULL_IF_MAXSEGMENTS);
-		if (new_seg == NULL)
-			return false;
-
-		new_addr = dsm_segment_address(new_seg);
-		if (entry->dsm_handle != DSM_HANDLE_INVALID && entry->data_len > 0)
-		{
-			old_seg = dsm_attach(entry->dsm_handle);
-			if (old_seg == NULL)
-			{
-				dsm_detach(new_seg);
-				return false;
-			}
-			memcpy(new_addr, dsm_segment_address(old_seg), entry->data_len);
-			dsm_detach(old_seg);
-		}
-		memcpy((char *) new_addr + entry->data_len, payload, payload_len);
+		if (combined != NULL)
+			pfree(combined);
+		return false;
 	}
+
+	new_seg = dsm_create(combined_len, DSM_CREATE_NULL_IF_MAXSEGMENTS);
+	if (new_seg == NULL)
+	{
+		pfree(combined);
+		return false;
+	}
+	memcpy(dsm_segment_address(new_seg), combined, combined_len);
+	pfree(combined);
 
 	AnserReleasePayloadDSM(entry);
 	dsm_pin_segment(new_seg);
 	entry->dsm_handle = dsm_segment_handle(new_seg);
-	entry->data_len = new_len;
+	entry->data_len = combined_len;
 	dsm_detach(new_seg);
 
 	return true;
@@ -2161,7 +2131,7 @@ AnserWaitForState(const AnserChannelKey *channel_key, long timeout_ms,
 		ResetLatch(MyLatch);
 		(void) WaitLatch(MyLatch,
 						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-						 10L,
+						 ANSER_WAIT_POLL_INTERVAL_MS,
 						 PG_WAIT_EXTENSION);
 	}
 }

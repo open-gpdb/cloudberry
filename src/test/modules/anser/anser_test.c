@@ -59,6 +59,7 @@ PG_FUNCTION_INFO_V1(anser_test_cancel_query);
 PG_FUNCTION_INFO_V1(anser_test_bloom_roundtrip);
 PG_FUNCTION_INFO_V1(anser_test_bloom_union);
 PG_FUNCTION_INFO_V1(anser_test_bloom_fold);
+PG_FUNCTION_INFO_V1(anser_test_payload_combine);
 PG_FUNCTION_INFO_V1(anser_test_bloom_rejects_tiny);
 PG_FUNCTION_INFO_V1(anser_test_node_roundtrip);
 PG_FUNCTION_INFO_V1(anser_test_client_roundtrip);
@@ -366,6 +367,90 @@ anser_test_bloom_fold(PG_FUNCTION_ARGS)
 	if (merged_filter != NULL)
 		bloom_free(merged_filter);
 	PG_RETURN_BOOL(ok);
+}
+
+/*
+ * AnserCombinePayload dispatch: an opaque payload is appended (concatenated),
+ * while a serialized bloom part is folded (unioned) into a single merged part.
+ * This is the pure combine policy extracted from AnserStorePayloadDSM, so it can
+ * be exercised on plain byte buffers without shared memory.
+ */
+Datum
+anser_test_payload_combine(PG_FUNCTION_ARGS)
+{
+	uint64		seed = AnserBloomSeed("combine_bloom");
+	bloom_filter *left;
+	bloom_filter *right;
+	bloom_filter *merged;
+	Datum		left_value = Int32GetDatum(11);
+	Datum		right_value = Int32GetDatum(22);
+	char	   *left_part;
+	char	   *right_part;
+	Size		left_size;
+	Size		right_size;
+	Size		left_len = 0;
+	Size		right_len = 0;
+	void	   *o1;
+	void	   *o2;
+	void	   *c1;
+	void	   *c2;
+	Size		o1_len = 0;
+	Size		o2_len = 0;
+	Size		c1_len = 0;
+	Size		c2_len = 0;
+	uint32		part_index = 0;
+	uint32		total_parts = 0;
+	bool		opaque_ok;
+	bool		bloom_ok;
+
+	/* Opaque path: first payload copied verbatim, second appended. */
+	o1 = AnserCombinePayload(NULL, 0, "aa", 2, &o1_len);
+	o2 = (o1 != NULL) ? AnserCombinePayload(o1, o1_len, "bb", 2, &o2_len) : NULL;
+	opaque_ok = o1 != NULL && o1_len == 2 && memcmp(o1, "aa", 2) == 0 &&
+		o2 != NULL && o2_len == 4 && memcmp(o2, "aabb", 4) == 0;
+
+	/* Bloom path: two parts combine into one merged, single-part chunk. */
+	left = AnserBloomCreate(32, 1024 * 1024, seed);
+	right = AnserBloomCreate(32, 1024 * 1024, seed);
+	if (left == NULL || right == NULL)
+		PG_RETURN_BOOL(false);
+
+	bloom_add_element(left, (unsigned char *) &left_value, sizeof(Datum));
+	bloom_add_element(right, (unsigned char *) &right_value, sizeof(Datum));
+	left_size = AnserBloomSerializedSize(left);
+	right_size = AnserBloomSerializedSize(right);
+	left_part = palloc(left_size);
+	right_part = palloc(right_size);
+	if (!AnserBloomSerializePart(left, 0, 2, left_part, left_size, &left_len) ||
+		!AnserBloomSerializePart(right, 1, 2, right_part, right_size, &right_len))
+	{
+		bloom_free(left);
+		bloom_free(right);
+		PG_RETURN_BOOL(false);
+	}
+	bloom_free(left);
+	bloom_free(right);
+
+	c1 = AnserCombinePayload(NULL, 0, left_part, left_len, &c1_len);
+	c2 = (c1 != NULL) ?
+		AnserCombinePayload(c1, c1_len, right_part, right_len, &c2_len) : NULL;
+	merged = (c2 != NULL) ?
+		AnserBloomDeserializePart(c2, c2_len, &part_index, &total_parts) : NULL;
+
+	bloom_ok = c1 != NULL &&
+		c2 != NULL &&
+		c2_len == left_size &&		/* one merged chunk, single-part size */
+		merged != NULL &&
+		part_index == 0 &&
+		total_parts == 2 &&
+		!bloom_lacks_element(merged, (unsigned char *) &left_value,
+							 sizeof(Datum)) &&
+		!bloom_lacks_element(merged, (unsigned char *) &right_value,
+							 sizeof(Datum));
+	if (merged != NULL)
+		bloom_free(merged);
+
+	PG_RETURN_BOOL(opaque_ok && bloom_ok);
 }
 
 /*

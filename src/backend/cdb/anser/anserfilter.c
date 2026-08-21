@@ -188,6 +188,65 @@ AnserBloomFoldPart(const void *acc, Size acc_len,
 	return out;
 }
 
+/*
+ * Combine an opaque payload into the accumulator by appending (concatenating).
+ * This preserves the generic channel contract used by lower-level callers/tests
+ * for payloads that are not bloom parts.  `acc` may be NULL/0 for the first one;
+ * returns the concatenation as freshly palloc'd bytes (caller frees), length in
+ * *out_len.  The incoming payload must be non-empty -- the caller validates that
+ * before dispatching here (AnserStorePayloadDSM / AnserCombinePayload).
+ */
+static void *
+AnserOpaqueFoldPart(const void *acc, Size acc_len,
+					const void *incoming, Size incoming_len, Size *out_len)
+{
+	char	   *out;
+	Size		total;
+
+	Assert(incoming != NULL && incoming_len > 0);
+
+	total = acc_len + incoming_len;
+	out = palloc(total);
+	if (acc != NULL && acc_len > 0)
+		memcpy(out, acc, acc_len);
+	memcpy(out + acc_len, incoming, incoming_len);
+
+	if (out_len != NULL)
+		*out_len = total;
+	return out;
+}
+
+/*
+ * Combine an incoming payload into a channel's current payload.
+ *
+ * `acc`/`acc_len` is the channel's existing payload (NULL/0 for the first one);
+ * `incoming`/`incoming_len` is the new payload.  Returns the combined result as
+ * freshly palloc'd bytes (caller frees) with its length in *out_len, by
+ * dispatching on the incoming payload's kind:
+ *
+ *   - a serialized bloom part is folded (bitwise-OR unioned) into the running
+ *     merged part, so the payload stays one filter-sized chunk regardless of how
+ *     many parts arrive (AnserBloomFoldPart);
+ *   - any other, opaque payload is appended (AnserOpaqueFoldPart).
+ *
+ * Within one channel every payload is the same kind, so acc and incoming always
+ * agree.  The incoming payload must be non-empty -- the caller
+ * (AnserStorePayloadDSM) validates that.  Returns NULL on malformed bloom input.
+ * This is the pure payload-combination policy, free of shared memory, so it can
+ * be unit-tested directly.
+ */
+void *
+AnserCombinePayload(const void *acc, Size acc_len,
+					const void *incoming, Size incoming_len, Size *out_len)
+{
+	Assert(incoming != NULL && incoming_len > 0);
+
+	if (AnserBloomLooksLikePart(incoming, incoming_len))
+		return AnserBloomFoldPart(acc, acc_len, incoming, incoming_len, out_len);
+
+	return AnserOpaqueFoldPart(acc, acc_len, incoming, incoming_len, out_len);
+}
+
 bool
 AnserBloomSerializePart(const bloom_filter *filter, uint32 part_index,
 						uint32 total_parts, void *buffer, Size buffer_size,

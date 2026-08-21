@@ -8,9 +8,53 @@ work (today: skip probe rows that cannot join). The shared state lives in a
 fixed coordinator-resident shared-memory **channel map**, serviced by two
 background workers (gather + send).
 
-This document covers the configuration surface, what a *channel* is, and the
-*channel state machine*. For the plan-tree integration see `anserplan.c`; for the
-payload/bloom protocol see `anserfilter.c` and `lib/bloomfilter.c`.
+This document covers the architecture, the configuration surface, what a
+*channel* is, and the *channel state machine*. For the plan-tree integration see
+`anserplan.c`; for the payload/bloom protocol see `anserfilter.c` and
+`lib/bloomfilter.c`.
+
+## Architecture
+
+All Anser state lives in fixed **coordinator shared memory**, allocated once at
+postmaster start. Producers and consumers are ordinary query backends
+(coordinator-resident, or on segments reaching the coordinator over libpq); they
+never talk to each other directly and never own the shared state — they only
+hand work to, or wait on, two **background workers** that do.
+
+Three shared structures, two hand-off points:
+
+- **Channel map** — the hash of channels (one per runtime condition per query),
+  holding each channel's state, accounting, and payload. The single source of
+  truth.
+- **Submission queue** — the producer → gather hand-off. A producer copies its
+  serialized part into a free queue entry, signals the gather worker, and blocks
+  for an ACK; it never touches the channel payload itself.
+- **Wait table** — the send → consumer hand-off, an array of **slots**. A *slot*
+  is one consumer's reservation on a channel: it records the consumer's key, a
+  pointer to that backend's latch, and a place for the send worker to stamp the
+  delivered payload (or a cancel). A blocked consumer owns one slot and sleeps on
+  its latch until the send worker flips it.
+
+The two **background workers** exist because the shared state has to keep moving
+independent of any one transient/blocked backend:
+
+- **Gather service** — drains the submission queue: for each part it folds
+  (bitwise-OR unions) the data into the target channel's single payload, advances
+  the channel toward `READY`, and ACKs the producer. It also runs periodic
+  maintenance: time out stragglers (`gp_anser_timeout_ms`) and sweep terminal or
+  orphaned channels.
+- **Send service** — delivers: once a channel is `READY` it copies the combined
+  payload into every waiting slot and wakes those consumers' latches; when all
+  expected consumers are served it recycles the channel to `CONSUMED`.
+
+Both workers sleep on a latch and wake on demand — a producer's submission sets
+the gather latch, a publish/registration sets the send latch — plus a periodic
+timeout so maintenance runs even when idle. Concurrency is guarded by two
+LWLocks, always taken in the order `AnserChannelLock` → `AnserRingLock`.
+
+The pay-off of this split: a producer can publish and leave, a consumer can block
+without pinning anything, and the coordinator still unions once and fans the
+result out — see the data-flow section below.
 
 ## GUCs
 
