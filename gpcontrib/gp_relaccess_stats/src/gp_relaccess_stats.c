@@ -62,7 +62,6 @@
 PG_MODULE_MAGIC;
 
 void _PG_init(void);
-void _PG_fini(void);
 PG_FUNCTION_INFO_V1(relaccess_stats_update);
 PG_FUNCTION_INFO_V1(relaccess_stats_dump);
 PG_FUNCTION_INFO_V1(relaccess_stats_fillfactor);
@@ -308,18 +307,6 @@ void _PG_init(void) {
   ctl.hash = oid_hash;
   relname_cache = hash_create("Transaction-wide relation name cache",
                               RELCACHE_SZ, &ctl, HASH_ELEM | HASH_FUNCTION);
-}
-
-void _PG_fini(void) {
-  if (Gp_role != GP_ROLE_DISPATCH) {
-    return;
-  }
-  shmem_request_hook = prev_shmem_request_hook;
-  shmem_startup_hook = prev_shmem_startup_hook;
-  ExecutorCheckPerms_hook = prev_check_perms_hook;
-  ProcessUtility_hook = next_ProcessUtility_hook;
-  ExecutorEnd_hook = prev_ExecutorEnd_hook;
-  object_access_hook = prev_object_access_hook;
 }
 
 static bool collect_relaccess_hook(List *rangeTable, List *rtePermInfos,
