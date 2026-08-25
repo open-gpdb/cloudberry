@@ -16,6 +16,7 @@
 
 #include "access/htup_details.h"
 #include "access/skey.h"
+#include "catalog/pg_aggregate.h"
 #include "catalog/pg_operator.h"
 #include "catalog/pg_type.h"
 #include "nodes/makefuncs.h"
@@ -29,6 +30,7 @@
 #include "parser/parse_relation.h"	/* addRangeTableEntryForSubquery() */
 #include "parser/parsetree.h"	/* rt_fetch() */
 #include "rewrite/rewriteManip.h"
+#include "utils/builtins.h"		/* TextDatumGetCString() */
 #include "utils/lsyscache.h"	/* get_op_btree_interpretation() */
 #include "utils/syscache.h"
 #include "cdb/cdbsubselect.h"	/* me */
@@ -42,6 +44,41 @@ static JoinExpr *make_join_expr(Node *larg, int r_rtindex, int join_type);
 static Node *make_lasj_quals(PlannerInfo *root, SubLink *sublink, int subquery_indx);
 
 static Node *add_null_match_clause(Node *clause);
+static Expr *build_match_flag_case_expr(Var *flagVar, Var *aggVar, Expr *defaultExpr);
+
+/*
+ * What build_empty_input_default_expr() ran into while replacing the
+ * aggregates of an expression by the value they take over an empty input.
+ */
+typedef struct EmptyInputDefaultContext
+{
+	bool		unknown;		/* an empty-input value could not be told */
+	bool		nonnull;		/* an empty-input value is not NULL */
+} EmptyInputDefaultContext;
+
+/*
+ * State for replace_agg_with_match_flag_case_mutator().
+ */
+typedef struct MatchFlagCaseContext
+{
+	List	   *targetList;		/* targetlist of the pulled-up subquery */
+	int			rteIndex;		/* its range table index */
+	Var		   *flagVar;		/* its match-flag column */
+} MatchFlagCaseContext;
+
+static Const *agg_empty_input_default(Aggref *aggref);
+static Expr *build_empty_input_default_expr(Node *expr,
+											EmptyInputDefaultContext *ctx);
+static Node *replace_agg_with_empty_default_mutator(Node *node, void *context);
+static bool contain_non_normal_aggs(Node *node);
+static bool contain_non_normal_aggs_walker(Node *node, void *context);
+static bool contain_aggs_in_sublinks(Node *node);
+static bool contain_aggs_in_sublinks_walker(Node *node, void *context);
+static List *pull_subquery_aggrefs(Node *expr);
+static bool pull_subquery_aggrefs_walker(Node *node, List **aggrefs);
+static Node *replace_agg_with_match_flag_case_mutator(Node *node, void *context);
+static bool no_match_row_survives(PlannerInfo *root, OpExpr *opexp,
+								  Expr *defaultExpr);
 
 typedef struct NonNullableVarsContext
 {
@@ -560,6 +597,44 @@ safe_to_convert_EXPR(SubLink *sublink, ConvertSubqueryToJoinContext *ctx1)
 	if (list_length(subselect->targetList) != 1)
 		return false;
 
+	/**
+	 * Correlation in the targetlist cannot be handled: the pulled-up
+	 * expression (and the empty-input default derived from it) would carry
+	 * upper-level Vars out of the subquery.
+	 */
+	if (contain_vars_of_level_or_above((Node *) subselect->targetList, 1))
+		return false;
+
+	/**
+	 * A window function cannot come along.  The pull-up groups the subquery
+	 * by the correlation columns, so the window would run over all of the
+	 * groups at once instead of over the single row the ungrouped aggregate
+	 * produces for one outer row; and the empty-input default derived from
+	 * the targetlist would have to be evaluated above the join, where there
+	 * is no WindowAgg node to evaluate it in.
+	 */
+	if (subselect->hasWindowFuncs)
+		return false;
+
+	/**
+	 * The pull-up needs to know what the targetlist expression yields for an
+	 * outer row that has no match, that is over an empty input.  For an
+	 * ordered-set or hypothetical-set aggregate that does not follow from the
+	 * transition machinery -- "rank(x) within group (order by y)" returns 1
+	 * over an empty input -- so leave those subqueries alone.
+	 */
+	if (contain_non_normal_aggs((Node *) subselect->targetList))
+		return false;
+
+	/**
+	 * An aggregate of this query level can also sit inside a sub-select in
+	 * the targetlist, as in "(select 1 from r where r.a = count(x))".  The
+	 * pull-up rebuilds the targetlist expression above the join with its
+	 * aggregates substituted, and it cannot reach into a sub-select's Query
+	 * to do that, so leave such a subquery alone.
+	 */
+	if (contain_aggs_in_sublinks((Node *) subselect->targetList))
+		return false;
 
 	/**
 	 * Walk the quals of the subquery to do a more fine grained check as to whether this subquery
@@ -615,7 +690,82 @@ convert_EXPR_to_join(PlannerInfo *root, OpExpr *opexp)
 
 		List	   *subselectTargetList = (List *) copyObject(ctx1.targetList);
 
-		subselectTargetList = add_to_flat_tlist(subselectTargetList, list_make1(origSubqueryTLE->expr));
+		/*
+		 * An INNER join drops outer rows that have no matching inner
+		 * rows.  Without the pull-up they are kept: the subquery
+		 * computes its expression over empty input (count() = 0, most
+		 * other aggregates NULL) and the comparison may still pass.
+		 *
+		 * So work out what the expression returns over an empty input
+		 * and decide whether such a row could pass the comparison.  If
+		 * it cannot, the INNER join is correct; otherwise use a LEFT
+		 * join to keep those rows.
+		 */
+		Expr	   *defaultExpr;
+		EmptyInputDefaultContext defctx;
+		TargetEntry *flagTLE = NULL;
+		bool		use_left_join;
+
+		defaultExpr = build_empty_input_default_expr((Node *) origSubqueryTLE->expr,
+													&defctx);
+
+		if (defctx.unknown)
+		{
+			/*
+			 * The empty-input value of some aggregate is not derivable
+			 * from the catalog (see agg_empty_input_default()).  Keep
+			 * the INNER join rather than invent a value for it.
+			 */
+			use_left_join = false;
+		}
+		else if (defctx.nonnull && !IsA(defaultExpr, Const))
+		{
+			/*
+			 * A non-null empty-input value inside a larger expression.
+			 * Nothing can be proven about it cheaply, see
+			 * no_match_row_survives(), so keep the rows.
+			 */
+			use_left_join = true;
+		}
+		else
+			use_left_join = no_match_row_survives(root, opexp, defaultExpr);
+
+		if (use_left_join)
+		{
+			/*
+			 * The LEFT join keeps a no-match outer row with the subquery's
+			 * columns set to NULL, and the comparison above the join then
+			 * has to produce the value the subquery would have returned for
+			 * it.  So export the aggregates themselves instead of the
+			 * expression around them, and rebuild that expression above the
+			 * join with every aggregate replaced by
+			 *
+			 *	CASE WHEN match_flag THEN <aggregate> ELSE <empty-input value> END
+			 *
+			 * match_flag is a constant TRUE column of the subquery, so it is
+			 * NULL exactly for the rows the LEFT join null-extended, and the
+			 * CASE then returns what the aggregate returns over an empty
+			 * input.
+			 *
+			 * Substituting into the expression itself instead, and using that
+			 * as the ELSE branch of a single CASE, would leave the planner a
+			 * constant expression to fold: "(select 10 / count(*) ...)" would
+			 * turn into 10/0 and fail while planning a query that runs.
+			 *
+			 * The flag column goes BEFORE the aggregate columns: with this
+			 * order the planner can drop the SubqueryScan node from the plan.
+			 */
+			subselectTargetList = add_to_flat_tlist(subselectTargetList,
+													list_make1(makeBoolConst(true, false)));
+			flagTLE = (TargetEntry *) llast(subselectTargetList);
+
+			subselectTargetList = add_to_flat_tlist(subselectTargetList,
+													pull_subquery_aggrefs((Node *) origSubqueryTLE->expr));
+		}
+		else
+			subselectTargetList = add_to_flat_tlist(subselectTargetList,
+													list_make1(origSubqueryTLE->expr));
+
 		subselect->targetList = subselectTargetList;
 		subselect->groupClause = ctx1.groupClause;
 
@@ -644,24 +794,376 @@ convert_EXPR_to_join(PlannerInfo *root, OpExpr *opexp)
 
 		join_expr->quals = joinQual;
 
-		TargetEntry *subselectAggTLE = (TargetEntry *) list_nth(subselect->targetList, list_length(subselect->targetList) - 1);
-
 		/**
 		 *	modify the op expr to involve the column that has the computed aggregate that needs to compared.
 		 */
-		Var		   *aggVar = (Var *) makeVar(rteIndex,
-											 subselectAggTLE->resno,
-											 exprType((Node *) subselectAggTLE->expr),
-											 exprTypmod((Node *) subselectAggTLE->expr),
-											 exprCollation((Node *) subselectAggTLE->expr),
-											 0);
+		if (use_left_join)
+		{
+			MatchFlagCaseContext ctx2;
 
-		list_nth_replace(opexp->args, 1, aggVar);
+			join_expr->jointype = JOIN_LEFT;
+
+			ctx2.targetList = subselect->targetList;
+			ctx2.rteIndex = rteIndex;
+			ctx2.flagVar = (Var *) makeVar(rteIndex, flagTLE->resno, BOOLOID,
+										   -1, InvalidOid, 0);
+
+			list_nth_replace(opexp->args, 1,
+							 replace_agg_with_match_flag_case_mutator(copyObject((Node *) origSubqueryTLE->expr),
+																	  &ctx2));
+		}
+		else
+		{
+			TargetEntry *subselectAggTLE = (TargetEntry *) llast(subselect->targetList);
+			Var		   *aggVar = (Var *) makeVar(rteIndex,
+												 subselectAggTLE->resno,
+												 exprType((Node *) subselectAggTLE->expr),
+												 exprTypmod((Node *) subselectAggTLE->expr),
+												 exprCollation((Node *) subselectAggTLE->expr),
+												 0);
+
+			list_nth_replace(opexp->args, 1, aggVar);
+		}
 
 		return join_expr;
 	}
 
 	return NULL;
+}
+
+/*
+ * Build "CASE WHEN flagVar THEN aggVar ELSE defaultExpr END".
+ *
+ * flagVar is the subquery's match-flag column: TRUE for a matched group,
+ * NULL for a null-extended no-match row.
+ */
+static Expr *
+build_match_flag_case_expr(Var *flagVar, Var *aggVar, Expr *defaultExpr)
+{
+	CaseWhen   *casewhen;
+	CaseExpr   *caseexpr;
+
+	Assert(flagVar != NULL);
+	Assert(aggVar != NULL);
+	Assert(defaultExpr != NULL);
+
+	casewhen = makeNode(CaseWhen);
+	casewhen->expr = (Expr *) flagVar;
+	casewhen->result = (Expr *) aggVar;
+	casewhen->location = -1;
+
+	caseexpr = makeNode(CaseExpr);
+	caseexpr->casetype = exprType((Node *) aggVar);
+	caseexpr->casecollid = exprCollation((Node *) aggVar);
+	caseexpr->arg = NULL;
+	caseexpr->args = list_make1(casewhen);
+	caseexpr->defresult = defaultExpr;
+	caseexpr->location = -1;
+
+	return (Expr *) caseexpr;
+}
+
+/*
+ * agg_empty_input_default
+ *
+ * The value the aggregate takes over an empty input, as a Const, or NULL when
+ * that cannot be told from the catalog.
+ *
+ * Over an empty input an aggregate returns its final function applied to the
+ * initial transition value, or that value itself when there is no final
+ * function.  So the value is known in two cases: the initial value is null and
+ * the final function cannot turn a null into anything else, and there is no
+ * final function at all -- which is where count() lands, its initial value
+ * being 0.
+ *
+ * That leaves avg() and friends: their initial value is not null ('{0,0}') and
+ * only their final function knows that it yields NULL for a count of zero.
+ * The caller has to be conservative about those.
+ */
+static Const *
+agg_empty_input_default(Aggref *aggref)
+{
+	HeapTuple	aggtup;
+	Form_pg_aggregate aggform;
+	Datum		textInitVal;
+	bool		initValIsNull;
+	Const	   *result = NULL;
+
+	aggtup = SearchSysCache1(AGGFNOID, ObjectIdGetDatum(aggref->aggfnoid));
+	if (!HeapTupleIsValid(aggtup))
+		elog(ERROR, "cache lookup failed for aggregate %u", aggref->aggfnoid);
+	aggform = (Form_pg_aggregate) GETSTRUCT(aggtup);
+
+	textInitVal = SysCacheGetAttr(AGGFNOID, aggtup,
+								  Anum_pg_aggregate_agginitval,
+								  &initValIsNull);
+
+	if (initValIsNull)
+	{
+		if (!OidIsValid(aggform->aggfinalfn) || func_strict(aggform->aggfinalfn))
+			result = makeNullConst(aggref->aggtype, -1, aggref->aggcollid);
+	}
+	else if (!OidIsValid(aggform->aggfinalfn) &&
+			 aggform->aggtranstype == aggref->aggtype)
+	{
+		Oid			typinput;
+		Oid			typioparam;
+		char	   *strInitVal;
+		Datum		initVal;
+		int16		typlen;
+		bool		typbyval;
+
+		getTypeInputInfo(aggform->aggtranstype, &typinput, &typioparam);
+		strInitVal = TextDatumGetCString(textInitVal);
+		initVal = OidInputFunctionCall(typinput, strInitVal, typioparam, -1);
+		pfree(strInitVal);
+
+		get_typlenbyval(aggref->aggtype, &typlen, &typbyval);
+		result = makeConst(aggref->aggtype, -1, aggref->aggcollid, typlen,
+						   initVal, false, typbyval);
+	}
+
+	ReleaseSysCache(aggtup);
+
+	return result;
+}
+
+/*
+ * build_empty_input_default_expr
+ *
+ * The subquery's expression as it evaluates for an outer row with no matching
+ * inner rows, that is with every aggregate replaced by its empty-input value.
+ *
+ * ctx reports what happened: "unknown" if some aggregate's empty-input value
+ * could not be determined -- the returned expression is then meaningless --
+ * and "nonnull" if some aggregate contributed a value other than NULL.
+ */
+static Expr *
+build_empty_input_default_expr(Node *expr, EmptyInputDefaultContext *ctx)
+{
+	Node	   *rewritten;
+
+	ctx->unknown = false;
+	ctx->nonnull = false;
+
+	rewritten = replace_agg_with_empty_default_mutator(copyObject(expr), ctx);
+
+	return (Expr *) rewritten;
+}
+
+static Node *
+replace_agg_with_empty_default_mutator(Node *node, void *context)
+{
+	EmptyInputDefaultContext *ctx = (EmptyInputDefaultContext *) context;
+
+	if (node == NULL)
+		return NULL;
+
+	if (IsA(node, Aggref))
+	{
+		Const	   *defaultConst = agg_empty_input_default((Aggref *) node);
+
+		if (defaultConst == NULL)
+		{
+			ctx->unknown = true;
+			return node;
+		}
+
+		if (!defaultConst->constisnull)
+			ctx->nonnull = true;
+
+		return (Node *) defaultConst;
+	}
+
+	/*
+	 * A sub-select in the expression is left alone (expression_tree_mutator()
+	 * does not descend into it), so it keeps computing what it computed inside
+	 * the subquery.
+	 */
+	return expression_tree_mutator(node, replace_agg_with_empty_default_mutator,
+								   context);
+}
+
+/*
+ * pull_subquery_aggrefs
+ *
+ * The aggregates of the expression, the ones belonging to the subquery being
+ * pulled up.  A sub-select in the expression keeps its own aggregates.
+ */
+static List *
+pull_subquery_aggrefs(Node *expr)
+{
+	List	   *aggrefs = NIL;
+
+	(void) pull_subquery_aggrefs_walker(expr, &aggrefs);
+
+	return aggrefs;
+}
+
+static bool
+pull_subquery_aggrefs_walker(Node *node, List **aggrefs)
+{
+	if (node == NULL)
+		return false;
+
+	if (IsA(node, Aggref))
+	{
+		/* An aggregate cannot contain another one, no need to look inside. */
+		*aggrefs = lappend(*aggrefs, node);
+		return false;
+	}
+
+	if (IsA(node, Query))
+		return false;
+
+	return expression_tree_walker(node, pull_subquery_aggrefs_walker,
+								  (void *) aggrefs);
+}
+
+/*
+ * replace_agg_with_match_flag_case_mutator
+ *
+ * Rebuild the subquery's expression for use above the LEFT join: every
+ * aggregate becomes the subquery column that now carries it, guarded by the
+ * match flag so that a null-extended row gets the value the aggregate takes
+ * over an empty input.
+ */
+static Node *
+replace_agg_with_match_flag_case_mutator(Node *node, void *context)
+{
+	MatchFlagCaseContext *ctx = (MatchFlagCaseContext *) context;
+
+	if (node == NULL)
+		return NULL;
+
+	if (IsA(node, Aggref))
+	{
+		TargetEntry *aggTLE = tlist_member((Expr *) node, ctx->targetList);
+		Const	   *defaultConst = agg_empty_input_default((Aggref *) node);
+		Var		   *aggVar;
+
+		if (aggTLE == NULL || defaultConst == NULL)
+			elog(ERROR, "could not rebuild pulled-up subquery expression");
+
+		aggVar = (Var *) makeVar(ctx->rteIndex,
+								 aggTLE->resno,
+								 exprType((Node *) aggTLE->expr),
+								 exprTypmod((Node *) aggTLE->expr),
+								 exprCollation((Node *) aggTLE->expr),
+								 0);
+
+		return (Node *) build_match_flag_case_expr((Var *) copyObject(ctx->flagVar),
+												   aggVar,
+												   (Expr *) defaultConst);
+	}
+
+	if (IsA(node, Query))
+		return node;
+
+	return expression_tree_mutator(node, replace_agg_with_match_flag_case_mutator,
+								   context);
+}
+
+/*
+ * contain_aggs_in_sublinks
+ *
+ * Does a sub-select inside the expression use an aggregate of the level the
+ * expression itself belongs to?
+ */
+static bool
+contain_aggs_in_sublinks(Node *node)
+{
+	return contain_aggs_in_sublinks_walker(node, NULL);
+}
+
+static bool
+contain_aggs_in_sublinks_walker(Node *node, void *context)
+{
+	if (node == NULL)
+		return false;
+
+	if (IsA(node, SubLink))
+	{
+		SubLink    *sublink = (SubLink *) node;
+
+		if (contain_aggs_of_level(sublink->subselect, 1))
+			return true;
+
+		/* The test expression belongs to our own level. */
+		return contain_aggs_in_sublinks_walker(sublink->testexpr, context);
+	}
+
+	if (IsA(node, Aggref))
+	{
+		/* An aggregate is exported as a whole, sub-selects in it stay put. */
+		return false;
+	}
+
+	return expression_tree_walker(node, contain_aggs_in_sublinks_walker,
+								  context);
+}
+
+/*
+ * contain_non_normal_aggs
+ *
+ * Does the expression contain an ordered-set or hypothetical-set aggregate?
+ */
+static bool
+contain_non_normal_aggs(Node *node)
+{
+	return contain_non_normal_aggs_walker(node, NULL);
+}
+
+static bool
+contain_non_normal_aggs_walker(Node *node, void *context)
+{
+	if (node == NULL)
+		return false;
+
+	if (IsA(node, Aggref))
+	{
+		/* An aggregate cannot contain another one, no need to look inside. */
+		return ((Aggref *) node)->aggkind != AGGKIND_NORMAL;
+	}
+
+	return expression_tree_walker(node, contain_non_normal_aggs_walker, context);
+}
+
+/*
+ * no_match_row_survives
+ *
+ * Could a no-match row satisfy "outerExpr OP (subquery)"?  Plug defaultExpr in
+ * for the subquery and constant-fold: false if it folds to FALSE or NULL, so
+ * dropping such rows is fine and the inner join can stay.
+ *
+ * The expression being folded is one we made up, and constant folding runs the
+ * functions in it whose arguments are all non-null constants.  That must not
+ * make a query fail to plan that would otherwise have run fine, so the caller
+ * only gets here for the two shapes where nothing new can be evaluated:
+ * defaultExpr is the whole right-hand side (only the comparison operator is
+ * left to fold), or every aggregate was replaced by NULL, in which case a
+ * strict function around it folds to NULL without being called.  Folding
+ * "(select 10 / count(*) ...)", where the default turns the expression into
+ * 10/0, would throw "division by zero" while planning.
+ */
+static bool
+no_match_row_survives(PlannerInfo *root, OpExpr *opexp, Expr *defaultExpr)
+{
+	OpExpr	   *testexpr = (OpExpr *) copyObject(opexp);
+	Node	   *folded;
+
+	list_nth_replace(testexpr->args, 1, copyObject(defaultExpr));
+	folded = eval_const_expressions(root, (Node *) testexpr);
+
+	if (IsA(folded, Const))
+	{
+		Const	   *c = (Const *) folded;
+
+		if (c->constisnull || !DatumGetBool(c->constvalue))
+			return false;
+	}
+
+	return true;
 }
 
 /* NOTIN subquery transformation -start */
