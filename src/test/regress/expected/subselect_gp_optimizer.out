@@ -4151,3 +4151,198 @@ reset optimizer;
 drop table outer_foo;
 drop table inner_bar;
 drop table t;
+-- Scalar aggregate pull-up must preserve empty-input values in WHERE.
+set optimizer to off;
+create table pullup_agg_outer (a int) distributed by (a);
+create table pullup_agg_inner (a int, b int) distributed by (a);
+insert into pullup_agg_outer values (1), (2), (3);
+insert into pullup_agg_inner values (1, 10), (1, 20), (2, NULL);
+analyze pullup_agg_outer;
+analyze pullup_agg_inner;
+-- Only the missing group passes. A matched group that fails the comparison
+-- must not be turned into an unmatched row by putting the comparison in ON.
+explain (costs off) select a from pullup_agg_outer o
+  where 0 = (select count(*) from pullup_agg_inner i where i.a = o.a);
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)
+   ->  Hash Left Join
+         Hash Cond: (o.a = i.a)
+         Filter: (0 = CASE WHEN (true) THEN (count(*)) ELSE '0'::bigint END)
+         ->  Seq Scan on pullup_agg_outer o
+         ->  Hash
+               ->  HashAggregate
+                     Group Key: i.a
+                     ->  Seq Scan on pullup_agg_inner i
+ Optimizer: Postgres-based planner
+(10 rows)
+
+select a from pullup_agg_outer o
+  where 0 = (select count(*) from pullup_agg_inner i where i.a = o.a) order by 1;
+ a 
+---
+ 3
+(1 row)
+
+-- FALSE and NULL empty-input comparisons can still use an INNER join.
+explain (costs off) select a from pullup_agg_outer o
+  where 1 = (select count(*) from pullup_agg_inner i where i.a = o.a);
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)
+   ->  Hash Join
+         Hash Cond: (o.a = "Expr_SUBQUERY".csq_c0)
+         ->  Seq Scan on pullup_agg_outer o
+         ->  Hash
+               ->  Subquery Scan on "Expr_SUBQUERY"
+                     ->  HashAggregate
+                           Group Key: i.a
+                           Filter: (1 = count(*))
+                           ->  Seq Scan on pullup_agg_inner i
+ Optimizer: Postgres-based planner
+(11 rows)
+
+select a from pullup_agg_outer o
+  where 1 = (select count(*) from pullup_agg_inner i where i.a = o.a) order by 1;
+ a 
+---
+ 2
+(1 row)
+
+explain (costs off) select a from pullup_agg_outer o
+  where 40 > (select sum(i.b) from pullup_agg_inner i where i.a = o.a);
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)
+   ->  Hash Join
+         Hash Cond: (o.a = "Expr_SUBQUERY".csq_c0)
+         ->  Seq Scan on pullup_agg_outer o
+         ->  Hash
+               ->  Subquery Scan on "Expr_SUBQUERY"
+                     ->  HashAggregate
+                           Group Key: i.a
+                           Filter: (40 > sum(i.b))
+                           ->  Seq Scan on pullup_agg_inner i
+ Optimizer: Postgres-based planner
+(11 rows)
+
+select a from pullup_agg_outer o
+  where 40 > (select sum(i.b) from pullup_agg_inner i where i.a = o.a) order by 1;
+ a 
+---
+ 1
+(1 row)
+
+-- COUNT(expr) ignores NULL inputs, so both the all-NULL and missing groups pass.
+select a from pullup_agg_outer o
+  where 0 = (select count(i.b) from pullup_agg_inner i where i.a = o.a) order by 1;
+ a 
+---
+ 2
+ 3
+(2 rows)
+
+-- A matched group may return NULL while the empty-input value is 0.
+-- The match flag must preserve that NULL instead of substituting the default.
+select a from pullup_agg_outer o
+  where 0 = (select case when count(*) = 0 then 0 else sum(i.b) end
+             from pullup_agg_inner i where i.a = o.a) order by 1;
+ a 
+---
+ 3
+(1 row)
+
+-- Evaluate the whole expression over empty input, not just the bare aggregate.
+select a from pullup_agg_outer o
+  where 1 = (select count(*) + 1 from pullup_agg_inner i where i.a = o.a) order by 1;
+ a 
+---
+ 3
+(1 row)
+
+-- Non-NULL defaults also occur in aggregates other than COUNT.
+select a from pullup_agg_outer o
+  where 0 = (select regr_count(i.b, i.b) from pullup_agg_inner i
+             where i.a = o.a) order by 1;
+ a 
+---
+ 2
+ 3
+(2 rows)
+
+create aggregate pullup_sum_from_five(int)
+  (sfunc = int4pl, stype = int4, initcond = '5');
+select a from pullup_agg_outer o
+  where 5 = (select pullup_sum_from_five(i.b) from pullup_agg_inner i
+             where i.a = o.a) order by 1;
+ a 
+---
+ 2
+ 3
+(2 rows)
+
+-- An ordered-set aggregate needs an executor-computed empty-input value.
+select a from pullup_agg_outer o
+  where 1 = (select rank(15) within group (order by i.b)
+             from pullup_agg_inner i where i.a = o.a) order by 1;
+ a 
+---
+ 2
+ 3
+(2 rows)
+
+-- Do not evaluate a hypothetical zero divisor during planning, even when
+-- NULL is turned into 0 by COALESCE or another aggregate already uses an InitPlan.
+create table pullup_agg_div_outer (a int) distributed by (a);
+select a from pullup_agg_div_outer o
+  where a < (select 10 / count(*) from pullup_agg_inner i
+             where i.a = o.a) order by 1;
+ a 
+---
+(0 rows)
+
+select a from pullup_agg_div_outer o
+  where a < (select 100 / coalesce(sum(i.b), 0) from pullup_agg_inner i
+             where i.a = o.a) order by 1;
+ a 
+---
+(0 rows)
+
+select a from pullup_agg_div_outer o
+  where a < (select count(*) + 100 / coalesce(sum(i.b), 0)
+             from pullup_agg_inner i where i.a = o.a) order by 1;
+ a 
+---
+(0 rows)
+
+-- All outer rows have a match, so no empty-input division is needed.
+insert into pullup_agg_div_outer values (1);
+select a from pullup_agg_div_outer o
+  where a < (select 10 / count(*) from pullup_agg_inner i
+             where i.a = o.a) order by 1;
+ a 
+---
+ 1
+(1 row)
+
+select a from pullup_agg_div_outer o
+  where a < (select 100 / coalesce(sum(i.b), 0) from pullup_agg_inner i
+             where i.a = o.a) order by 1;
+ a 
+---
+ 1
+(1 row)
+
+-- A missing group must still raise the original error at execution time.
+insert into pullup_agg_div_outer values (3);
+select a from pullup_agg_div_outer o
+  where a < (select 10 / count(*) from pullup_agg_inner i
+             where i.a = o.a) order by 1;
+ERROR:  division by zero
+select a from pullup_agg_div_outer o
+  where a < (select 100 / coalesce(sum(i.b), 0) from pullup_agg_inner i
+             where i.a = o.a) order by 1;
+ERROR:  division by zero
+drop table pullup_agg_div_outer, pullup_agg_outer, pullup_agg_inner;
+drop aggregate pullup_sum_from_five(int);
+reset optimizer;
