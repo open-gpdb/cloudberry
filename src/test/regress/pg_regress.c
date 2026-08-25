@@ -3642,6 +3642,20 @@ cluster_healthy(void)
 		return !halt_work;
 	}
 
+	/* Check if a standby coordinator exists at all */
+	psql_command_output("postgres", line, sizeof(line),
+						"SELECT COUNT(*) FROM pg_stat_get_wal_senders();");
+	p = &line[0];
+	while (*p == ' ')
+		p++;
+	n = strlen(p);
+	while (n > 0 && (p[n-1] == '\n' || p[n-1] == '\r' || p[n-1] == ' '))
+		p[--n] = '\0';
+
+	/* No WAL senders means no standby configured — skip standby check */
+	if (strcmp(p, "0") == 0)
+		return true;
+
 	i = 120;
 	do {
 		/* check for the health for standby coordinator */
