@@ -138,19 +138,12 @@ extern void AnserShmemInit(void);
 extern int	AnserMaxChannels(void);
 
 /* Public channel-manager API. */
-extern bool AnserRegisterCondition(int gp_session_id, int gp_command_count,
-								   uint32 condition_id, const char *condition_key,
-								   int expected_producers,
-								   AnserChannelKey *channel_key);
 extern bool AnserSubscribe(const AnserChannelKey *channel_key);
 extern bool AnserPublish(const AnserChannelKey *channel_key,
 						 const void *payload, Size payload_len,
 						 bool cancelled);
 extern bool AnserWaitProducersRegistered(const AnserChannelKey *channel_key,
 										 long timeout_ms);
-extern bool AnserConsume(const AnserChannelKey *channel_key,
-						 void *buffer, Size buffer_size, Size *payload_len,
-						 bool *cancelled, long timeout_ms);
 extern bool AnserWaitReady(const AnserChannelKey *channel_key,
 					   bool *cancelled);
 extern bool AnserConsumeReady(const AnserChannelKey *channel_key,
@@ -159,7 +152,7 @@ extern bool AnserConsumeReady(const AnserChannelKey *channel_key,
 extern AnserChannelState AnserChannelGetState(const AnserChannelKey *channel_key,
 										  bool *found);
 extern int	AnserChannelConsumerCount(const AnserChannelKey *channel_key);
-extern bool AnserCancelChannel(const AnserChannelKey *channel_key);
+extern int	AnserChannelPayloadBytes(const AnserChannelKey *channel_key);
 extern void AnserCancelQuery(int gp_session_id, int gp_command_count);
 extern void AnserAttachServiceLatch(bool gather_service);
 extern void AnserDetachServiceLatch(bool gather_service);

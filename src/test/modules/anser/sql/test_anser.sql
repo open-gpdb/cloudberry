@@ -45,9 +45,10 @@ SELECT anser_test_max_channels_stable_across_slices() AS max_channels_stable;
 
 -- Bloom payload protocol and standalone producer/consumer helpers.
 SELECT anser_test_bloom_roundtrip('bf_roundtrip', 42);
-SELECT anser_test_bloom_union('bf_union', 42, 84);
 -- Coordinator-side fold: parts combined into one merged chunk (union on master).
 SELECT anser_test_bloom_fold('bf_fold', 42, 84);
+-- In-place fold: same-size union mutates the buffer; mismatched size is rejected.
+SELECT anser_test_bloom_fold_inplace() AS fold_inplace_ok;
 -- Payload-combine policy: opaque payloads append, bloom parts union (one chunk).
 SELECT anser_test_payload_combine() AS combine_ok;
 SELECT anser_test_node_roundtrip(168);
@@ -97,5 +98,15 @@ SELECT anser_test_state(1, 1, 2, 'join_timeout') AS before_clear;
 SELECT anser_test_set_sweep(true);
 SELECT anser_test_sweep();
 SELECT anser_test_state(1, 1, 2, 'join_timeout') AS after_clear;
+
+-- Payload-DSM lifetime (run last: these toggle the sweep and reclaim terminal
+-- channels).  Each proves the shared channel payload DSM is freed at the right
+-- moment: (1) success -> freed by the sweep after the last consume; (2) only
+-- 3/5 producers -> freed when the produce timeout cancels the channel; (3)
+-- cancelled with consumers attached -> freed by the sweep only after every
+-- consumer slot has drained (not eagerly at cancel).
+SELECT anser_test_dsm_free_on_success() AS dsm_free_success;
+SELECT anser_test_dsm_free_on_timeout() AS dsm_free_timeout;
+SELECT anser_test_dsm_free_on_cancel() AS dsm_free_cancel;
 
 DROP EXTENSION test_anser;

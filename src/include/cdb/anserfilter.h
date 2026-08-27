@@ -63,14 +63,12 @@ extern bloom_filter *AnserBloomDeserializePart(const void *payload,
 										  Size payload_len,
 										  uint32 *part_index,
 										  uint32 *total_parts);
-extern bloom_filter *AnserBloomUnionParts(const void *payload,
-									  Size payload_len,
-									  uint32 expected_parts,
-									  uint32 *received_parts);
 extern bool AnserBloomLooksLikePart(const void *payload, Size payload_len);
 extern void *AnserBloomFoldPart(const void *acc, Size acc_len,
 								const void *part, Size part_len,
 								Size *out_len);
+extern bool AnserBloomFoldPartInPlace(void *acc, Size acc_len,
+									  const void *part, Size part_len);
 extern void *AnserCombinePayload(const void *acc, Size acc_len,
 								 const void *incoming, Size incoming_len,
 								 Size *out_len);

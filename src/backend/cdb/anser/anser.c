@@ -125,50 +125,61 @@ static HTAB *AnserChannelHash = NULL;
 static AnserSubmissionEntry *AnserSubmissionQueue = NULL;
 static AnserWaitSlot *AnserWaitTable = NULL;
 
-static Size AnserChannelHashSize(void);
-static int	AnserSubmissionQueueLen(void);
-static int	AnserWaitTableLen(void);
-static Size AnserSubmissionQueueSize(void);
-static Size AnserWaitTableSize(void);
-static void AnserInitializeControl(bool found);
-static void AnserInitializeChannelHash(void);
-static void AnserInitializeSubmissionQueue(bool found);
-static void AnserInitializeWaitTable(bool found);
+/*
+ * Data-path operations -- the internal machinery the public API and the gather/
+ * send service cycles drive: producer submissions, gather apply, consumer wait
+ * slots, payload storage/delivery, and the maintenance sweeps.
+ */
 static int	AnserEnqueueSubmission(const AnserChannelKey *channel_key,
 								   int expected_producers, dsm_handle handle,
 								   Size len, bool cancelled);
 static bool AnserWaitSubmissionAck(int slot);
 static void AnserAbandonSubmission(int slot);
-static void AnserAbandonWaitSlot(int slot);
 static bool AnserGatherApply(const AnserChannelKey *channel_key,
 							 int expected_producers, dsm_handle handle,
 							 Size len, bool cancelled);
-static void AnserCancelStaleChannels(void);
-static void AnserReapSubmissionSlots(void);
 static int	AnserRegisterWaitSlot(const AnserChannelKey *channel_key);
 static bool AnserWaitSlotResult(int slot, void **payload, Size *payload_len,
 								bool *cancelled);
-static void AnserReapWaitSlots(void);
-static bool AnserPidIsLive(int pid);
-static bool AnserChannelHasWaiters(const AnserChannelKey *channel_key);
-static bool AnserChannelAccessAllowed(const AnserChannelKey *channel_key,
-									  Oid caller_role, bool caller_is_super,
-									  bool *found);
-static void AnserSweepOrphanChannels(void);
-static bool AnserChannelOwnerIsAlive(const AnserChannelEntry *entry);
-static bool AnserBuildChannelKey(int gp_session_id, int gp_command_count,
-								 uint32 condition_id, const char *condition_key,
-								 AnserChannelKey *channel_key);
+static void AnserAbandonWaitSlot(int slot);
+static bool AnserWaitForState(const AnserChannelKey *channel_key,
+							  long timeout_ms, bool registration_only,
+							  bool *cancelled);
 static bool AnserStorePayloadDSM(AnserChannelEntry *entry,
 							   const void *payload, Size payload_len);
 static void AnserReleasePayloadDSM(AnserChannelEntry *entry);
 static bool AnserDeliverChannelData(const AnserChannelEntry *entry,
 									void *buffer, Size buffer_size,
 									Size *payload_len);
+static void AnserCancelStaleChannels(void);
+static void AnserSweepOrphanChannels(void);
+static void AnserReapSubmissionSlots(void);
+static void AnserReapWaitSlots(void);
+
+/*
+ * Internal helpers -- shared-memory sizing, small predicates, and key building
+ * used by the operations above.
+ */
 static bool AnserInitialized(void);
-static bool AnserWaitForState(const AnserChannelKey *channel_key,
-							  long timeout_ms, bool registration_only,
-							  bool *cancelled);
+static Size AnserChannelHashSize(void);
+static int	AnserSubmissionQueueLen(void);
+static int	AnserWaitTableLen(void);
+static Size AnserSubmissionQueueSize(void);
+static Size AnserWaitTableSize(void);
+static bool AnserPidIsLive(int pid);
+static bool AnserChannelHasWaiters(const AnserChannelKey *channel_key);
+static bool AnserChannelOwnerIsAlive(const AnserChannelEntry *entry);
+static bool AnserChannelAccessAllowed(const AnserChannelKey *channel_key,
+									  Oid caller_role, bool caller_is_super,
+									  bool *found);
+
+/*
+ * Shared-memory setup -- one-time structure initialization at postmaster start.
+ */
+static void AnserInitializeControl(bool found);
+static void AnserInitializeChannelHash(void);
+static void AnserInitializeSubmissionQueue(bool found);
+static void AnserInitializeWaitTable(bool found);
 
 Size
 AnserShmemSize(void)
@@ -209,89 +220,6 @@ AnserShmemInit(void)
 		ShmemInitStruct(ANSER_WAIT_TABLE_NAME,
 						AnserWaitTableSize(), &found);
 	AnserInitializeWaitTable(found);
-
-	LWLockAcquire(AnserChannelLock, LW_EXCLUSIVE);
-	AnserSweepOrphanChannels();
-	LWLockRelease(AnserChannelLock);
-}
-
-bool
-AnserRegisterCondition(int gp_session_id, int gp_command_count,
-					   uint32 condition_id, const char *condition_key,
-					   int expected_producers,
-					   AnserChannelKey *channel_key)
-{
-	AnserChannelEntry *entry;
-	bool		found;
-	TimestampTz now;
-
-	if (!AnserInitialized())
-		return false;
-
-	if (expected_producers <= 0)
-	{
-		ereport(WARNING,
-				(errmsg("could not register Anser channel: expected producers must be greater than zero")));
-		return false;
-	}
-
-	if (!AnserBuildChannelKey(gp_session_id, gp_command_count, condition_id,
-						   condition_key, channel_key))
-		return false;
-
-	LWLockAcquire(AnserChannelLock, LW_EXCLUSIVE);
-	entry = (AnserChannelEntry *) hash_search(AnserChannelHash, channel_key,
-											 HASH_ENTER_NULL, &found);
-	if (entry == NULL)
-	{
-		AnserSweepOrphanChannels();
-		entry = (AnserChannelEntry *) hash_search(AnserChannelHash, channel_key,
-											 HASH_ENTER_NULL, &found);
-	}
-
-	if (entry == NULL)
-	{
-		LWLockRelease(AnserChannelLock);
-		ereport(WARNING,
-				(errmsg("could not register Anser channel: channel map is full")));
-		return false;
-	}
-
-	now = GetCurrentTimestamp();
-	if (!found)
-	{
-		MemSet(entry, 0, sizeof(AnserChannelEntry));
-		entry->key = *channel_key;
-		entry->state = ANSER_CHANNEL_PENDING;
-		entry->creator_role = GetUserId();
-		entry->expected_producers = expected_producers;
-		entry->dsm_handle = DSM_HANDLE_INVALID;
-		entry->created_at = now;
-	}
-	else if (entry->state == ANSER_CHANNEL_CANCELLED ||
-			 entry->state == ANSER_CHANNEL_CONSUMED)
-	{
-		/*
-		 * A terminal channel already holds this key.  Channel keys are unique
-		 * per (session, command, condition), so a live registration should
-		 * never collide with a completed/aborted one -- this is a leftover the
-		 * sweep has not reclaimed yet (or a genuine key collision).  Do NOT
-		 * resurrect it: reviving a terminal channel could strand a straggler
-		 * wait slot or hand one query's data to another.  Fail instead; the
-		 * caller falls open and the sweep reclaims the terminal channel.
-		 */
-		LWLockRelease(AnserChannelLock);
-		return false;
-	}
-	else
-		entry->expected_producers = expected_producers;
-
-	entry->updated_at = now;
-	SetLatch(&AnserCtl->gather_latch);
-	SetLatch(&AnserCtl->send_latch);
-	LWLockRelease(AnserChannelLock);
-
-	return true;
 }
 
 bool
@@ -397,29 +325,6 @@ AnserWaitProducersRegistered(const AnserChannelKey *channel_key, long timeout_ms
 }
 
 bool
-AnserConsume(const AnserChannelKey *channel_key, void *buffer,
-			 Size buffer_size, Size *payload_len, bool *cancelled,
-			 long timeout_ms)
-{
-	bool		was_cancelled = false;
-
-	if (!AnserWaitForState(channel_key, timeout_ms, false, &was_cancelled))
-	{
-		if (!was_cancelled && channel_key != NULL)
-		{
-			(void) AnserCancelChannel(channel_key);
-			was_cancelled = true;
-		}
-		if (cancelled != NULL)
-			*cancelled = was_cancelled;
-		return false;
-	}
-
-	return AnserConsumeReady(channel_key, buffer, buffer_size, payload_len,
-						  cancelled);
-}
-
-bool
 AnserWaitReady(const AnserChannelKey *channel_key, bool *cancelled)
 {
 	return AnserWaitForState(channel_key, -1, false, cancelled);
@@ -435,10 +340,11 @@ AnserConsumeReady(const AnserChannelKey *channel_key, void *buffer,
 	bool		is_cancelled;
 	bool		delivered = false;
 
-	if (payload_len != NULL)
-		*payload_len = 0;
-	if (cancelled != NULL)
-		*cancelled = false;
+	Assert(payload_len != NULL);
+	Assert(cancelled != NULL);
+
+	*payload_len = 0;
+	*cancelled = false;
 
 	if (!AnserInitialized() || channel_key == NULL)
 		return false;
@@ -463,7 +369,7 @@ AnserConsumeReady(const AnserChannelKey *channel_key, void *buffer,
 
 	if (!ready || is_cancelled || !delivered)
 	{
-		if (cancelled != NULL && is_cancelled)
+		if (is_cancelled)
 			*cancelled = true;
 		return false;
 	}
@@ -482,8 +388,7 @@ AnserConsumeReady(const AnserChannelKey *channel_key, void *buffer,
 	is_cancelled = (entry->state == ANSER_CHANNEL_CANCELLED);
 	if (is_cancelled)
 	{
-		if (cancelled != NULL)
-			*cancelled = true;
+		*cancelled = true;
 		LWLockRelease(AnserChannelLock);
 		return false;
 	}
@@ -531,6 +436,34 @@ AnserChannelGetState(const AnserChannelKey *channel_key, bool *found)
 	if (found != NULL)
 		*found = local_found;
 	return state;
+}
+
+/*
+ * Bytes of payload the channel currently holds, or -1 if it is not in the map.
+ * Introspection for tests observing the payload-DSM lifetime: > 0 while a
+ * payload is pinned, 0 once it has been freed but the entry still lingers, and
+ * -1 once the entry has been reclaimed (payload freed and removed).
+ */
+int
+AnserChannelPayloadBytes(const AnserChannelKey *channel_key)
+{
+	AnserChannelEntry *entry;
+	bool		found;
+	int			bytes = -1;
+
+	if (!AnserInitialized() || channel_key == NULL)
+		return -1;
+
+	LWLockAcquire(AnserChannelLock, LW_SHARED);
+	entry = (AnserChannelEntry *) hash_search(AnserChannelHash,
+										 channel_key,
+										 HASH_FIND,
+										 &found);
+	if (found)
+		bytes = (int) entry->data_len;
+	LWLockRelease(AnserChannelLock);
+
+	return bytes;
 }
 
 /*
@@ -655,32 +588,6 @@ AnserSetSweepEnabled(bool enabled)
 	LWLockRelease(AnserChannelLock);
 }
 
-bool
-AnserCancelChannel(const AnserChannelKey *channel_key)
-{
-	AnserChannelEntry *entry;
-	bool		found;
-
-	if (!AnserInitialized() || channel_key == NULL)
-		return false;
-
-	LWLockAcquire(AnserChannelLock, LW_EXCLUSIVE);
-	entry = (AnserChannelEntry *) hash_search(AnserChannelHash,
-											 channel_key,
-											 HASH_FIND,
-											 &found);
-	if (found)
-	{
-		entry->state = ANSER_CHANNEL_CANCELLED;
-		entry->updated_at = GetCurrentTimestamp();
-		AnserReleasePayloadDSM(entry);
-		SetLatch(&AnserCtl->send_latch);
-	}
-	LWLockRelease(AnserChannelLock);
-
-	return found;
-}
-
 void
 AnserCancelQuery(int gp_session_id, int gp_command_count)
 {
@@ -697,9 +604,15 @@ AnserCancelQuery(int gp_session_id, int gp_command_count)
 		if (entry->key.gp_session_id == gp_session_id &&
 			entry->key.gp_command_count == gp_command_count)
 		{
+			/*
+			 * Do not free the payload DSM here: a READY channel may already have
+			 * DELIVERED wait slots borrowing it (consumers mid-read).  Just mark
+			 * it cancelled; the sweep releases the DSM once no slot still
+			 * references it (unlike the gather/timeout cancels, this one can hit
+			 * a channel past READY).
+			 */
 			entry->state = ANSER_CHANNEL_CANCELLED;
 			entry->updated_at = GetCurrentTimestamp();
-			AnserReleasePayloadDSM(entry);
 		}
 	}
 	SetLatch(&AnserCtl->send_latch);
@@ -778,15 +691,30 @@ AnserProducerBegin(const AnserChannelKey *channel_key, int expected_producers,
 	{
 		/*
 		 * Terminal channel already on this key -- an anomaly, since keys are
-		 * unique per (session, command, condition).  Do not resurrect it (see
-		 * AnserRegisterCondition); fail so the caller falls open and the sweep
-		 * reclaims the leftover.
+		 * unique per (session, command, condition).  Do not resurrect it:
+		 * reviving a completed/aborted channel could strand a straggler wait slot
+		 * or hand one query's data to another.  Fail so the caller falls open and
+		 * the sweep reclaims the leftover.
 		 */
 		LWLockRelease(AnserChannelLock);
 		return false;
 	}
 
 	entry->expected_producers = expected_producers;
+
+	/*
+	 * Fix the consumer count when the channel is created, rather than having
+	 * every consumer re-assert it: it is a property of the query topology (one
+	 * consumer per segment executing the consumer slice) known here.  The send
+	 * service must deliver to all of them before recycling the payload.
+	 *
+	 * getgpsegmentCount() is the per-segment count -- correct for the
+	 * segment-executed filters Anser targets today.  A coordinator-only slice
+	 * would want 1; representing that exactly needs the consumer slice's real
+	 * gang size threaded down from the plan (future work), not this proxy.
+	 */
+	entry->expected_consumers = getgpsegmentCount();
+
 	if (entry->state == ANSER_CHANNEL_PENDING)
 		entry->state = ANSER_CHANNEL_COLLECTING;
 	entry->updated_at = now;
@@ -1037,30 +965,6 @@ AnserConsumerWait(const AnserChannelKey *channel_key, void **payload,
 	if (!AnserSubscribe(channel_key))
 		return false;
 
-	/*
-	 * Record how many consumers to expect (one per segment).  The send service
-	 * must deliver to all of them before recycling the payload; using the live
-	 * subscribe count instead would recycle after the first consumer and starve
-	 * the rest (they would fail open and do no filtering).
-	 */
-	{
-		int			nseg = getgpsegmentCount();
-
-		if (nseg > 0)
-		{
-			AnserChannelEntry *entry;
-			bool		found;
-
-			LWLockAcquire(AnserChannelLock, LW_EXCLUSIVE);
-			entry = (AnserChannelEntry *) hash_search(AnserChannelHash,
-													  channel_key, HASH_FIND,
-													  &found);
-			if (found && entry->expected_consumers < nseg)
-				entry->expected_consumers = nseg;
-			LWLockRelease(AnserChannelLock);
-		}
-	}
-
 	slot = AnserRegisterWaitSlot(channel_key);
 	if (slot < 0)
 	{
@@ -1105,9 +1009,11 @@ AnserAbandonWaitSlot(int slot)
 	LWLockAcquire(AnserRingLock, LW_EXCLUSIVE);
 	if (s->consumer_pid == MyProcPid && s->state != ANSER_WAIT_FREE)
 	{
-		if (s->state == ANSER_WAIT_DELIVERED &&
-			s->dsm_handle != DSM_HANDLE_INVALID)
-			dsm_unpin_segment(s->dsm_handle);
+		/*
+		 * The slot's dsm_handle is borrowed from the channel (which owns and
+		 * frees the payload DSM), so abandoning just stops this slot from
+		 * borrowing -- do not unpin it here.
+		 */
 		was_waiting = (s->state == ANSER_WAIT_WAITING);
 		key = s->key;
 		s->dsm_handle = DSM_HANDLE_INVALID;
@@ -1198,9 +1104,14 @@ AnserWaitSlotResult(int slot, void **payload, Size *payload_len,
 		st = s->state;
 		if (st == ANSER_WAIT_DELIVERED)
 		{
+			/*
+			 * Read the borrowed channel payload handle but leave the slot
+			 * DELIVERED: that keeps the channel's payload DSM alive (the sweep
+			 * will not reclaim a channel with a DELIVERED slot) until we have
+			 * copied it out below.  We flip the slot to FREE only afterward.
+			 */
 			handle = s->dsm_handle;
 			len = s->len;
-			s->state = ANSER_WAIT_FREE;
 		}
 		else if (st == ANSER_WAIT_CANCELLED)
 		{
@@ -1218,26 +1129,37 @@ AnserWaitSlotResult(int slot, void **payload, Size *payload_len,
 		if (st == ANSER_WAIT_DELIVERED)
 		{
 			void	   *buf = NULL;
+			bool		vanished = false;
 
 			if (handle != DSM_HANDLE_INVALID)
 			{
 				dsm_segment *seg = dsm_attach(handle);
 
 				if (seg == NULL)
+					vanished = true;	/* should not happen: we hold DELIVERED */
+				else
 				{
-					/* delivery segment vanished: treat as cancelled */
-					if (cancelled != NULL)
-						*cancelled = true;
-					return false;
+					if (len > 0)
+					{
+						buf = palloc(len);
+						memcpy(buf, dsm_segment_address(seg), len);
+					}
+					/* Borrowed handle -- detach, but the channel owns/frees it. */
+					dsm_detach(seg);
 				}
+			}
 
-				if (len > 0)
-				{
-					buf = palloc(len);
-					memcpy(buf, dsm_segment_address(seg), len);
-				}
-				dsm_unpin_segment(handle);
-				dsm_detach(seg);
+			/* Done reading: release the slot so the channel can be reclaimed. */
+			LWLockAcquire(AnserRingLock, LW_EXCLUSIVE);
+			if (s->state == ANSER_WAIT_DELIVERED)
+				s->state = ANSER_WAIT_FREE;
+			LWLockRelease(AnserRingLock);
+
+			if (vanished)
+			{
+				if (cancelled != NULL)
+					*cancelled = true;
+				return false;
 			}
 
 			if (payload != NULL)
@@ -1506,30 +1428,16 @@ AnserSendServiceCycle(void)
 
 		/*
 		 * Stragglers that registered after a channel finished (cancelled, or
-		 * already consumed and its payload freed) can no longer be handed data;
-		 * they are delivered a cancel so they fail open instead of blocking
-		 * forever on a channel the sweep would otherwise never reclaim.
+		 * already consumed) can no longer be handed data; they are delivered a
+		 * cancel so they fail open instead of blocking forever on a channel the
+		 * sweep would otherwise never reclaim.
 		 */
 		bool		cancel_waiters = (entry->state == ANSER_CHANNEL_CANCELLED ||
 									  entry->state == ANSER_CHANNEL_CONSUMED);
-		dsm_segment *src = NULL;
-		void	   *src_addr = NULL;
-		Size		src_len = 0;
 		int			i;
 
 		if (!ready && !cancel_waiters)
 			continue;
-
-		if (ready && entry->dsm_handle != DSM_HANDLE_INVALID &&
-			entry->data_len > 0)
-		{
-			src = dsm_attach(entry->dsm_handle);
-			if (src != NULL)
-			{
-				src_addr = dsm_segment_address(src);
-				src_len = entry->data_len;
-			}
-		}
 
 		LWLockAcquire(AnserRingLock, LW_EXCLUSIVE);
 		for (i = 0; i < len_slots; i++)
@@ -1551,28 +1459,16 @@ AnserSendServiceCycle(void)
 				continue;
 			}
 
-			/* READY: hand this consumer its own pinned copy of the payload. */
-			s->dsm_handle = DSM_HANDLE_INVALID;
-			s->len = 0;
-			if (src_len > 0 && src_addr != NULL)
-			{
-				dsm_segment *copy = dsm_create(src_len,
-											   DSM_CREATE_NULL_IF_MAXSEGMENTS);
-
-				if (copy == NULL)
-				{
-					/* out of DSM: cancel just this consumer */
-					s->state = ANSER_WAIT_CANCELLED;
-					if (s->consumer_latch != NULL)
-						SetLatch(s->consumer_latch);
-					continue;
-				}
-				memcpy(dsm_segment_address(copy), src_addr, src_len);
-				dsm_pin_segment(copy);
-				s->dsm_handle = dsm_segment_handle(copy);
-				s->len = src_len;
-				dsm_detach(copy);
-			}
+			/*
+			 * READY: lend this consumer the channel's single payload segment --
+			 * the slot borrows entry->dsm_handle rather than getting its own
+			 * copy.  The consumer copies it out and only then frees the slot; the
+			 * payload DSM is released once the channel is reclaimed with no slot
+			 * still borrowing it (AnserChannelHasWaiters / the sweep).  Holding
+			 * the slot DELIVERED keeps that handle alive across the read.
+			 */
+			s->dsm_handle = entry->dsm_handle;
+			s->len = entry->data_len;
 			s->state = ANSER_WAIT_DELIVERED;
 			if (s->consumer_latch != NULL)
 				SetLatch(s->consumer_latch);
@@ -1581,15 +1477,16 @@ AnserSendServiceCycle(void)
 		}
 		LWLockRelease(AnserRingLock);
 
-		if (src != NULL)
-			dsm_detach(src);
-
-		/* Recycle once every expected consumer (one per segment) is delivered. */
+		/*
+		 * Recycle once every expected consumer has been handed the payload.  Do
+		 * NOT free the payload DSM here: consumers still hold DELIVERED slots
+		 * that borrow it.  It is released when the sweep reclaims this now
+		 * terminal channel, after every borrowing slot has drained.
+		 */
 		if (ready && entry->expected_consumers > 0 &&
 			entry->done_consumers >= entry->expected_consumers)
 		{
 			entry->state = ANSER_CHANNEL_CONSUMED;
-			AnserReleasePayloadDSM(entry);
 			entry->updated_at = GetCurrentTimestamp();
 		}
 	}
@@ -1618,10 +1515,11 @@ AnserReapWaitSlots(void)
 		if (AnserPidIsLive(s->consumer_pid))
 			continue;
 
-		if (s->state == ANSER_WAIT_DELIVERED &&
-			s->dsm_handle != DSM_HANDLE_INVALID)
-			dsm_unpin_segment(s->dsm_handle);
-
+		/*
+		 * A dead consumer's slot is freed without touching its dsm_handle: that
+		 * handle is borrowed from the channel (the channel owns and frees the
+		 * payload DSM), so freeing the slot just stops it from borrowing.
+		 */
 		s->dsm_handle = DSM_HANDLE_INVALID;
 		s->len = 0;
 		s->state = ANSER_WAIT_FREE;
@@ -1770,7 +1668,15 @@ AnserChannelHasWaiters(const AnserChannelKey *channel_key)
 	LWLockAcquire(AnserRingLock, LW_SHARED);
 	for (i = 0; i < len_slots; i++)
 	{
-		if (AnserWaitTable[i].state == ANSER_WAIT_WAITING &&
+		/*
+		 * A slot still references the channel while it is WAITING (not yet
+		 * delivered) or DELIVERED (delivered but the consumer has not finished
+		 * copying the borrowed payload out).  Either blocks reclaim: the sweep
+		 * must not free the payload DSM while a DELIVERED slot could still attach
+		 * it.
+		 */
+		if ((AnserWaitTable[i].state == ANSER_WAIT_WAITING ||
+			 AnserWaitTable[i].state == ANSER_WAIT_DELIVERED) &&
 			memcmp(&AnserWaitTable[i].key, channel_key,
 				   sizeof(AnserChannelKey)) == 0)
 		{
@@ -1930,31 +1836,6 @@ AnserChannelOwnerIsAlive(const AnserChannelEntry *entry)
 }
 
 static bool
-AnserBuildChannelKey(int gp_session_id, int gp_command_count,
-					 uint32 condition_id, const char *condition_key,
-					 AnserChannelKey *channel_key)
-{
-	if (channel_key == NULL || condition_key == NULL)
-		return false;
-
-	if (strlen(condition_key) >= ANSER_CONDITION_KEY_SIZE)
-	{
-		ereport(WARNING,
-				(errmsg("could not build Anser channel key: condition key is too long")));
-		return false;
-	}
-
-	MemSet(channel_key, 0, sizeof(AnserChannelKey));
-	channel_key->gp_session_id = gp_session_id;
-	channel_key->gp_command_count = gp_command_count;
-	channel_key->condition_id = condition_id;
-	strlcpy(channel_key->condition_key, condition_key,
-			ANSER_CONDITION_KEY_SIZE);
-
-	return true;
-}
-
-static bool
 AnserStorePayloadDSM(AnserChannelEntry *entry, const void *payload,
 						   Size payload_len)
 {
@@ -1973,9 +1854,7 @@ AnserStorePayloadDSM(AnserChannelEntry *entry, const void *payload,
 	/*
 	 * Combine the incoming payload with the channel's current one -- bloom parts
 	 * are folded (unioned) into a single merged part, opaque payloads are
-	 * appended (see AnserCombinePayload).  The combine works on plain bytes, so
-	 * we hand it the current payload's address and install the result into a
-	 * fresh DSM segment; the store mechanics are the same for both kinds.
+	 * appended (see AnserCombinePayload).
 	 */
 	if (entry->dsm_handle != DSM_HANDLE_INVALID && entry->data_len > 0)
 	{
@@ -1983,6 +1862,21 @@ AnserStorePayloadDSM(AnserChannelEntry *entry, const void *payload,
 		if (acc_seg == NULL)
 			return false;
 		acc_addr = dsm_segment_address(acc_seg);
+	}
+
+	/*
+	 * Fast path: a size-preserving bloom union (a part folded into an existing,
+	 * equally-sized merged part) is a bitwise OR done in place in the current DSM
+	 * segment -- no fresh segment, no full-payload copy.  Safe because we hold
+	 * AnserChannelLock and consumers only ever read their own copies.  Anything
+	 * that changes the payload size (the first part, or an opaque append) returns
+	 * false here and takes the general path below.
+	 */
+	if (acc_addr != NULL &&
+		AnserBloomFoldPartInPlace(acc_addr, entry->data_len, payload, payload_len))
+	{
+		dsm_detach(acc_seg);
+		return true;
 	}
 
 	combined = AnserCombinePayload(acc_addr, entry->data_len,
@@ -2031,12 +1925,6 @@ AnserReleasePayloadDSM(AnserChannelEntry *entry)
 
 /*
  * Consume a ready channel payload.
- *
- * PR 2 stores opaque bytes in DSM segments and copies them out for existing
- * callers. Keep this logic behind a dedicated helper because later PRs will
- * need different consumers: bloom-filter union/materialization, direct filter
- * installation, metadata-only consumption, and possibly payload formats that
- * are not copied into a caller-owned buffer at all.
  */
 static bool
 AnserDeliverChannelData(const AnserChannelEntry *entry, void *buffer,
@@ -2047,11 +1935,11 @@ AnserDeliverChannelData(const AnserChannelEntry *entry, void *buffer,
 
 	Assert(LWLockHeldByMe(AnserChannelLock));
 	Assert(entry != NULL);
+	Assert(payload_len != NULL);
 
 	if (entry->dsm_handle == DSM_HANDLE_INVALID)
 	{
-		if (payload_len != NULL)
-			*payload_len = 0;
+		*payload_len = 0;
 		return (entry->data_len == 0);
 	}
 
@@ -2070,8 +1958,7 @@ AnserDeliverChannelData(const AnserChannelEntry *entry, void *buffer,
 		memcpy(buffer, addr, entry->data_len);
 	dsm_detach(seg);
 
-	if (payload_len != NULL)
-		*payload_len = entry->data_len;
+	*payload_len = entry->data_len;
 
 	return true;
 }

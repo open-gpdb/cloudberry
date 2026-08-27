@@ -189,6 +189,59 @@ AnserBloomFoldPart(const void *acc, Size acc_len,
 }
 
 /*
+ * Fold an incoming part into an accumulator part IN PLACE.
+ *
+ * When a merged part and the incoming part are the same serialized size (they
+ * share bitset params derived from the condition key), the union is a pure
+ * bitwise OR of the two bitsets plus a bump of the merged header's fold count --
+ * no reallocation.  This mutates `acc` directly, so the caller must hold whatever
+ * lock guards the buffer (AnserChannelLock, for the channel payload).
+ *
+ * Returns true only when the in-place union applied.  It returns false -- and
+ * leaves `acc` untouched (all checks run before any write) -- when the fast path
+ * does not apply: sizes differ, either side is not a valid part, or the filter
+ * parameters disagree.  The caller then falls back to building a fresh payload.
+ */
+bool
+AnserBloomFoldPartInPlace(void *acc, Size acc_len,
+						  const void *part, Size part_len)
+{
+	AnserBloomPartHeader *ah;
+	const AnserBloomPartHeader *ph;
+	unsigned char *abits;
+	const unsigned char *pbits;
+	Size		bitset_bytes;
+	Size		i;
+
+	/* Only a same-sized, valid part-vs-part union can be done by raw OR. */
+	if (acc_len != part_len ||
+		!AnserBloomLooksLikePart(acc, acc_len) ||
+		!AnserBloomLooksLikePart(part, part_len))
+		return false;
+
+	ah = (AnserBloomPartHeader *) acc;
+	ph = (const AnserBloomPartHeader *) part;
+
+	/* Identical filter parameters, or OR-ing the bitsets is meaningless. */
+	if (ah->bitset_bits != ph->bitset_bits ||
+		ah->k_hash_funcs != ph->k_hash_funcs ||
+		ah->seed != ph->seed)
+		return false;
+
+	bitset_bytes = (Size) (ah->bitset_bits / BITS_PER_BYTE);
+	abits = (unsigned char *) acc + sizeof(AnserBloomPartHeader);
+	pbits = (const unsigned char *) part + sizeof(AnserBloomPartHeader);
+
+	for (i = 0; i < bitset_bytes; i++)
+		abits[i] |= pbits[i];
+
+	/* One more segment part folded into the running merged part. */
+	ah->total_parts += 1;
+
+	return true;
+}
+
+/*
  * Combine an opaque payload into the accumulator by appending (concatenating).
  * This preserves the generic channel contract used by lower-level callers/tests
  * for payloads that are not bloom parts.  `acc` may be NULL/0 for the first one;
@@ -322,82 +375,6 @@ AnserBloomDeserializePart(const void *payload, Size payload_len,
 	if (total_parts != NULL)
 		*total_parts = header->total_parts;
 	return filter;
-}
-
-bloom_filter *
-AnserBloomUnionParts(const void *payload, Size payload_len,
-					 uint32 expected_parts, uint32 *received_parts)
-{
-	const char *ptr = (const char *) payload;
-	Size		remaining = payload_len;
-	bloom_filter *result = NULL;
-	uint32		seen = 0;
-
-	if (received_parts != NULL)
-		*received_parts = 0;
-
-	if (payload == NULL || expected_parts == 0)
-		return NULL;
-
-	while (remaining > 0)
-	{
-		const AnserBloomPartHeader *header;
-		Size		part_len;
-		uint32		part_index;
-		uint32		total_parts;
-		bloom_filter *part;
-
-		if (remaining < sizeof(AnserBloomPartHeader))
-			goto fail;
-
-		header = (const AnserBloomPartHeader *) ptr;
-		if (!AnserBloomValidateHeader(header, remaining))
-			goto fail;
-
-		part_len = sizeof(AnserBloomPartHeader) +
-			(Size) (header->bitset_bits / BITS_PER_BYTE);
-		part = AnserBloomDeserializePart(ptr, part_len, &part_index,
-										 &total_parts);
-		if (part == NULL)
-			goto fail;
-
-		if (total_parts != expected_parts || part_index >= expected_parts)
-		{
-			bloom_free(part);
-			goto fail;
-		}
-
-		if (result == NULL)
-			result = part;
-		else
-		{
-			if (!bloom_union(result, part))
-			{
-				bloom_free(part);
-				goto fail;
-			}
-			bloom_free(part);
-		}
-
-		seen++;
-		ptr += part_len;
-		remaining -= part_len;
-	}
-
-	if (received_parts != NULL)
-		*received_parts = seen;
-
-	if (seen != expected_parts)
-		goto fail;
-
-	return result;
-
-fail:
-	if (received_parts != NULL)
-		*received_parts = seen;
-	if (result != NULL)
-		bloom_free(result);
-	return NULL;
 }
 
 static uint64

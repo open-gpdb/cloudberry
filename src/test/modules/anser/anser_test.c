@@ -54,17 +54,19 @@ PG_FUNCTION_INFO_V1(anser_test_subscribe);
 PG_FUNCTION_INFO_V1(anser_test_publish);
 PG_FUNCTION_INFO_V1(anser_test_consume);
 PG_FUNCTION_INFO_V1(anser_test_state);
-PG_FUNCTION_INFO_V1(anser_test_cancel_channel);
 PG_FUNCTION_INFO_V1(anser_test_cancel_query);
 PG_FUNCTION_INFO_V1(anser_test_bloom_roundtrip);
-PG_FUNCTION_INFO_V1(anser_test_bloom_union);
 PG_FUNCTION_INFO_V1(anser_test_bloom_fold);
+PG_FUNCTION_INFO_V1(anser_test_bloom_fold_inplace);
 PG_FUNCTION_INFO_V1(anser_test_payload_combine);
 PG_FUNCTION_INFO_V1(anser_test_bloom_rejects_tiny);
 PG_FUNCTION_INFO_V1(anser_test_node_roundtrip);
 PG_FUNCTION_INFO_V1(anser_test_client_roundtrip);
 PG_FUNCTION_INFO_V1(anser_test_multi_consumer);
 PG_FUNCTION_INFO_V1(anser_test_abandoned_consumer_recycles);
+PG_FUNCTION_INFO_V1(anser_test_dsm_free_on_success);
+PG_FUNCTION_INFO_V1(anser_test_dsm_free_on_timeout);
+PG_FUNCTION_INFO_V1(anser_test_dsm_free_on_cancel);
 PG_FUNCTION_INFO_V1(anser_test_set_sweep);
 PG_FUNCTION_INFO_V1(anser_test_sweep);
 PG_FUNCTION_INFO_V1(anser_test_max_channels_stable_across_slices);
@@ -89,7 +91,7 @@ anser_test_register_condition(PG_FUNCTION_ARGS)
 	int32		condition_id_arg = PG_GETARG_INT32(2);
 	char	   *condition_key = text_to_cstring(PG_GETARG_TEXT_PP(3));
 	int32		expected_producers_arg = PG_GETARG_INT32(4);
-	AnserChannelKey channel_key;
+	AnserChannelKey key;
 
 	if (condition_id_arg < 0 || expected_producers_arg <= 0)
 		PG_RETURN_BOOL(false);
@@ -97,12 +99,19 @@ anser_test_register_condition(PG_FUNCTION_ARGS)
 	if (strlen(condition_key) >= ANSER_CONDITION_KEY_SIZE)
 		PG_RETURN_BOOL(false);
 
-	PG_RETURN_BOOL(AnserRegisterCondition(gp_session_id,
-										gp_command_count,
-										(uint32) condition_id_arg,
-										condition_key,
-										expected_producers_arg,
-										&channel_key));
+	/*
+	 * Drive the production registration entry point (AnserProducerBegin) rather
+	 * than a test-only variant, so the state machine we exercise below is the
+	 * one real producers use.
+	 */
+	MemSet(&key, 0, sizeof(key));
+	key.gp_session_id = gp_session_id;
+	key.gp_command_count = gp_command_count;
+	key.condition_id = (uint32) condition_id_arg;
+	strlcpy(key.condition_key, condition_key, ANSER_CONDITION_KEY_SIZE);
+
+	PG_RETURN_BOOL(AnserProducerBegin(&key, expected_producers_arg,
+									  GetUserId(), superuser()));
 }
 
 Datum
@@ -137,11 +146,9 @@ anser_test_consume(PG_FUNCTION_ARGS)
 {
 	AnserChannelKey key;
 	int32		timeout_arg = PG_GETARG_INT32(4);
-	long		timeout_ms = timeout_arg;
 	char	   *buffer;
 	Size		payload_len = 0;
 	bool		cancelled = false;
-	bool		ready;
 	bytea	   *result;
 
 	if (timeout_arg < 0)
@@ -150,10 +157,19 @@ anser_test_consume(PG_FUNCTION_ARGS)
 	if (!build_test_key(fcinfo, &key))
 		PG_RETURN_NULL();
 
+	/*
+	 * Consume through the production path -- AnserWaitReady + AnserConsumeReady,
+	 * the same pair the executor's bloom consumer uses.  The timeout argument is
+	 * advisory here: a channel that never becomes READY is cancelled by the
+	 * gather service's stale-channel sweep after gp_anser_timeout_ms, which wakes
+	 * this wait with cancelled = true (so a "timeout" returns NULL).
+	 */
+	if (!AnserWaitReady(&key, &cancelled) || cancelled)
+		PG_RETURN_NULL();
+
 	buffer = (char *) palloc((Size) gp_anser_max_info_size);
-	ready = AnserConsume(&key, buffer, (Size) gp_anser_max_info_size,
-						 &payload_len, &cancelled, timeout_ms);
-	if (!ready || cancelled)
+	if (!AnserConsumeReady(&key, buffer, (Size) gp_anser_max_info_size,
+						   &payload_len, &cancelled) || cancelled)
 		PG_RETURN_NULL();
 
 	result = (bytea *) palloc(VARHDRSZ + payload_len);
@@ -179,17 +195,6 @@ anser_test_state(PG_FUNCTION_ARGS)
 		PG_RETURN_TEXT_P(cstring_to_text("NOT_FOUND"));
 
 	PG_RETURN_TEXT_P(cstring_to_text(state_to_string(state)));
-}
-
-Datum
-anser_test_cancel_channel(PG_FUNCTION_ARGS)
-{
-	AnserChannelKey key;
-
-	if (!build_test_key(fcinfo, &key))
-		PG_RETURN_BOOL(false);
-
-	PG_RETURN_BOOL(AnserCancelChannel(&key));
 }
 
 Datum
@@ -239,57 +244,6 @@ anser_test_bloom_roundtrip(PG_FUNCTION_ARGS)
 	bloom_free(filter);
 	bloom_free(roundtrip);
 	PG_RETURN_BOOL(!lacks && part_index == 0 && total_parts == 1);
-}
-
-Datum
-anser_test_bloom_union(PG_FUNCTION_ARGS)
-{
-	char	   *key = text_to_cstring(PG_GETARG_TEXT_PP(0));
-	int32		left_arg = PG_GETARG_INT32(1);
-	int32		right_arg = PG_GETARG_INT32(2);
-	Datum		left_value = Int32GetDatum(left_arg);
-	Datum		right_value = Int32GetDatum(right_arg);
-	uint64		seed = AnserBloomSeed(key);
-	bloom_filter *left;
-	bloom_filter *right;
-	bloom_filter *united;
-	char	   *payload;
-	Size		left_size;
-	Size		right_size;
-	Size		left_len = 0;
-	Size		right_len = 0;
-	uint32		received = 0;
-	bool		ok;
-
-	left = AnserBloomCreate(32, 1024 * 1024, seed);
-	right = AnserBloomCreate(32, 1024 * 1024, seed);
-	if (left == NULL || right == NULL)
-		PG_RETURN_BOOL(false);
-
-	bloom_add_element(left, (unsigned char *) &left_value, sizeof(Datum));
-	bloom_add_element(right, (unsigned char *) &right_value, sizeof(Datum));
-	left_size = AnserBloomSerializedSize(left);
-	right_size = AnserBloomSerializedSize(right);
-	payload = palloc(left_size + right_size);
-	ok = AnserBloomSerializePart(left, 0, 2, payload, left_size, &left_len) &&
-		AnserBloomSerializePart(right, 1, 2, payload + left_len, right_size,
-								&right_len);
-	if (!ok)
-		PG_RETURN_BOOL(false);
-
-	united = AnserBloomUnionParts(payload, left_len + right_len, 2, &received);
-	if (united == NULL)
-		PG_RETURN_BOOL(false);
-
-	ok = received == 2 &&
-		!bloom_lacks_element(united, (unsigned char *) &left_value,
-							 sizeof(Datum)) &&
-		!bloom_lacks_element(united, (unsigned char *) &right_value,
-							 sizeof(Datum));
-	bloom_free(left);
-	bloom_free(right);
-	bloom_free(united);
-	PG_RETURN_BOOL(ok);
 }
 
 /*
@@ -454,12 +408,102 @@ anser_test_payload_combine(PG_FUNCTION_ARGS)
 }
 
 /*
+ * In-place fold: folding an equally-sized part into a merged part is a bitwise
+ * OR of the bitset plus a fold-count bump, mutating the buffer without realloc.
+ * A differently-sized part is rejected and leaves the accumulator untouched, so
+ * the caller can fall back to building a fresh payload.
+ */
+Datum
+anser_test_bloom_fold_inplace(PG_FUNCTION_ARGS)
+{
+	uint64		seed = AnserBloomSeed("inplace_bloom");
+	bloom_filter *left;
+	bloom_filter *right;
+	bloom_filter *big;
+	bloom_filter *merged;
+	Datum		left_value = Int32GetDatum(7);
+	Datum		right_value = Int32GetDatum(9);
+	char	   *acc;
+	char	   *part;
+	char	   *big_part;
+	Size		acc_size;
+	Size		part_size;
+	Size		big_size;
+	Size		acc_len = 0;
+	Size		part_len = 0;
+	Size		big_len = 0;
+	uint32		part_index = 0;
+	uint32		total_parts = 0;
+	uint32		tp_before = 0;
+	uint32		tp_after = 0;
+	bool		same_ok;
+	bool		mismatch_rejected;
+
+	/* Two same-parameter parts: acc is the running merged part, part folds in. */
+	left = AnserBloomCreate(32, 1024 * 1024, seed);
+	right = AnserBloomCreate(32, 1024 * 1024, seed);
+	if (left == NULL || right == NULL)
+		PG_RETURN_BOOL(false);
+	bloom_add_element(left, (unsigned char *) &left_value, sizeof(Datum));
+	bloom_add_element(right, (unsigned char *) &right_value, sizeof(Datum));
+	acc_size = AnserBloomSerializedSize(left);
+	part_size = AnserBloomSerializedSize(right);
+	acc = palloc(acc_size);
+	part = palloc(part_size);
+	if (!AnserBloomSerializePart(left, 0, 1, acc, acc_size, &acc_len) ||
+		!AnserBloomSerializePart(right, 0, 1, part, part_size, &part_len))
+	{
+		bloom_free(left);
+		bloom_free(right);
+		PG_RETURN_BOOL(false);
+	}
+	bloom_free(left);
+	bloom_free(right);
+
+	same_ok = AnserBloomFoldPartInPlace(acc, acc_len, part, part_len);
+	merged = same_ok ?
+		AnserBloomDeserializePart(acc, acc_len, &part_index, &total_parts) : NULL;
+	same_ok = same_ok &&
+		acc_len == acc_size &&			/* size unchanged, folded in place */
+		merged != NULL &&
+		part_index == 0 &&
+		total_parts == 2 &&				/* one more part folded */
+		!bloom_lacks_element(merged, (unsigned char *) &left_value,
+							 sizeof(Datum)) &&
+		!bloom_lacks_element(merged, (unsigned char *) &right_value,
+							 sizeof(Datum));
+	if (merged != NULL)
+		bloom_free(merged);
+
+	/* A differently-sized part must be rejected and leave acc untouched. */
+	big = AnserBloomCreate(100000, 1024 * 1024, seed);
+	if (big == NULL)
+		PG_RETURN_BOOL(false);
+	big_size = AnserBloomSerializedSize(big);
+	big_part = palloc(big_size);
+	if (!AnserBloomSerializePart(big, 0, 1, big_part, big_size, &big_len))
+	{
+		bloom_free(big);
+		PG_RETURN_BOOL(false);
+	}
+	bloom_free(big);
+
+	tp_before = ((const AnserBloomPartHeader *) acc)->total_parts;
+	mismatch_rejected = big_len != acc_len &&
+		!AnserBloomFoldPartInPlace(acc, acc_len, big_part, big_len);
+	tp_after = ((const AnserBloomPartHeader *) acc)->total_parts;
+	mismatch_rejected = mismatch_rejected && tp_before == tp_after;
+
+	PG_RETURN_BOOL(same_ok && mismatch_rejected);
+}
+
+/*
  * Security regression: a crafted bloom part with a tiny bitset (e.g. bits = 4,
  * so bitset_bytes == 0) must be rejected rather than producing a filter with no
  * bitset storage (which membership tests would index out of bounds).  This
- * payload path is reachable from the PUBLIC gp_anser_publish builtin, so all
- * three entry points must return NULL for such a header.  Returns true iff the
- * crafted header is safely rejected everywhere (no crash, no filter built).
+ * payload path is reachable from the PUBLIC gp_anser_publish builtin, so both
+ * entry points must return NULL for such a header.  Returns true iff the crafted
+ * header is safely rejected everywhere (no crash, no filter built).
  */
 Datum
 anser_test_bloom_rejects_tiny(PG_FUNCTION_ARGS)
@@ -468,9 +512,7 @@ anser_test_bloom_rejects_tiny(PG_FUNCTION_ARGS)
 	AnserBloomPartHeader header;
 	uint32		part_index = 0;
 	uint32		total_parts = 0;
-	uint32		received = 0;
 	bloom_filter *from_part;
-	bloom_filter *from_union;
 	bloom_filter *from_params;
 	bool		ok;
 
@@ -486,15 +528,12 @@ anser_test_bloom_rejects_tiny(PG_FUNCTION_ARGS)
 	/* The header itself is the whole payload (bitset_bytes == 0). */
 	from_part = AnserBloomDeserializePart(&header, sizeof(header),
 										  &part_index, &total_parts);
-	from_union = AnserBloomUnionParts(&header, sizeof(header), 1, &received);
 	from_params = bloom_create_with_params(header.bitset_bits, 3, 0);
 
-	ok = (from_part == NULL && from_union == NULL && from_params == NULL);
+	ok = (from_part == NULL && from_params == NULL);
 
 	if (from_part != NULL)
 		bloom_free(from_part);
-	if (from_union != NULL)
-		bloom_free(from_union);
 	if (from_params != NULL)
 		bloom_free(from_params);
 
@@ -511,7 +550,12 @@ anser_test_node_roundtrip(PG_FUNCTION_ARGS)
 	Datum		value = Int32GetDatum(value_arg);
 	bool		ok;
 
-	if (!AnserRegisterCondition(99, 1, 1, "node_roundtrip", 1, &key))
+	MemSet(&key, 0, sizeof(key));
+	key.gp_session_id = 99;
+	key.gp_command_count = 1;
+	key.condition_id = 1;
+	strlcpy(key.condition_key, "node_roundtrip", ANSER_CONDITION_KEY_SIZE);
+	if (!AnserProducerBegin(&key, 1, GetUserId(), superuser()))
 		PG_RETURN_BOOL(false);
 	if (!AnserSubscribe(&key))
 		PG_RETURN_BOOL(false);
@@ -784,6 +828,258 @@ anser_test_abandoned_consumer_recycles(PG_FUNCTION_ARGS)
 	PG_END_TRY();
 
 	PG_RETURN_BOOL(ok);
+}
+
+/*
+ * Payload-DSM lifetime, scenario (1): 5 producers, N (= segment count) consumers,
+ * successful delivery.  The shared payload DSM must survive past the last consume
+ * (the recycle to CONSUMED does not free it) and be released only when the sweep
+ * reclaims the drained channel.  We keep the sweep paused to observe the deferred
+ * state, then sweep explicitly.
+ */
+Datum
+anser_test_dsm_free_on_success(PG_FUNCTION_ARGS)
+{
+	char	   *saved_host = qdHostname;
+	int			saved_port = qdPostmasterPort;
+	AnserChannelKey key;
+	unsigned char part[4];
+	int			nseg = getgpsegmentCount();
+	PGconn	  **cons;
+	int			i;
+	bool		all_read = true;
+	bool		present_after_consume = false;
+	bool		gone_after_sweep = false;
+
+	if (nseg < 1)
+		nseg = 1;
+
+	AnserSetSweepEnabled(false);	/* observe the deferred free ourselves */
+	qdHostname = anser_loopback_host();
+	qdPostmasterPort = PostPortNumber;
+
+	MemSet(&key, 0, sizeof(key));
+	key.gp_session_id = 40;
+	key.gp_command_count = 1;
+	key.condition_id = 1;
+	strlcpy(key.condition_key, "dsm_success", ANSER_CONDITION_KEY_SIZE);
+	memset(part, 0xAB, sizeof(part));
+
+	cons = (PGconn **) palloc0(sizeof(PGconn *) * nseg);
+
+	PG_TRY();
+	{
+		bool		ready = false;
+
+		/* 5 producers publish until the channel is READY (payload allocated). */
+		if (AnserProducerBegin(&key, 5, GetUserId(), superuser()))
+		{
+			int			p;
+
+			ready = true;
+			for (p = 0; p < 5; p++)
+				if (!AnserPublish(&key, part, sizeof(part), false))
+					ready = false;
+		}
+
+		if (ready)
+		{
+			bool		all_open = true;
+
+			for (i = 0; i < nseg; i++)
+			{
+				cons[i] = anser_open_consumer(&key);
+				if (cons[i] == NULL)
+					all_open = false;
+			}
+
+			if (all_open && anser_wait_consumer_count(&key, nseg))
+			{
+				/* Every consumer receives and copies out the shared payload. */
+				for (i = 0; i < nseg; i++)
+					if (!anser_consumer_returned_row(cons[i]))
+						all_read = false;
+
+				/* Consumed, but the payload DSM is still pinned (freed by sweep). */
+				present_after_consume = AnserChannelPayloadBytes(&key) > 0;
+
+				AnserSetSweepEnabled(true);
+				AnserServiceMaintenance();
+				AnserSetSweepEnabled(false);
+
+				gone_after_sweep = AnserChannelPayloadBytes(&key) < 0;
+			}
+		}
+	}
+	PG_FINALLY();
+	{
+		for (i = 0; i < nseg; i++)
+			if (cons[i] != NULL)
+				PQfinish(cons[i]);
+		qdHostname = saved_host;
+		qdPostmasterPort = saved_port;
+	}
+	PG_END_TRY();
+
+	PG_RETURN_BOOL(all_read && present_after_consume && gone_after_sweep);
+}
+
+/*
+ * Payload-DSM lifetime, scenario (2): only 3 of 5 producers publish, so the
+ * channel never reaches READY.  It stays COLLECTING with a partial payload until
+ * the produce deadline elapses, at which point the gather maintenance cancels it
+ * and frees the payload.  (Consumers are omitted: a COLLECTING channel is never
+ * delivered, so nothing borrows the payload -- the free needs no consumers.)
+ */
+Datum
+anser_test_dsm_free_on_timeout(PG_FUNCTION_ARGS)
+{
+	AnserChannelKey key;
+	unsigned char part[4];
+	char		saved_timeout[32];
+	bool		present_collecting = false;
+	bool		freed_after_timeout = false;
+
+	AnserSetSweepEnabled(false);
+	snprintf(saved_timeout, sizeof(saved_timeout), "%d", gp_anser_timeout_ms);
+	SetConfigOption("gp_anser_timeout_ms", "100", PGC_USERSET, PGC_S_SESSION);
+
+	MemSet(&key, 0, sizeof(key));
+	key.gp_session_id = 41;
+	key.gp_command_count = 1;
+	key.condition_id = 1;
+	strlcpy(key.condition_key, "dsm_timeout", ANSER_CONDITION_KEY_SIZE);
+	memset(part, 0xCD, sizeof(part));
+
+	PG_TRY();
+	{
+		int			p;
+
+		if (AnserProducerBegin(&key, 5, GetUserId(), superuser()))
+		{
+			for (p = 0; p < 3; p++)
+				(void) AnserPublish(&key, part, sizeof(part), false);
+
+			present_collecting = AnserChannelPayloadBytes(&key) > 0;
+
+			/*
+			 * Past the produce deadline the gather maintenance cancels the
+			 * still-COLLECTING channel and frees its partial payload.  Drive one
+			 * gather cycle after the timeout so this is deterministic.
+			 */
+			pg_usleep(200000L);		/* 200 ms > gp_anser_timeout_ms (100 ms) */
+			AnserGatherServiceCycle();
+
+			freed_after_timeout = AnserChannelPayloadBytes(&key) <= 0;
+		}
+	}
+	PG_FINALLY();
+	{
+		SetConfigOption("gp_anser_timeout_ms", saved_timeout,
+						PGC_USERSET, PGC_S_SESSION);
+		AnserSetSweepEnabled(true);
+		AnserServiceMaintenance();	/* reclaim the cancelled entry */
+		AnserSetSweepEnabled(false);
+	}
+	PG_END_TRY();
+
+	PG_RETURN_BOOL(present_collecting && freed_after_timeout);
+}
+
+/*
+ * Payload-DSM lifetime, scenario (3): 5 producers, N consumers, then the query is
+ * cancelled while consumers are attached.  The cancel must NOT free the payload
+ * DSM (a consumer may still be borrowing it); it is released only after every
+ * consumer slot has drained and the sweep reclaims the channel.
+ */
+Datum
+anser_test_dsm_free_on_cancel(PG_FUNCTION_ARGS)
+{
+	char	   *saved_host = qdHostname;
+	int			saved_port = qdPostmasterPort;
+	AnserChannelKey key;
+	unsigned char part[4];
+	int			nseg = getgpsegmentCount();
+	PGconn	  **cons;
+	int			i;
+	bool		present_after_cancel = false;
+	bool		gone_after_sweep = false;
+
+	if (nseg < 1)
+		nseg = 1;
+
+	AnserSetSweepEnabled(false);
+	qdHostname = anser_loopback_host();
+	qdPostmasterPort = PostPortNumber;
+
+	MemSet(&key, 0, sizeof(key));
+	key.gp_session_id = 42;
+	key.gp_command_count = 1;
+	key.condition_id = 1;
+	strlcpy(key.condition_key, "dsm_cancel", ANSER_CONDITION_KEY_SIZE);
+	memset(part, 0xEF, sizeof(part));
+
+	cons = (PGconn **) palloc0(sizeof(PGconn *) * nseg);
+
+	PG_TRY();
+	{
+		bool		ready = false;
+
+		if (AnserProducerBegin(&key, 5, GetUserId(), superuser()))
+		{
+			int			p;
+
+			ready = true;
+			for (p = 0; p < 5; p++)
+				if (!AnserPublish(&key, part, sizeof(part), false))
+					ready = false;
+		}
+
+		if (ready)
+		{
+			bool		all_open = true;
+
+			for (i = 0; i < nseg; i++)
+			{
+				cons[i] = anser_open_consumer(&key);
+				if (cons[i] == NULL)
+					all_open = false;
+			}
+
+			if (all_open && anser_wait_consumer_count(&key, nseg))
+			{
+				/*
+				 * Cancel with consumers attached.  This marks the channel
+				 * cancelled but must leave the payload DSM pinned -- a consumer
+				 * may still be borrowing it -- so it is still present right after.
+				 */
+				AnserCancelQuery(key.gp_session_id, key.gp_command_count);
+				present_after_cancel = AnserChannelPayloadBytes(&key) > 0;
+
+				/* Drain every consumer (each reads its copy or gets cancelled). */
+				for (i = 0; i < nseg; i++)
+					(void) anser_consumer_returned_row(cons[i]);
+
+				/* Slots drained: the sweep may now reclaim and free the payload. */
+				AnserSetSweepEnabled(true);
+				AnserServiceMaintenance();
+				AnserSetSweepEnabled(false);
+
+				gone_after_sweep = AnserChannelPayloadBytes(&key) < 0;
+			}
+		}
+	}
+	PG_FINALLY();
+	{
+		for (i = 0; i < nseg; i++)
+			if (cons[i] != NULL)
+				PQfinish(cons[i]);
+		qdHostname = saved_host;
+		qdPostmasterPort = saved_port;
+	}
+	PG_END_TRY();
+
+	PG_RETURN_BOOL(present_after_cancel && gone_after_sweep);
 }
 
 /*

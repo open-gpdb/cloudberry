@@ -56,6 +56,89 @@ The pay-off of this split: a producer can publish and leave, a consumer can bloc
 without pinning anything, and the coordinator still unions once and fans the
 result out — see the data-flow section below.
 
+### Gather-service wakeup cycle
+
+The gather worker owns the **gather latch** and sleeps on it between passes.
+Setting that latch is the "producer work is pending" signal — raised by
+`AnserRegisterCondition`, `AnserProducerBegin`, `AnserPublish`, and (the common
+one) `AnserEnqueueSubmission` when a remote producer drops a part into a free
+submission-queue slot and blocks for its ACK.
+
+```
+producer backend                         gather worker (looping)
+────────────────                         ───────────────────────
+enqueue part → slot = PENDING
+SetLatch(gather_latch) ───────────────►  WaitLatch(gather_latch) returns
+block on own latch                       ResetLatch(gather_latch)
+   │                                     AnserGatherServiceCycle():
+   │                                       for each PENDING slot:
+   │                                         AnserGatherApply()  ← fold/union part,
+   │                                             advance channel toward READY
+   │                                         slot = ACCEPTED/REJECTED
+   ▼                                         SetLatch(producer_latch) ─┐
+wake, read ACK, free slot  ◄───────────────────────────────────────── ┘
+                                           AnserCancelStaleChannels()   (timeouts)
+                                           AnserReapSubmissionSlots()
+                                         AnserServiceMaintenance()      (orphan sweep)
+                                         SetLatch(send_latch) on READY ─► send worker
+                                         WaitLatch(gather_latch) …      (sleep again)
+```
+
+Key properties:
+
+- **No lost wakeups.** If the latch is set while the worker is mid-pass (not yet
+  waiting), it stays set and the next `WaitLatch` returns immediately.
+- **Two hand-offs.** The cycle wakes each producer via *its own* latch (the ACK),
+  and wakes the **send** worker via the send latch once a channel reaches `READY`
+  — the gather worker never delivers to consumers itself.
+- **Timed fallback.** The same cycle also runs every
+  `ANSER_SERVICE_WAKEUP_INTERVAL_MS` even with no latch set, so stale
+  `COLLECTING` channels time out and orphaned channels get swept while idle.
+
+### Send-service wakeup cycle
+
+The send worker owns the **send latch** and sleeps on it. Setting that latch
+means "a channel is now deliverable or cancellable, or a consumer is now
+waiting" — raised by the gather worker when a channel reaches `READY`
+(`AnserGatherApply`), by the publish/cancel/timeout paths when a channel is
+cancelled, and by a consumer when it subscribes (`AnserConsumerWait`) or abandons
+its wait (`AnserAbandonWaitSlot`).
+
+```
+gather worker / canceller /               send worker (looping)                consumer backend
+consumer subscribe                        ─────────────────────                ────────────────
+──────────────────────────                                                     subscribe: slot = WAITING
+channel → READY | CANCELLED | CONSUMED
+SetLatch(send_latch) ───────────────────► WaitLatch(send_latch) returns
+                                          ResetLatch(send_latch)
+                                          AnserSendServiceCycle():
+                                            for each READY/terminal channel:
+                                              for each WAITING slot on it:
+                                                READY  → copy payload → slot,
+                                                          slot = DELIVERED ────► wake, read payload,
+                                                terminal → slot = CANCELLED ───► (or cancel → fail open),
+                                                SetLatch(consumer_latch)         free slot
+                                                done_consumers++
+                                              all served → recycle CONSUMED
+                                            AnserReapWaitSlots()
+                                          WaitLatch(send_latch) …  (sleep again)
+```
+
+Key properties:
+
+- **Per-consumer delivery.** Each `WAITING` slot gets its *own* pinned copy of the
+  merged payload, so delivery is per-consumer — one consumer's cancel (or a DSM
+  shortage that cancels just it) never affects another's delivery.
+- **Straggler safety.** A consumer that registers on an already-terminal channel
+  is handed a cancel and fails open, instead of blocking on a channel the sweep
+  would otherwise never reclaim.
+- **Recycle.** Once `done_consumers` reaches `expected_consumers` (one per
+  segment) the channel becomes `CONSUMED` and its payload is freed.
+- **No lost wakeups / timed fallback.** Like the gather worker: a latch set
+  mid-pass is honored next loop, and the same cycle runs every
+  `ANSER_SERVICE_WAKEUP_INTERVAL_MS` so straggler cancels and recycling still
+  happen while idle.
+
 ## GUCs
 
 | GUC | Default | Context | Meaning |
@@ -218,10 +301,9 @@ A channel moves through five states (`AnserChannelState`):
   consumers (cancelled mid-wait) stop counting so this can still be reached.
 - **`PENDING`/`COLLECTING` → `CANCELLED`** — via `gp_anser_timeout_ms` expiry
   (maintenance sweep on a still-`COLLECTING` channel), a producer publishing a
-  cancel, an explicit `AnserCancelChannel`, a whole-query `AnserCancelQuery`, or
-  the creator backend dying. Any consumer blocked on the channel is woken with a
-  cancel and **fails open** (runs unfiltered) — Anser never changes results, only
-  performance.
+  cancel part, a whole-query `AnserCancelQuery`, or the creator backend dying.
+  Any consumer blocked on the channel is woken with a cancel and **fails open**
+  (runs unfiltered) — Anser never changes results, only performance.
 - **terminal (`CANCELLED`/`CONSUMED`) → gone** — the background maintenance sweep
   (unless paused via the test-only `sweep_enabled` knob) removes terminal and
   orphaned channels, freeing the slot; a later registration reusing the same key

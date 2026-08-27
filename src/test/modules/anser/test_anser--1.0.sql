@@ -49,15 +49,6 @@ RETURNS text
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT;
 
-CREATE FUNCTION anser_test_cancel_channel(
-    gp_session_id int4,
-    gp_command_count int4,
-    condition_id int4,
-    condition_key text)
-RETURNS bool
-AS 'MODULE_PATHNAME'
-LANGUAGE C STRICT;
-
 CREATE FUNCTION anser_test_cancel_query(
     gp_session_id int4,
     gp_command_count int4)
@@ -72,14 +63,6 @@ RETURNS bool
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT;
 
-CREATE FUNCTION anser_test_bloom_union(
-    condition_key text,
-    left_value int4,
-    right_value int4)
-RETURNS bool
-AS 'MODULE_PATHNAME'
-LANGUAGE C STRICT;
-
 CREATE FUNCTION anser_test_bloom_fold(
     condition_key text,
     left_value int4,
@@ -87,6 +70,11 @@ CREATE FUNCTION anser_test_bloom_fold(
 RETURNS bool
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT;
+
+CREATE FUNCTION anser_test_bloom_fold_inplace()
+RETURNS bool
+AS 'MODULE_PATHNAME'
+LANGUAGE C;
 
 CREATE FUNCTION anser_test_payload_combine()
 RETURNS bool
@@ -117,6 +105,21 @@ CREATE FUNCTION anser_test_abandoned_consumer_recycles(value int4)
 RETURNS bool
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT;
+
+CREATE FUNCTION anser_test_dsm_free_on_success()
+RETURNS bool
+AS 'MODULE_PATHNAME'
+LANGUAGE C;
+
+CREATE FUNCTION anser_test_dsm_free_on_timeout()
+RETURNS bool
+AS 'MODULE_PATHNAME'
+LANGUAGE C;
+
+CREATE FUNCTION anser_test_dsm_free_on_cancel()
+RETURNS bool
+AS 'MODULE_PATHNAME'
+LANGUAGE C;
 
 CREATE FUNCTION anser_test_set_sweep(enabled bool)
 RETURNS void
