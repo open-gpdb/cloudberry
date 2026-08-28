@@ -1036,6 +1036,17 @@ struct config_bool ConfigureNamesBool_gp[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"gp_anser_conn", PGC_BACKEND, GP_WORKER_IDENTITY,
+			gettext_noop("Specify this is a connection for the Anser runtime filter transport"),
+			NULL,
+			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE | GUC_NO_RESET_ALL
+		},
+		&gp_anser_conn,
+		false,
+		NULL, NULL, NULL
+	},
+
 
 	{
 		{"gp_cost_hashjoin_chainwalk", PGC_USERSET, QUERY_TUNING_COST,

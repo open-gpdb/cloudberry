@@ -71,6 +71,7 @@ PG_FUNCTION_INFO_V1(anser_test_bloom_fold_inplace);
 PG_FUNCTION_INFO_V1(anser_test_bloom_rejects_mismatch);
 PG_FUNCTION_INFO_V1(anser_test_node_roundtrip);
 PG_FUNCTION_INFO_V1(anser_test_client_roundtrip);
+PG_FUNCTION_INFO_V1(anser_test_token_roundtrip);
 PG_FUNCTION_INFO_V1(anser_test_multi_consumer);
 PG_FUNCTION_INFO_V1(anser_test_abandoned_consumer_recycles);
 PG_FUNCTION_INFO_V1(anser_test_dsm_free_on_success);
@@ -524,7 +525,8 @@ anser_test_node_roundtrip(PG_FUNCTION_ARGS)
 	if (!AnserSubscribe(&key))
 		PG_RETURN_BOOL(false);
 
-	producer = ExecInitAnserBloomFilterProduce(&key, 32, 1024 * 1024, 0, 1);
+	producer = ExecInitAnserBloomFilterProduce(&key, 32, 1024 * 1024, 0, 1,
+											   NULL);
 	if (producer == NULL)
 		PG_RETURN_BOOL(false);
 	ExecAnserBloomFilterProduceAddDatum(producer, value, false);
@@ -533,7 +535,8 @@ anser_test_node_roundtrip(PG_FUNCTION_ARGS)
 	if (!ok)
 		PG_RETURN_BOOL(false);
 
-	consumer = ExecInitAnserBloomFilterConsume(&key, 32, 1024 * 1024, 1);
+	consumer = ExecInitAnserBloomFilterConsume(&key, 32, 1024 * 1024, 1,
+											   NULL);
 	if (consumer == NULL)
 		PG_RETURN_BOOL(false);
 	ok = ExecAnserBloomFilterConsume(consumer, 1000) &&
@@ -579,8 +582,8 @@ anser_test_client_roundtrip(PG_FUNCTION_ARGS)
 
 	PG_TRY();
 	{
-		if (AnserClientPublish(&key, 1, payload, sizeof(payload), false) &&
-			AnserClientConsumeWait(&key, &out, &out_len, &cancelled) &&
+		if (AnserClientPublish(&key, 1, payload, sizeof(payload), false, NULL) &&
+			AnserClientConsumeWait(&key, &out, &out_len, &cancelled, NULL) &&
 			!cancelled &&
 			out_len == sizeof(payload) &&
 			memcmp(out, payload, out_len) == 0)
@@ -595,6 +598,32 @@ anser_test_client_roundtrip(PG_FUNCTION_ARGS)
 
 	if (out != NULL)
 		pfree(out);
+
+	PG_RETURN_BOOL(ok);
+}
+
+/*
+ * Session-token round trip: register this session's token, prove it validates
+ * for this session user, that a bogus token and a bogus user are rejected, and
+ * that a second call returns the same token (one token per session).
+ */
+Datum
+anser_test_token_roundtrip(PG_FUNCTION_ARGS)
+{
+	Oid			user = GetSessionUserId();
+	char	   *token = AnserGetOrCreateSessionToken(user);
+	char	   *again;
+	bool		ok;
+
+	if (token == NULL)
+		PG_RETURN_BOOL(false);
+
+	ok = AnserSessionTokenIsValid(user, token) &&
+		!AnserSessionTokenIsValid(user, "00000000000000000000000000000000") &&
+		!AnserSessionTokenIsValid(InvalidOid, token);
+
+	again = AnserGetOrCreateSessionToken(user);
+	ok = ok && again != NULL && strcmp(again, token) == 0;
 
 	PG_RETURN_BOOL(ok);
 }
@@ -1318,9 +1347,6 @@ anser_make_test_part(const char *condition_key, int32 value, Size *len_out)
 	Size		sz;
 	Size		len = 0;
 	char	   *buf;
-
-	if (filter == NULL)
-		return NULL;
 
 	bloom_add_element(filter, (unsigned char *) &d, sizeof(Datum));
 	sz = AnserBloomSerializedSize(filter);

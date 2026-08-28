@@ -37,6 +37,7 @@ struct AnserBloomFilterConsumeState
 {
 	AnserChannelKey channel_key;
 	bloom_filter *filter;
+	char	   *token;		/* QD session token for the libpq transport, or NULL */
 	int64		total_elems;	/* filter sizing, shared with the producer */
 	Size		max_payload_bytes;
 	uint64		seed;
@@ -53,7 +54,8 @@ static bool ExecAnserBloomFilterConsumeClient(AnserBloomFilterConsumeState *stat
 AnserBloomFilterConsumeState *
 ExecInitAnserBloomFilterConsume(const AnserChannelKey *channel_key,
 								int64 total_elems, Size max_payload_bytes,
-								uint32 expected_parts)
+								uint32 expected_parts,
+								const char *token)
 {
 	AnserBloomFilterConsumeState *state;
 
@@ -66,6 +68,7 @@ ExecInitAnserBloomFilterConsume(const AnserChannelKey *channel_key,
 	state->max_payload_bytes = max_payload_bytes;
 	state->seed = AnserBloomSeed(channel_key->condition_key);
 	state->expected_parts = expected_parts;
+	state->token = (token != NULL && token[0] != '\0') ? pstrdup(token) : NULL;
 	return state;
 }
 
@@ -168,7 +171,7 @@ ExecAnserBloomFilterConsumeClient(AnserBloomFilterConsumeState *state)
 	bool		cancelled = false;
 
 	if (!AnserClientConsumeWait(&state->channel_key, &payload, &payload_len,
-								&cancelled) || cancelled)
+								&cancelled, state->token) || cancelled)
 	{
 		if (payload != NULL)
 			pfree(payload);

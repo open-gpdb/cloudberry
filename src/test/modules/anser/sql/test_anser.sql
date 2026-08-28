@@ -80,6 +80,10 @@ SELECT gp_anser_consume_wait(11, 1, 1, 'svc_timeout') IS NULL AS consume_cancell
 -- end-to-end without a multi-node cluster.
 SELECT anser_test_client_roundtrip(4242) AS client_ok;
 
+-- Session token: registration, validation, and rejection of bogus token/user
+-- (the token authenticates the segment -> QD backward connection).
+SELECT anser_test_token_roundtrip() AS token_ok;
+
 -- Multi-consumer partial delivery: two consumers block concurrently on one
 -- channel (loopback libpq); one is cancelled mid-wait while the other still
 -- receives the intact payload.  Proves delivery is per-consumer.

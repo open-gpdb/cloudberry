@@ -36,21 +36,25 @@
  * connection to the QD, runs gp_anser_producer_begin + gp_anser_publish, and
  * closes.  Fail-open: any connection/protocol error best-effort publishes a
  * cancel for the dataset and returns false, never raising.
+ *
+ * `token` is the QD session token used to authenticate the connection (the
+ * parallel-retrieve-cursor model: gp_anser_conn=true + token as password,
+ * bypassing pg_hba); NULL or "" connects without it and relies on pg_hba.
  */
 extern bool AnserClientPublish(const AnserChannelKey *channel_key,
 							   uint32 expected_producers,
 							   const void *payload, Size payload_len,
-							   bool cancelled);
+							   bool cancelled, const char *token);
 
 /*
  * Wait for delivery of a channel payload from the coordinator.  Opens a
  * query-lifetime libpq connection to the QD, runs gp_anser_consume_wait, and
  * blocks (interruptibly) until the row arrives.  On success *payload points at a
  * palloc'd copy of the bytes.  Connection loss is treated as a cancel for this
- * consumer only.
+ * consumer only.  `token` is as in AnserClientPublish.
  */
 extern bool AnserClientConsumeWait(const AnserChannelKey *channel_key,
 								   void **payload, Size *payload_len,
-								   bool *cancelled);
+								   bool *cancelled, const char *token);
 
 #endif							/* CDB_ANSERCLIENT_H */

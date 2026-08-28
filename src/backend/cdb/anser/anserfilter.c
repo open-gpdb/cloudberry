@@ -56,14 +56,15 @@ AnserBloomSeed(const char *condition_key)
 }
 
 /*
- * Build the bloom filter for a channel from the caller's parameters.
+ * Build an empty bloom filter for a channel from the caller's parameters.
  *
- * Producer and consumer both call this with the SAME (total_elems,
- * max_payload_bytes, seed) -- carried in the plan node's custom_private and
- * derived from the shared condition key -- so every segment and the consumer
- * realize a byte-for-byte identical filter shape.  This is why the serialized
- * part header does not need to carry the bitset parameters: the reconstructing
- * side already knows them (see AnserBloomDeserializePart).
+ * The producer builds its filter here; the consumer rebuilds an identical one
+ * from the received bitset (AnserBloomDeserializePart -> bloom_create_from_bitset)
+ * using the SAME (total_elems, max_payload_bytes, seed) -- carried in the plan
+ * node's custom_private and derived from the shared condition key -- so every
+ * segment and the consumer realize a byte-for-byte identical filter shape.  This
+ * is why the serialized part header does not need to carry the bitset parameters:
+ * the reconstructing side already knows them.
  *
  * We defer sizing to the standard bloom_create, which targets ~2 bytes per
  * element, rounds the bitset down to a power of two, and floors it at 1 MB.
@@ -73,12 +74,8 @@ AnserBloomSeed(const char *condition_key)
 bloom_filter *
 AnserBloomCreate(int64 total_elems, Size max_payload_bytes, uint64 seed)
 {
-	if (max_payload_bytes <= sizeof(AnserBloomPartHeader))
-		return NULL;
-
-	/* optimal_k divides by total_elems; never hand bloom_create zero. */
-	if (total_elems < 1)
-		total_elems = 1;
+	/* Internal callers always size the payload to hold a header + bitset. */
+	Assert(max_payload_bytes > sizeof(AnserBloomPartHeader));
 
 	return bloom_create(total_elems, AnserBloomWorkMemKb(max_payload_bytes), seed);
 }

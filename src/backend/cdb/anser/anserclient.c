@@ -24,8 +24,11 @@
  * cannot touch the coordinator-resident channel map directly.  Instead it opens
  * an ordinary libpq connection to the QD -- discovered from gp_qd_hostname /
  * gp_qd_port, which the dispatcher injects into every QE -- and calls the
- * gp_anser_* built-in functions.  Auth, encryption, and connection lifecycle are
- * inherited from libpq; these helpers are the client edges only.
+ * gp_anser_* built-in functions.  When the QD supplied a session token (carried
+ * in the plan), the connection authenticates with it via the gp_anser_conn
+ * startup marker, bypassing pg_hba (the parallel-retrieve-cursor model);
+ * otherwise authentication falls back to pg_hba.  Encryption and connection
+ * lifecycle are inherited from libpq; these helpers are the client edges only.
  *
  * Everything here is fail-open: a broken connection degrades to unfiltered
  * execution, never to a wrong result or an error propagated into the query.
@@ -52,7 +55,7 @@
 /* Enough for the decimal form of any int32 argument. */
 #define ANSER_INT_STRLEN	12
 
-static PGconn *anser_client_connect(void);
+static PGconn *anser_client_connect(const char *token);
 static int	anser_client_exec_bool(PGconn *conn, const char *sql, int nparams,
 								   const char *const *values, const int *lengths,
 								   const int *formats);
@@ -73,12 +76,19 @@ static PGresult *anser_client_wait_result(PGconn *conn, const char *sql,
 /*
  * Open a libpq connection to the QD postmaster, reusing the query's database and
  * user.  Returns NULL (never raises) on any failure so callers can fail open.
+ *
+ * When a session token is given, the connection carries the gp_anser_conn=true
+ * startup marker and the token as password, which the QD authenticates against
+ * its session-token hash before pg_hba is consulted (see
+ * anser_conn_authentication in libpq/auth.c) -- so no pg_hba entry for the
+ * segment hosts is needed.  Without a token the connection goes through
+ * ordinary pg_hba-driven authentication.
  */
 static PGconn *
-anser_client_connect(void)
+anser_client_connect(const char *token)
 {
-	const char *keywords[8];
-	const char *values[8];
+	const char *keywords[10];
+	const char *values[10];
 	int			n = 0;
 	char		portstr[ANSER_INT_STRLEN];
 	const char *dbname;
@@ -122,6 +132,18 @@ anser_client_connect(void)
 	n++;
 	keywords[n] = "connect_timeout";
 	values[n] = "10";
+	n++;
+	if (token != NULL && token[0] != '\0')
+	{
+		keywords[n] = "password";
+		values[n] = token;
+		n++;
+		keywords[n] = "options";
+		values[n] = "-c gp_anser_conn=true";
+		n++;
+	}
+	keywords[n] = "application_name";
+	values[n] = "anser_rf";
 	n++;
 	keywords[n] = NULL;
 	values[n] = NULL;
@@ -240,7 +262,7 @@ anser_client_publish_part(PGconn *conn, const AnserChannelKey *key,
 bool
 AnserClientPublish(const AnserChannelKey *channel_key,
 				   uint32 expected_producers, const void *payload,
-				   Size payload_len, bool cancelled)
+				   Size payload_len, bool cancelled, const char *token)
 {
 	PGconn	   *conn;
 	bool		ok = false;
@@ -248,7 +270,7 @@ AnserClientPublish(const AnserChannelKey *channel_key,
 	if (channel_key == NULL)
 		return false;
 
-	conn = anser_client_connect();
+	conn = anser_client_connect(token);
 	if (conn == NULL)
 		return false;			/* fail open */
 
@@ -341,7 +363,7 @@ anser_client_wait_result(PGconn *conn, const char *sql, int nparams,
 
 bool
 AnserClientConsumeWait(const AnserChannelKey *channel_key, void **payload,
-					   Size *payload_len, bool *cancelled)
+					   Size *payload_len, bool *cancelled, const char *token)
 {
 	PGconn	   *conn;
 	PGresult   *res;
@@ -361,7 +383,7 @@ AnserClientConsumeWait(const AnserChannelKey *channel_key, void **payload,
 	if (channel_key == NULL)
 		return false;
 
-	conn = anser_client_connect();
+	conn = anser_client_connect(token);
 	if (conn == NULL)
 	{
 		if (cancelled != NULL)

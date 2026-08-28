@@ -37,6 +37,7 @@ struct AnserBloomFilterProduceState
 {
 	AnserChannelKey channel_key;
 	bloom_filter *filter;
+	char	   *token;		/* QD session token for the libpq transport, or NULL */
 	uint32		part_index;
 	uint32		total_parts;
 	bool		published;
@@ -55,7 +56,7 @@ AnserProducePublishPart(AnserBloomFilterProduceState *state,
 {
 	if (Gp_role == GP_ROLE_EXECUTE)
 		return AnserClientPublish(&state->channel_key, state->total_parts,
-								  payload, payload_len, cancelled);
+								  payload, payload_len, cancelled, state->token);
 
 	return AnserPublish(&state->channel_key, payload, payload_len, cancelled);
 }
@@ -65,7 +66,8 @@ ExecInitAnserBloomFilterProduce(const AnserChannelKey *channel_key,
 								int64 total_elems,
 								Size max_payload_bytes,
 								uint32 part_index,
-								uint32 total_parts)
+								uint32 total_parts,
+								const char *token)
 {
 	AnserBloomFilterProduceState *state;
 	uint64		seed;
@@ -77,11 +79,9 @@ ExecInitAnserBloomFilterProduce(const AnserChannelKey *channel_key,
 	state->channel_key = *channel_key;
 	state->part_index = part_index;
 	state->total_parts = total_parts;
+	state->token = (token != NULL && token[0] != '\0') ? pstrdup(token) : NULL;
 	seed = AnserBloomSeed(channel_key->condition_key);
 	state->filter = AnserBloomCreate(total_elems, max_payload_bytes, seed);
-
-	if (state->filter == NULL)
-		state->cancelled = true;
 
 	return state;
 }
@@ -90,7 +90,7 @@ void
 ExecAnserBloomFilterProduceAddDatum(AnserBloomFilterProduceState *state,
 									Datum value, bool isnull)
 {
-	if (state == NULL || state->filter == NULL || state->published || isnull)
+	if (state == NULL || state->published || isnull)
 		return;
 
 	bloom_add_element(state->filter, (unsigned char *) &value, sizeof(Datum));
@@ -107,7 +107,7 @@ ExecAnserBloomFilterProducePublish(AnserBloomFilterProduceState *state)
 	if (state == NULL || state->published)
 		return false;
 
-	if (state->cancelled || state->filter == NULL)
+	if (state->cancelled)
 	{
 		state->published = true;
 		return AnserProducePublishPart(state, NULL, 0, true);

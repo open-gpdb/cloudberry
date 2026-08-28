@@ -54,8 +54,8 @@
 
 /*
  * Positional layout of CustomScan.custom_private shared with anserplan.c.
- * Integer nodes except the last, which is a String.  Both providers read the
- * same list (each ignores fields it does not need).
+ * Integer nodes except the last two, which are Strings.  Both providers read
+ * the same list (each ignores fields it does not need).
  */
 typedef enum AnserRfPrivateIndex
 {
@@ -65,6 +65,7 @@ typedef enum AnserRfPrivateIndex
 	ANSER_RF_PRIV_MAX_PAYLOAD,			/* Integer: bloom sizing (producer) */
 	ANSER_RF_PRIV_PLANNED_BYTES,		/* Integer: planned bitset bytes (EXPLAIN) */
 	ANSER_RF_PRIV_CONDITION_KEY,		/* String:  channel condition_key */
+	ANSER_RF_PRIV_TOKEN,				/* String:  QD session token (may be "") */
 	ANSER_RF_PRIV__COUNT
 } AnserRfPrivateIndex;
 
@@ -77,6 +78,7 @@ typedef struct AnserBloomProduceScanState
 	AnserBloomFilterProduceState *produce;
 	AttrNumber	key_attno;
 	int64		planned_bytes;
+	char	   *token;		/* QD session token, NULL when none */
 	bool		published;
 } AnserBloomProduceScanState;
 
@@ -87,6 +89,7 @@ typedef struct AnserBloomConsumeScanState
 	bloom_filter *filter;		/* NULL => fail open (pass everything) */
 	AttrNumber	key_attno;
 	int64		planned_bytes;
+	char	   *token;		/* QD session token, NULL when none */
 	bool		received;		/* have we run the receive/union yet? */
 } AnserBloomConsumeScanState;
 
@@ -185,7 +188,8 @@ static CustomScan *
 anser_build_rf_scan(const CustomScanMethods *methods, Plan *child,
 					AttrNumber key_attno, uint32 condition_id,
 					const char *condition_key, int64 total_elems,
-					Size max_payload_bytes, int64 planned_bytes)
+					Size max_payload_bytes, int64 planned_bytes,
+					const char *token)
 {
 	CustomScan *cs = makeNode(CustomScan);
 	List	   *priv = NIL;
@@ -197,6 +201,7 @@ anser_build_rf_scan(const CustomScanMethods *methods, Plan *child,
 	priv = lappend(priv, makeInteger((int) max_payload_bytes));
 	priv = lappend(priv, makeInteger((int) planned_bytes));
 	priv = lappend(priv, makeString(pstrdup(condition_key)));
+	priv = lappend(priv, makeString(pstrdup(token != NULL ? token : "")));
 
 	cs->scan.plan.targetlist = anser_rf_identity_tlist(child->targetlist);
 	cs->scan.plan.qual = NIL;
@@ -224,22 +229,22 @@ CustomScan *
 AnserBuildBloomProducerScan(Plan *child, AttrNumber key_attno,
 							uint32 condition_id, const char *condition_key,
 							int64 total_elems, Size max_payload_bytes,
-							int64 planned_bytes)
+							int64 planned_bytes, const char *token)
 {
 	return anser_build_rf_scan(&anser_produce_scan_methods, child, key_attno,
 							   condition_id, condition_key, total_elems,
-							   max_payload_bytes, planned_bytes);
+							   max_payload_bytes, planned_bytes, token);
 }
 
 CustomScan *
 AnserBuildBloomConsumerScan(Plan *child, AttrNumber key_attno,
 							uint32 condition_id, const char *condition_key,
 							int64 total_elems, Size max_payload_bytes,
-							int64 planned_bytes)
+							int64 planned_bytes, const char *token)
 {
 	return anser_build_rf_scan(&anser_consume_scan_methods, child, key_attno,
 							   condition_id, condition_key, total_elems,
-							   max_payload_bytes, planned_bytes);
+							   max_payload_bytes, planned_bytes, token);
 }
 
 /* ---- shared helpers ---- */
@@ -256,6 +261,15 @@ anser_rf_build_key(CustomScan *cscan, AnserChannelKey *key)
 	key->gp_command_count = gp_command_count;
 	key->condition_id = (uint32) condition_id;
 	strlcpy(key->condition_key, condition_key, ANSER_CONDITION_KEY_SIZE);
+}
+
+/* Session token carried in custom_private; NULL when absent/empty. */
+static char *
+anser_rf_token(CustomScan *cscan)
+{
+	char	   *token = strVal(list_nth(cscan->custom_private, ANSER_RF_PRIV_TOKEN));
+
+	return token[0] != '\0' ? token : NULL;
 }
 
 /*
@@ -319,13 +333,15 @@ anser_produce_begin(CustomScanState *node, EState *estate, int eflags)
 
 	st->key_attno = (AttrNumber) intVal(list_nth(priv, ANSER_RF_PRIV_KEY_ATTNO));
 	st->planned_bytes = intVal(list_nth(priv, ANSER_RF_PRIV_PLANNED_BYTES));
+	st->token = anser_rf_token(cscan);
 	st->published = false;
 
 	anser_rf_build_key(cscan, &key);
 	anser_rf_part_info(&part_index, &total_parts);
 
 	st->produce = ExecInitAnserBloomFilterProduce(&key, total_elems, max_payload,
-												  part_index, total_parts);
+												  part_index, total_parts,
+												  st->token);
 
 	node->custom_ps = list_make1(ExecInitNode(child, estate, eflags));
 }
@@ -393,8 +409,18 @@ static void
 anser_produce_explain(CustomScanState *node, List *ancestors, ExplainState *es)
 {
 	AnserBloomProduceScanState *st = (AnserBloomProduceScanState *) node;
+	char		buf[64];
 
 	ExplainPropertyInteger("Bloom Filter Size", "bytes", st->planned_bytes, es);
+
+	/*
+	 * The realized filter size is planned_bytes by construction: producer and
+	 * consumer build identical filters from the same plan parameters (see
+	 * anser_rf_size in anserplan.c), so no execution stats are needed.
+	 */
+	snprintf(buf, sizeof(buf), "memory=" INT64_FORMAT "kB",
+			 st->planned_bytes / 1024);
+	ExplainPropertyString("Bloom Filter Stats", buf, es);
 }
 
 /* ---- consumer ---- */
@@ -424,6 +450,7 @@ anser_consume_begin(CustomScanState *node, EState *estate, int eflags)
 
 	st->key_attno = (AttrNumber) intVal(list_nth(priv, ANSER_RF_PRIV_KEY_ATTNO));
 	st->planned_bytes = intVal(list_nth(priv, ANSER_RF_PRIV_PLANNED_BYTES));
+	st->token = anser_rf_token(cscan);
 	st->filter = NULL;
 	st->received = false;
 
@@ -431,7 +458,7 @@ anser_consume_begin(CustomScanState *node, EState *estate, int eflags)
 	anser_rf_part_info(&part_index, &expected_parts);
 
 	st->consume = ExecInitAnserBloomFilterConsume(&key, total_elems, max_payload,
-												  expected_parts);
+												  expected_parts, st->token);
 
 	node->custom_ps = list_make1(ExecInitNode(child, estate, eflags));
 }
@@ -492,13 +519,22 @@ anser_consume_next(CustomScanState *node)
 		value = slot_getattr(slot, st->key_attno, &isnull);
 
 		/* NULLs never match an equijoin key; let the join handle them. */
-		if (!isnull &&
-			bloom_lacks_element(st->filter, (unsigned char *) &value,
-								sizeof(Datum)))
+		if (!isnull)
 		{
-			/* Definitely absent from the build side -> prune. */
-			InstrCountFiltered2(node, 1);
-			continue;
+			/*
+			 * Count lookups/prunes via instrumentation (nfiltered1/nfiltered2),
+			 * not local state: these fields ride the CdbExplain_StatInst wire
+			 * format back to the QD, so EXPLAIN ANALYZE shows them for
+			 * segment-executed nodes too.
+			 */
+			InstrCountFiltered1(node, 1);
+			if (bloom_lacks_element(st->filter, (unsigned char *) &value,
+									sizeof(Datum)))
+			{
+				/* Definitely absent from the build side -> prune. */
+				InstrCountFiltered2(node, 1);
+				continue;
+			}
 		}
 
 		return anser_rf_child_slot(node, slot);
@@ -542,8 +578,23 @@ anser_consume_explain(CustomScanState *node, List *ancestors, ExplainState *es)
 
 	if (es->analyze && node->ss.ps.instrument != NULL)
 	{
+		char		buf[128];
 		double		nloops = node->ss.ps.instrument->nloops;
 		double		nfiltered = node->ss.ps.instrument->nfiltered2;
+		double		nchecked = node->ss.ps.instrument->nfiltered1;
+
+		/*
+		 * checked/rejected come from nfiltered1/nfiltered2, which cdbexplain
+		 * transports from the segments and deposits into this node's
+		 * instrument.  As with all per-node EXPLAIN ANALYZE stats in MPP,
+		 * these are the winning segment's values (max ntuples/nloops), not a
+		 * cluster-wide sum.  memory is planned_bytes: the unioned filter's
+		 * size is identical on every segment by construction (anser_rf_size).
+		 */
+		snprintf(buf, sizeof(buf),
+				 "memory=" INT64_FORMAT "kB checked=%.0f rejected=%.0f",
+				 st->planned_bytes / 1024, nchecked, nfiltered);
+		ExplainPropertyString("Bloom Filter Stats", buf, es);
 
 		if (nloops > 0)
 			ExplainPropertyFloat("Rows Removed by Bloom Filter", NULL,

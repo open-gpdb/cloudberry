@@ -293,27 +293,6 @@ mod_m(uint32 val, uint64 m)
 	return val & (m - 1);
 }
 
-bool
-bloom_union(bloom_filter *dst, const bloom_filter *src)
-{
-	Size		bitset_bytes;
-	Size		i;
-
-	if (dst == NULL || src == NULL)
-		return false;
-
-	if (dst->k_hash_funcs != src->k_hash_funcs ||
-		dst->seed != src->seed ||
-		dst->m != src->m)
-		return false;
-
-	bitset_bytes = (Size) (dst->m / BITS_PER_BYTE);
-	for (i = 0; i < bitset_bytes; i++)
-		dst->bitset[i] |= src->bitset[i];
-
-	return true;
-}
-
 Size
 bloom_bitset_bytes(const bloom_filter *filter)
 {
@@ -332,7 +311,8 @@ bloom_bitset_data(const bloom_filter *filter)
  * supplied length is not the filter's bitset size, so a wrongly-sized bitset is
  * rejected rather than partially loaded.  This is the only supported way to
  * populate a filter from serialized bytes; afterwards a filter is only ever grown
- * by bloom_add_element / bloom_union.
+ * by bloom_add_element (or a raw bitwise OR of two equal-sized serialized parts,
+ * as Anser's coordinator fold does).
  */
 bloom_filter *
 bloom_create_from_bitset(int64 total_elems, int bloom_work_mem, uint64 seed,

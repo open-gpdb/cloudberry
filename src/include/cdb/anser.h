@@ -120,6 +120,7 @@ typedef struct AnserControl
 /* GUCs */
 extern bool gp_anser_enable;
 extern bool gp_anser_runtime_filter;
+extern bool gp_anser_conn;		/* startup-option marker for token-auth conns */
 extern int	gp_anser_max_channels;
 extern int	gp_anser_max_info_size;
 extern int	gp_anser_timeout_ms;
@@ -195,5 +196,14 @@ extern void AnserSendServiceCycle(void);
 extern void AnserGatherServiceMain(Datum main_arg);
 extern void AnserSendServiceMain(Datum main_arg);
 extern bool AnserStartRule(Datum main_arg);
+
+/*
+ * Session-token authentication for the segment -> coordinator libpq
+ * transport (parallel-retrieve-cursor model; see anser.c).  The QD calls
+ * AnserGetOrCreateSessionToken at plan time; libpq/auth.c calls
+ * AnserSessionTokenIsValid from the gp_anser_conn authentication branch.
+ */
+extern char *AnserGetOrCreateSessionToken(Oid user_id);
+extern bool AnserSessionTokenIsValid(Oid user_id, const char *token_hex);
 
 #endif							/* CDB_ANSER_H */

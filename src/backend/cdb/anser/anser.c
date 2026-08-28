@@ -31,12 +31,16 @@
 #include "cdb/anser.h"
 #include "cdb/anserfilter.h"
 #include "cdb/cdbutil.h"
+#include "cdb/cdbvars.h"
+#include "common/hashfn.h"
 #include "miscadmin.h"
 #include "storage/dsm_impl.h"
+#include "storage/ipc.h"
 #include "storage/lwlock.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "storage/shmem.h"
+#include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/hsearch.h"
 #include "utils/timestamp.h"
@@ -46,9 +50,39 @@
 #define ANSER_CHANNEL_HASH_NAME	"Anser Channel Hash"
 #define ANSER_SUBMISSION_QUEUE_NAME	"Anser Submission Queue"
 #define ANSER_WAIT_TABLE_NAME		"Anser Consumer Wait Table"
+#define ANSER_TOKEN_HASH_NAME		"Anser Session Token Hash"
+
+/*
+ * Session token hash.
+ *
+ * Remote (segment) producers/consumers authenticate their libpq connection to
+ * the QD with a per-session random token instead of relying on pg_hba entries
+ * covering the segment hosts -- the parallel-retrieve-cursor model (see
+ * retrieve_conn_authentication in libpq/auth.c).  The QD registers one token
+ * per (gp_session_id, session user) when a plan gets its first injected
+ * runtime filter and embeds the token in the dispatched plan; the segment
+ * connects with gp_anser_conn=true and presents the token as the password,
+ * and AnserSessionTokenIsValid() verifies it here.  Entries are removed when
+ * the owning QD session exits.
+ */
+#define ANSER_TOKEN_BYTES		16	/* 128 bits, as ENDPOINT_TOKEN_ARR_LEN */
+#define ANSER_TOKEN_HEX_LEN		(ANSER_TOKEN_BYTES * 2)
+
+typedef struct AnserTokenTag
+{
+	int			session_id;
+	Oid			user_id;
+} AnserTokenTag;
+
+typedef struct AnserTokenEntry
+{
+	AnserTokenTag tag;
+	char		token_hex[ANSER_TOKEN_HEX_LEN + 1];
+} AnserTokenEntry;
 
 bool		gp_anser_enable = false;
 bool		gp_anser_runtime_filter = false;
+bool		gp_anser_conn = false;	/* marker GUC, set only via startup options */
 int			gp_anser_max_channels = 0;	/* 0 = auto (see AnserMaxChannels) */
 int			gp_anser_max_info_size = 64 * 1024 * 1024 + 1024 * 1024;
 int			gp_anser_timeout_ms = 1000;
@@ -124,6 +158,10 @@ static AnserControl *AnserCtl = NULL;
 static HTAB *AnserChannelHash = NULL;
 static AnserSubmissionEntry *AnserSubmissionQueue = NULL;
 static AnserWaitSlot *AnserWaitTable = NULL;
+static HTAB *AnserTokenHash = NULL;
+
+/* Set once this backend has registered its session-token cleanup hook. */
+static bool anser_token_exit_registered = false;
 
 /*
  * Data-path operations -- the internal machinery the public API and the gather/
@@ -180,6 +218,8 @@ static void AnserInitializeControl(bool found);
 static void AnserInitializeChannelHash(void);
 static void AnserInitializeSubmissionQueue(bool found);
 static void AnserInitializeWaitTable(bool found);
+static void AnserInitializeTokenHash(void);
+static void AnserTokenSessionCleanup(int code, Datum arg);
 
 Size
 AnserShmemSize(void)
@@ -193,6 +233,8 @@ AnserShmemSize(void)
 	size = add_size(size, AnserChannelHashSize());
 	size = add_size(size, AnserSubmissionQueueSize());
 	size = add_size(size, AnserWaitTableSize());
+	size = add_size(size, hash_estimate_size(MaxConnections,
+											 sizeof(AnserTokenEntry)));
 
 	return size;
 }
@@ -220,6 +262,8 @@ AnserShmemInit(void)
 		ShmemInitStruct(ANSER_WAIT_TABLE_NAME,
 						AnserWaitTableSize(), &found);
 	AnserInitializeWaitTable(found);
+
+	AnserInitializeTokenHash();
 }
 
 bool
@@ -1748,6 +1792,149 @@ AnserInitializeChannelHash(void)
 									  HASH_ELEM | HASH_BLOBS);
 }
 
+static void
+AnserInitializeTokenHash(void)
+{
+	HASHCTL		hctl;
+
+	MemSet(&hctl, 0, sizeof(hctl));
+	hctl.keysize = sizeof(AnserTokenTag);
+	hctl.entrysize = sizeof(AnserTokenEntry);
+	hctl.hash = tag_hash;
+
+	/* One entry per concurrent session; removed when the session exits. */
+	AnserTokenHash = ShmemInitHash(ANSER_TOKEN_HASH_NAME,
+								   MaxConnections,
+								   MaxConnections,
+								   &hctl,
+								   HASH_ELEM | HASH_FUNCTION);
+}
+
+/*
+ * Drop this session's token entry at backend exit.  Registered once by the
+ * first AnserGetOrCreateSessionToken() call in the backend.
+ */
+static void
+AnserTokenSessionCleanup(int code, Datum arg)
+{
+	AnserTokenTag tag;
+
+	if (AnserTokenHash == NULL)
+		return;
+
+	tag.session_id = gp_session_id;
+	tag.user_id = DatumGetObjectId(arg);
+
+	LWLockAcquire(AnserChannelLock, LW_EXCLUSIVE);
+	(void) hash_search(AnserTokenHash, &tag, HASH_REMOVE, NULL);
+	LWLockRelease(AnserChannelLock);
+}
+
+/*
+ * AnserGetOrCreateSessionToken
+ *
+ * Return this session's token (palloc'd hex string), generating and
+ * registering it on first use.  NULL when the subsystem is off, the user id
+ * is invalid, or the token hash is full -- callers fail open (connect without
+ * the token, i.e. fall back to pg_hba-driven authentication).
+ *
+ * user_id must be the *session* user: segment executors connect back to the
+ * QD as the session user (cdbconn passes MyProcPort->user_name), regardless
+ * of any SET ROLE in effect on the QD.
+ */
+char *
+AnserGetOrCreateSessionToken(Oid user_id)
+{
+	AnserTokenTag tag;
+	AnserTokenEntry *entry;
+	bool		found;
+	char		token_hex[ANSER_TOKEN_HEX_LEN + 1];
+	bool		have_token = false;
+
+	if (!AnserInitialized() || !OidIsValid(user_id))
+		return NULL;
+
+	tag.session_id = gp_session_id;
+	tag.user_id = user_id;
+
+	/* Copy the token into a stack buffer: no palloc while holding the lock. */
+	LWLockAcquire(AnserChannelLock, LW_EXCLUSIVE);
+	entry = (AnserTokenEntry *) hash_search(AnserTokenHash, &tag,
+											HASH_ENTER, &found);
+	if (entry != NULL)
+	{
+		if (!found)
+		{
+			uint8		token[ANSER_TOKEN_BYTES];
+
+			if (!pg_strong_random(token, ANSER_TOKEN_BYTES))
+			{
+				(void) hash_search(AnserTokenHash, &tag, HASH_REMOVE, NULL);
+				entry = NULL;
+			}
+			else
+			{
+				hex_encode((const char *) token, ANSER_TOKEN_BYTES,
+						   entry->token_hex);
+				entry->token_hex[ANSER_TOKEN_HEX_LEN] = '\0';
+			}
+		}
+		if (entry != NULL)
+		{
+			strlcpy(token_hex, entry->token_hex, sizeof(token_hex));
+			have_token = true;
+		}
+	}
+	LWLockRelease(AnserChannelLock);
+
+	if (!have_token)
+		return NULL;
+
+	if (!anser_token_exit_registered)
+	{
+		anser_token_exit_registered = true;
+		before_shmem_exit(AnserTokenSessionCleanup, ObjectIdGetDatum(user_id));
+	}
+
+	return pstrdup(token_hex);
+}
+
+/*
+ * AnserSessionTokenIsValid
+ *
+ * Token check for the gp_anser_conn authentication branch in
+ * libpq/auth.c: true iff some live session of this exact user registered this
+ * token.  Runs before InitPostgres in the accepting backend; shared-memory
+ * pointers are inherited from the postmaster, so no attach is needed.
+ */
+bool
+AnserSessionTokenIsValid(Oid user_id, const char *token_hex)
+{
+	HASH_SEQ_STATUS status;
+	AnserTokenEntry *entry;
+	bool		valid = false;
+
+	if (!AnserInitialized() || !OidIsValid(user_id) || token_hex == NULL ||
+		strlen(token_hex) != ANSER_TOKEN_HEX_LEN)
+		return false;
+
+	LWLockAcquire(AnserChannelLock, LW_SHARED);
+	hash_seq_init(&status, AnserTokenHash);
+	while ((entry = (AnserTokenEntry *) hash_seq_search(&status)) != NULL)
+	{
+		if (entry->tag.user_id == user_id &&
+			strcmp(entry->token_hex, token_hex) == 0)
+		{
+			valid = true;
+			hash_seq_term(&status);
+			break;
+		}
+	}
+	LWLockRelease(AnserChannelLock);
+
+	return valid;
+}
+
 /*
  * Recycle terminal or orphaned channels before declaring registration failure.
  */
@@ -2013,5 +2200,6 @@ AnserWaitForState(const AnserChannelKey *channel_key, long timeout_ms,
 static bool
 AnserInitialized(void)
 {
-	return gp_anser_enable && AnserCtl != NULL && AnserChannelHash != NULL;
+	return gp_anser_enable && AnserCtl != NULL && AnserChannelHash != NULL &&
+		AnserTokenHash != NULL;
 }

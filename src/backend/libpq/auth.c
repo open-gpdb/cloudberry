@@ -49,6 +49,7 @@
 #include "catalog/pg_auth_time_constraint.h"
 #include "catalog/pg_profile.h"
 #include "cdb/cdbendpoint.h"
+#include "cdb/anser.h"
 #include "cdb/cdbvars.h"
 #include "pgtime.h"
 #include "postmaster/loginmonitor.h"
@@ -499,6 +500,93 @@ cmd_options_include_retrieve_conn(char* cmd_options)
 	return ret;
 }
 
+/*
+ * Return true if command line contains gp_anser_conn=true.  Mirrors
+ * cmd_options_include_retrieve_conn() above.
+ */
+static bool
+cmd_options_include_anser_conn(char *cmd_options)
+{
+	char	  **av;
+	int			maxac;
+	int			ac;
+	int			flag;
+	bool		ret = false;
+
+	if (!cmd_options)
+		return false;
+
+	maxac = 2 + (strlen(cmd_options) + 1) / 2;
+
+	av = (char **) palloc(maxac * sizeof(char *));
+	ac = 0;
+
+	av[ac++] = "dummy";
+
+	pg_split_opts(av, &ac, cmd_options);
+
+	av[ac] = NULL;
+
+#ifdef HAVE_INT_OPTERR
+	opterr = 0;
+#endif
+
+	while ((flag = getopt(ac, av, "c:-:")) != -1)
+	{
+		switch (flag)
+		{
+			case 'c':
+			case '-':
+				{
+					char	   *name,
+							   *value;
+
+					ParseLongOption(optarg, &name, &value);
+					if (!value)
+					{
+						if (flag == '-')
+							ereport(ERROR,
+									(errcode(ERRCODE_SYNTAX_ERROR),
+									 errmsg("--%s requires a value",
+											optarg)));
+						else
+							ereport(ERROR,
+									(errcode(ERRCODE_SYNTAX_ERROR),
+									 errmsg("-c %s requires a value",
+											optarg)));
+					}
+
+					if ((guc_name_compare(name, "gp_anser_conn") == 0) &&
+						!parse_bool(value, &ret))
+					{
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("invalid value for guc gp_anser_conn: \"%s\"",
+										value)));
+					}
+
+					pfree(name);
+					pfree(value);
+					break;
+				}
+
+			default:
+				break;
+		}
+	}
+
+	/*
+	 * Reset getopt(3) library so that it will work correctly in subprocesses
+	 * or when this function is called a second time with another array.
+	 */
+	optind = 1;
+#ifdef HAVE_INT_OPTRESET
+	optreset = 1;	/* some systems need this too */
+#endif
+
+	return ret;
+}
+
 static bool
 guc_options_include_retrieve_conn(List *guc_options)
 {
@@ -533,6 +621,43 @@ guc_options_include_retrieve_conn(List *guc_options)
 }
 
 /*
+ * Return true if startup GUC options contain gp_anser_conn=true.  Mirrors
+ * guc_options_include_retrieve_conn() above.
+ */
+static bool
+guc_options_include_anser_conn(List *guc_options)
+{
+	ListCell   *gucopts;
+	bool		ret = false;
+
+	gucopts = list_head(guc_options);
+	while (gucopts)
+	{
+		char	   *name;
+		char	   *value;
+
+		name = lfirst(gucopts);
+		gucopts = lnext(guc_options, gucopts);
+
+		value = lfirst(gucopts);
+		gucopts = lnext(guc_options, gucopts);
+
+		if (guc_name_compare(name, "gp_anser_conn") == 0)
+		{
+			/* Do not break in case there are more than one such option. */
+			if (!parse_bool(value, &ret))
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("invalid value for guc gp_anser_conn: \"%s\"",
+								value)));
+
+		}
+	}
+
+	return ret;
+}
+
+/*
  * Retrieve role directly uses the token of PARALLEL RETRIEVE CURSOR as password to authenticate.
  */
 static void
@@ -554,6 +679,35 @@ retrieve_conn_authentication(Port *port)
 	 */
 	owner_uid = get_role_oid(port->user_name, false);
 	if (!AuthEndpoint(owner_uid, passwd))
+		ereport(FATAL, (errcode(ERRCODE_INVALID_PASSWORD), errmsg("%s", msg2)));
+
+	FakeClientAuthentication(port);
+}
+
+/*
+ * Anser backward (segment -> QD) connections authenticate with the per-session
+ * Anser token as password, bypassing pg_hba -- the same model as
+ * retrieve_conn_authentication() above.  The QD registers the token in shared
+ * memory when a plan gets a runtime filter; segment executors present it when
+ * publishing/consuming bloom filter parts.  On success the connection becomes
+ * an ordinary backend for the session user, which then runs the gp_anser_*
+ * builtins (anserfuncs.c).
+ */
+static void
+anser_conn_authentication(Port *port)
+{
+	char	   *passwd;
+	Oid			owner_uid;
+	const char *msg1 = "Failed to retrieve the authentication password";
+	const char *msg2 = "Authentication failure (invalid Anser session token)";
+
+	sendAuthRequest(port, AUTH_REQ_PASSWORD, NULL, 0);
+	passwd = recv_password_packet(port);
+	if (passwd == NULL)
+		ereport(FATAL, (errcode(ERRCODE_INVALID_PASSWORD), errmsg("%s", msg1)));
+
+	owner_uid = get_role_oid(port->user_name, false);
+	if (!AnserSessionTokenIsValid(owner_uid, passwd))
 		ereport(FATAL, (errcode(ERRCODE_INVALID_PASSWORD), errmsg("%s", msg2)));
 
 	FakeClientAuthentication(port);
@@ -715,6 +869,17 @@ ClientAuthentication(Port *port)
 	{
 		retrieve_conn_authentication(port);
 		retrieve_conn_authenticated = true;
+		return;
+	}
+
+	/*
+	 * For Anser segment -> QD runtime-filter connections, per-session token
+	 * authentication is performed, likewise before pg_hba is consulted.
+	 */
+	if (cmd_options_include_anser_conn(port->cmdline_options) ||
+		guc_options_include_anser_conn(port->guc_options))
+	{
+		anser_conn_authentication(port);
 		return;
 	}
 

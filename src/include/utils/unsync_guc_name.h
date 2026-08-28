@@ -283,6 +283,7 @@
 		"gp_resqueue_priority_local_interval",
 		"gp_resqueue_priority_sweeper_interval",
 		"gp_retrieve_conn",
+		"gp_anser_conn",
 		"gp_role",
 		"gp_internal_is_singlenode",
 		"gp_segment_connect_timeout",

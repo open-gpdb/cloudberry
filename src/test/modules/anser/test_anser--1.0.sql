@@ -103,6 +103,11 @@ RETURNS bool
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT;
 
+CREATE FUNCTION anser_test_token_roundtrip()
+RETURNS bool
+AS 'MODULE_PATHNAME'
+LANGUAGE C;
+
 CREATE FUNCTION anser_test_multi_consumer(value int4)
 RETURNS bool
 AS 'MODULE_PATHNAME'

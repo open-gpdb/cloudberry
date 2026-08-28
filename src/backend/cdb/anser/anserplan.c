@@ -39,6 +39,7 @@
 #include "cdb/cdbvars.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/pg_list.h"
+#include "utils/acl.h"
 #include "utils/lsyscache.h"
 
 /* Runtime-filter bloom size bounds (realized bitset bytes). */
@@ -53,6 +54,10 @@ typedef struct AnserInjectCtx
 	List	   *consumer_keys;	/* condition_keys already given a consumer node;
 								 * enforces one consumer per channel (see
 								 * anser_try_inject) */
+	char	   *token;		/* QD session token for the segment -> QD backward
+							 * connections; lazily registered at the first
+							 * injection, NULL when unavailable (fail open to
+							 * pg_hba-driven authentication) */
 } AnserInjectCtx;
 
 static int	anser_max_plan_node_id(Plan *plan);
@@ -99,6 +104,16 @@ AnserApplyRuntimeFilters(PlannedStmt *stmt)
 		ctx.next_condition_id = 0;
 		ctx.next_plan_node_id = maxid + 1;
 		ctx.consumer_keys = NIL;
+
+		/*
+		 * Segment executors connect back to the QD to publish/consume bloom
+		 * parts; they authenticate with this session's token (the
+		 * parallel-retrieve-cursor model) instead of relying on pg_hba entries
+		 * for the segment hosts.  Keyed by the session user because that is
+		 * the identity the QEs connect with.  NULL means unavailable -- the
+		 * connection then falls back to ordinary pg_hba authentication.
+		 */
+		ctx.token = AnserGetOrCreateSessionToken(GetSessionUserId());
 
 		anser_inject_walk(stmt->planTree, &ctx);
 	}
@@ -344,14 +359,14 @@ anser_try_inject(HashJoin *hj, AnserInjectCtx *ctx)
 	/* Producer wraps the build base scan; keyed by the mapped build attno. */
 	producer = AnserBuildBloomProducerScan(build_scan, build_attno, condition_id,
 										   condition_key, total_elems, max_payload,
-										   planned_bytes);
+										   planned_bytes, ctx->token);
 	producer->scan.plan.plan_node_id = ctx->next_plan_node_id++;
 	outerPlan(build_parent) = (Plan *) producer;
 
 	/* Consumer wraps the probe scan; keyed by the outer (probe) attno. */
 	consumer = AnserBuildBloomConsumerScan(probe, outer_attno, condition_id,
 										   condition_key, total_elems, max_payload,
-										   planned_bytes);
+										   planned_bytes, ctx->token);
 	consumer->scan.plan.plan_node_id = ctx->next_plan_node_id++;
 	outerPlan(hj) = (Plan *) consumer;
 

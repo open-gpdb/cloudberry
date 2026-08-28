@@ -8,9 +8,10 @@ work (today: skip probe rows that cannot join). The shared state lives in a
 fixed coordinator-resident shared-memory **channel map**, serviced by two
 background workers (gather + send).
 
-This document covers the architecture, the configuration surface, what a
-*channel* is, and the *channel state machine*. For the plan-tree integration see
-`anserplan.c`; for the payload/bloom protocol see `anserfilter.c` and
+This document covers the architecture, the segment→coordinator network
+transport and its token authentication, the configuration surface, what a
+*channel* is, and the *channel state machine*. For the plan-tree integration
+see `anserplan.c`; for the payload/bloom protocol see `anserfilter.c` and
 `lib/bloomfilter.c`.
 
 ## Architecture
@@ -138,6 +139,90 @@ Key properties:
   mid-pass is honored next loop, and the same cycle runs every
   `ANSER_SERVICE_WAKEUP_INTERVAL_MS` so straggler cancels and recycling still
   happen while idle.
+
+## Network transport: how segments connect and authenticate
+
+Coordinator-resident producers/consumers touch the channel map directly.
+Segment executors cannot — the map lives in the coordinator's shared memory — so
+they open an **ordinary libpq connection back to the QD** and drive the
+`gp_anser_producer_begin` / `gp_anser_publish` / `gp_anser_consume_wait` built-in
+functions from that backend (`anserclient.c`). The QD address comes from
+`gp_qd_hostname` / `gp_qd_port`, which the dispatcher injects into every QE; the
+connection reuses the query's database and the **session user**
+(`MyProcPort->user_name` — the authenticated login role, unaffected by
+`SET ROLE`), and sets `application_name=anser_rf` so these backends are
+identifiable on the coordinator.
+
+### Authentication: per-session token (the parallel-retrieve-cursor model)
+
+The backward connection must not depend on `pg_hba.conf`: a stock
+`gpinitsystem` cluster grants `trust` to coordinator IPs on the *segments* (that
+is what makes QD→QE dispatch connections work), but never adds segment hosts to
+the *coordinator's* pg_hba — so a segment→QD connection would be rejected by
+default. Anser therefore authenticates these connections the same way
+`PARALLEL RETRIEVE CURSOR` retrieve sessions do (`retrieve_conn_authentication`
+in `libpq/auth.c`):
+
+1. **Token registration (QD, plan time).** When the planner pass injects a
+   runtime filter into a query, the QD registers a **per-session token**:
+   128 bits of `pg_strong_random`, hex-encoded, stored in the shared-memory
+   *session token hash* keyed by `(gp_session_id, session user)`
+   (`AnserGetOrCreateSessionToken` in `anser.c`). One token per session; the
+   entry is removed when the session exits.
+2. **Delivery to segments.** The token travels inside the dispatched plan (a
+   `String` in the producer/consumer `CustomScan.custom_private`), so it only
+   crosses the already-trusted QD→QE dispatch channel.
+3. **Connection (segment).** The segment executor connects with the startup
+   marker `gp_anser_conn=true` (passed via the libpq `options` keyword) and the
+   token as the connection `password`.
+4. **Verification (QD, auth time).** `ClientAuthentication` checks the marker
+   **before** pg_hba is consulted and runs `anser_conn_authentication`: it
+   requests the password, resolves `user_name` to a role OID, and calls
+   `AnserSessionTokenIsValid`, which scans the token hash for a matching
+   `(user, token)` pair. On match the connection becomes an ordinary backend
+   for that user (`FakeClientAuthentication`); on mismatch it is rejected with
+   `FATAL`.
+
+```
+segment executor                     coordinator
+────────────────                     ───────────
+libpq connect: user=<session user>,
+  options="-c gp_anser_conn=true",
+  password=<token>
+                ── startup ────────► ClientAuthentication:
+                                     marker seen → skip pg_hba
+                ◄── AUTH_REQ_PASSWORD
+token ─────────────────────────────► AnserSessionTokenIsValid(user, token)
+                                       scans session token hash (shmem)
+                ◄── OK / FATAL
+SELECT gp_anser_producer_begin(...) ─► ... runs as the session user
+```
+
+Properties and limits of this model:
+
+- **No pg_hba change needed** on the coordinator for segment hosts; no password
+  of the user ever leaves the client.
+- The token is **per session, not per query**, and grants a *full* SQL backend
+  as that user (unlike retrieve sessions, which are utility-mode and
+  `RETRIEVE`-only). Anyone who learns a live session's token can connect as its
+  user — the token never leaves the trusted dispatch channel, but it does
+  appear in debug-level plan dumps (`debug_print_plan`), so treat those logs as
+  sensitive.
+- **Channel-level access control is unchanged and independent**: a channel is
+  bound to the role that created it (`AnserChannelEntry.creator_role`), so even
+  an authenticated connection can only produce/consume on channels its own role
+  created (or any, if superuser).
+- **Fail open.** If no token was registered (subsystem off, token hash full) or
+  authentication fails for any reason, the connection attempt returns NULL and
+  the segment runs unfiltered — never an error, never wrong results.
+- **Without a token** the client omits the marker and password, and the
+  connection goes through ordinary pg_hba authentication (previous behavior);
+  this also covers hand-built or test deployments where the admin chose to
+  provision pg_hba entries instead.
+
+The `gp_anser_conn` GUC itself is a marker only (`PGC_BACKEND`, not settable in
+`postgresql.conf`, not synced to segments); its value is read from the raw
+startup options during authentication.
 
 ## GUCs
 
