@@ -39,7 +39,13 @@
 
 # Do not require these bundled libraries from the system;
 # they are shipped inside the package and located via RPATH.
-%global __requires_exclude ^(libpax\.so|libpaxformat\.so|libpostgres\.so|libpq\.so\.5|libxerces-c-3\.3\.so)
+#
+# This list must cover every soname the package installs, because
+# __provides_exclude_from above drops the matching Provides: the .so
+# symlinks we ship (libfoo.so -> libfoo.so.N.M) make rpm generate a
+# Requires on libfoo.so.N, which would otherwise be resolved outside the
+# package -- or not at all.  build-rpm.sh verifies the two stay in sync.
+%global __requires_exclude ^(libecpg\.so|libecpg_compat\.so|libgppc\.so|libpax\.so|libpaxformat\.so|libpgtypes\.so|libpostgres\.so|libpq\.so\.5|libxerces-c-3\.3\.so)
 
 # Default to non-debug build
 %bcond_with debug

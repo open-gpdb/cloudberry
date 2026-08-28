@@ -224,5 +224,45 @@ for rpm_path in "${RPMS_DIR}"/*/apache-cloudberry-db-incubating-"${MAJOR_VERSION
 done
 shopt -u nullglob
 
+# Verify that the package does not depend on sonames it ships itself.
+#
+# The spec drops the auto-generated Provides for every shared object under
+# the install prefix (%__provides_exclude_from, a path pattern) but removes
+# only a hand-maintained list of sonames from the auto-generated Requires
+# (%__requires_exclude, a name pattern).  The .so symlinks in the package
+# (libfoo.so -> libfoo.so.N.M) make rpm emit a Requires on libfoo.so.N, so
+# whenever a bundled library is missing from that list the dependency turns
+# into an external one.  Such a package either fails to install ("nothing
+# provides libfoo.so.N") or silently resolves against a system library.
+#
+# rpmbuild cannot detect this, and the failure only surfaces in downstream
+# install jobs, so check it here while the failing artifact is at hand.
+shopt -s nullglob
+for rpm_path in "${RPMS_DIR}"/*/apache-cloudberry-db-incubating-*"${VERSION}"-*.rpm; do
+  case "$rpm_path" in
+    *debuginfo*|*debugsource*) continue ;;
+  esac
+
+  required_sonames="$(mktemp)"
+  shipped_sonames="$(mktemp)"
+
+  # "libfoo.so.1(GLIBC_2.34)(64bit)" -> "libfoo.so.1"
+  rpm -qp --requires "$rpm_path" | awk '{print $1}' | sed -E 's/\(.*//' \
+    | grep -E '\.so' | sort -u > "$required_sonames" || true
+  rpm -qpl "$rpm_path" | sed 's#.*/##' \
+    | grep -E '\.so(\.[0-9]+)*$' | sort -u > "$shipped_sonames" || true
+
+  self_requires="$(comm -12 "$required_sonames" "$shipped_sonames")"
+  rm -f "$required_sonames" "$shipped_sonames"
+
+  if [ -n "$self_requires" ]; then
+    echo "Error: $(basename "$rpm_path") requires sonames that it ships itself:"
+    echo "$self_requires" | sed 's/^/  /'
+    echo "Add them to %__requires_exclude in apache-cloudberry-db-incubating.spec."
+    exit 1
+  fi
+done
+shopt -u nullglob
+
 # Print completion message
 echo "RPM build completed successfully with Version: $VERSION, Release: $RELEASE"
