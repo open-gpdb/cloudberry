@@ -41,9 +41,9 @@
 #include "nodes/pg_list.h"
 #include "utils/lsyscache.h"
 
-/* Runtime-filter bloom size clamp (realized bitset bytes). */
-#define ANSER_RF_MIN_BYTES		(8 * 1024)
-#define ANSER_RF_MAX_BYTES		(16 * 1024 * 1024)
+/* Runtime-filter bloom size bounds (realized bitset bytes). */
+#define ANSER_RF_MIN_BYTES		(1024 * 1024)		/* bloom_create's 1 MB floor */
+#define ANSER_RF_MAX_BYTES		(64 * 1024 * 1024)
 #define ANSER_RF_HEADER_ROOM	64
 
 typedef struct AnserInjectCtx
@@ -131,42 +131,46 @@ anser_max_plan_node_id(Plan *plan)
 }
 
 /*
- * Choose a bloom bitset size (a power of two, clamped to [8 KB, 16 MB] and to
- * the server payload cap) from the estimated build cardinality.  Returns the
- * total_elems / max_payload_bytes to hand the producer helper so it realizes
- * exactly `planned_bytes` (see the PR4 sizing note).
+ * Compute the bloom sizing to hand both the producer and consumer helpers, from
+ * the estimated build cardinality.  Both call AnserBloomCreate (== bloom_create)
+ * with the SAME (total_elems, max_payload) so they realize an identical filter;
+ * we mirror bloom_create's own math here so `planned_bytes` (shown in EXPLAIN)
+ * equals the realized bitset: target ~2 bytes/element, floor at 1 MB, cap at the
+ * server payload budget, round DOWN to a power of two.
  */
 static bool
 anser_rf_size(double est_rows, int64 *total_elems, int64 *max_payload,
 			  int64 *planned_bytes)
 {
-	int64		cap;
-	int64		cap_pow2;
-	int64		t;
-	double		target;
+	int64		cap_bytes;
+	int64		elems;
+	int64		target_bytes;
+	int64		realized;
 
-	cap = Min((int64) ANSER_RF_MAX_BYTES,
-			  (int64) gp_anser_max_info_size - ANSER_RF_HEADER_ROOM);
-	if (cap < ANSER_RF_MIN_BYTES)
-		return false;			/* server payload cap too small to bother */
-
-	cap_pow2 = ANSER_RF_MIN_BYTES;
-	while ((cap_pow2 << 1) <= cap)
-		cap_pow2 <<= 1;
+	/* Largest bitset that fits the server payload cap, and our own ceiling. */
+	cap_bytes = Min((int64) ANSER_RF_MAX_BYTES,
+					(int64) gp_anser_max_info_size - ANSER_RF_HEADER_ROOM);
+	if (cap_bytes < ANSER_RF_MIN_BYTES)
+		return false;			/* cap too small to hold even a floor-sized filter */
 
 	/*
-	 * Target ~2 bytes per estimated element, then round DOWN to a power of two
-	 * (rounding up would nearly double the size -- e.g. 17033 rows -> ~34 KB ->
-	 * 64 KB).  Clamped to [8 KB, cap].
+	 * Clamp the element estimate so 2*elems never exceeds the cap; this also keeps
+	 * total_elems within int range for custom_private (cap/2 <= 32M elements).
 	 */
-	target = (est_rows > 0 ? est_rows : 1.0) * 2.0;
-	t = ANSER_RF_MIN_BYTES;
-	while ((double) (t << 1) <= target && (t << 1) <= cap_pow2)
-		t <<= 1;
+	elems = (est_rows > 0.0) ? (int64) est_rows : 1;
+	if (elems > cap_bytes / 2)
+		elems = cap_bytes / 2;
+	if (elems < 1)
+		elems = 1;
 
-	*total_elems = t / 2;
-	*max_payload = t + ANSER_RF_HEADER_ROOM;
-	*planned_bytes = t;
+	target_bytes = Max((int64) ANSER_RF_MIN_BYTES, elems * 2);
+	realized = ANSER_RF_MIN_BYTES;
+	while ((realized << 1) <= target_bytes)
+		realized <<= 1;
+
+	*total_elems = elems;
+	*max_payload = cap_bytes + ANSER_RF_HEADER_ROOM;
+	*planned_bytes = realized;
 	return true;
 }
 

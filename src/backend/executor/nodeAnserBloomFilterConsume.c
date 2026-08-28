@@ -37,6 +37,9 @@ struct AnserBloomFilterConsumeState
 {
 	AnserChannelKey channel_key;
 	bloom_filter *filter;
+	int64		total_elems;	/* filter sizing, shared with the producer */
+	Size		max_payload_bytes;
+	uint64		seed;
 	uint32		expected_parts;
 	uint32		received_parts;
 	bool		consumed;
@@ -49,6 +52,7 @@ static bool ExecAnserBloomFilterConsumeClient(AnserBloomFilterConsumeState *stat
 
 AnserBloomFilterConsumeState *
 ExecInitAnserBloomFilterConsume(const AnserChannelKey *channel_key,
+								int64 total_elems, Size max_payload_bytes,
 								uint32 expected_parts)
 {
 	AnserBloomFilterConsumeState *state;
@@ -58,6 +62,9 @@ ExecInitAnserBloomFilterConsume(const AnserChannelKey *channel_key,
 
 	state = palloc0(sizeof(AnserBloomFilterConsumeState));
 	state->channel_key = *channel_key;
+	state->total_elems = total_elems;
+	state->max_payload_bytes = max_payload_bytes;
+	state->seed = AnserBloomSeed(channel_key->condition_key);
 	state->expected_parts = expected_parts;
 	return state;
 }
@@ -136,6 +143,9 @@ ExecAnserBloomFilterConsumeDirect(AnserBloomFilterConsumeState *state,
 		uint32		folded = 0;
 
 		state->filter = AnserBloomDeserializePart(payload, payload_len,
+												  state->total_elems,
+												  state->max_payload_bytes,
+												  state->seed,
 												  &part_index, &folded);
 		state->received_parts = (state->filter != NULL) ? folded : 0;
 	}
@@ -178,6 +188,9 @@ ExecAnserBloomFilterConsumeClient(AnserBloomFilterConsumeState *state)
 		uint32		folded = 0;
 
 		state->filter = AnserBloomDeserializePart(payload, payload_len,
+												  state->total_elems,
+												  state->max_payload_bytes,
+												  state->seed,
 												  &part_index, &folded);
 		state->received_parts = (state->filter != NULL) ? folded : 0;
 	}

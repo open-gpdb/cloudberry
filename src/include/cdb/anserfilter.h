@@ -47,8 +47,6 @@ typedef struct AnserBloomPartHeader
 } AnserBloomPartHeader;
 
 extern uint64 AnserBloomSeed(const char *condition_key);
-extern uint64 AnserBloomChooseBitsetBits(int64 total_elems,
-										 Size max_payload_bytes);
 extern bloom_filter *AnserBloomCreate(int64 total_elems,
 								  Size max_payload_bytes,
 								  uint64 seed);
@@ -61,16 +59,13 @@ extern bool AnserBloomSerializePart(const bloom_filter *filter,
 									Size *payload_len);
 extern bloom_filter *AnserBloomDeserializePart(const void *payload,
 										  Size payload_len,
+										  int64 total_elems,
+										  Size max_payload_bytes,
+										  uint64 seed,
 										  uint32 *part_index,
 										  uint32 *total_parts);
 extern bool AnserBloomLooksLikePart(const void *payload, Size payload_len);
-extern void *AnserBloomFoldPart(const void *acc, Size acc_len,
-								const void *part, Size part_len,
-								Size *out_len);
 extern bool AnserBloomFoldPartInPlace(void *acc, Size acc_len,
 									  const void *part, Size part_len);
-extern void *AnserCombinePayload(const void *acc, Size acc_len,
-								 const void *incoming, Size incoming_len,
-								 Size *out_len);
 
 #endif							/* CDB_ANSERFILTER_H */

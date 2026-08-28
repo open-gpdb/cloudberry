@@ -6,16 +6,19 @@ CREATE EXTENSION test_anser;
 -- where we prove the sweep actually reclaims them.
 SELECT anser_test_set_sweep(false);
 
--- Happy path: one condition, two producers, two consumers.
+-- Happy path: one condition, two producers, two consumers.  Each producer
+-- publishes a real bloom part (multi-payload combine is bloom-only now); the two
+-- parts union on the coordinator, so each consumer's received filter contains
+-- both producers' values.
 SELECT anser_test_register_condition(1, 1, 1, 'join_a', 2);
 SELECT anser_test_subscribe(1, 1, 1, 'join_a');
 SELECT anser_test_subscribe(1, 1, 1, 'join_a');
-SELECT anser_test_publish(1, 1, 1, 'join_a', '\x6161'::bytea, false);
+SELECT anser_test_publish_value(1, 1, 1, 'join_a', 10);
 SELECT anser_test_state(1, 1, 1, 'join_a');
-SELECT anser_test_publish(1, 1, 1, 'join_a', '\x6262'::bytea, false);
+SELECT anser_test_publish_value(1, 1, 1, 'join_a', 20);
 SELECT anser_test_state(1, 1, 1, 'join_a');
-SELECT encode(anser_test_consume(1, 1, 1, 'join_a', 0), 'escape');
-SELECT encode(anser_test_consume(1, 1, 1, 'join_a', 0), 'escape');
+SELECT anser_test_consume_has(1, 1, 1, 'join_a', 10);
+SELECT anser_test_consume_has(1, 1, 1, 'join_a', 20);
 SELECT anser_test_state(1, 1, 1, 'join_a');
 
 -- Timeout/cancel path: no producer publishes.
@@ -45,19 +48,16 @@ SELECT anser_test_max_channels_stable_across_slices() AS max_channels_stable;
 
 -- Bloom payload protocol and standalone producer/consumer helpers.
 SELECT anser_test_bloom_roundtrip('bf_roundtrip', 42);
--- Coordinator-side fold: parts combined into one merged chunk (union on master).
-SELECT anser_test_bloom_fold('bf_fold', 42, 84);
--- In-place fold: same-size union mutates the buffer; mismatched size is rejected.
+-- In-place fold: same-size union mutates the buffer; a mismatched size is
+-- rejected.  This is the coordinator's only combine path (first part is stored
+-- verbatim, every later part folds in here).
 SELECT anser_test_bloom_fold_inplace() AS fold_inplace_ok;
--- Payload-combine policy: opaque payloads append, bloom parts union (one chunk).
-SELECT anser_test_payload_combine() AS combine_ok;
 SELECT anser_test_node_roundtrip(168);
 
--- Security regression: a crafted part header with a tiny bitset (bitset_bytes
--- == 0) must be rejected, not turned into a filter with no bitset storage.
-SELECT anser_test_bloom_rejects_tiny(0) AS reject_0;
-SELECT anser_test_bloom_rejects_tiny(2) AS reject_2;
-SELECT anser_test_bloom_rejects_tiny(4) AS reject_4;
+-- Safety regression: the consumer rebuilds the filter from its own parameters and
+-- requires the received bitset to be exactly the expected size (and the header
+-- magic to match); truncated/oversized/corrupt parts are rejected (fail open).
+SELECT anser_test_bloom_rejects_mismatch() AS reject_mismatch;
 
 -- Built-in round trip through the live services: producer_begin -> publish
 -- (gather service appends, channel goes READY) -> consume_wait (send service

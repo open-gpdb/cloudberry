@@ -50,7 +50,7 @@
 bool		gp_anser_enable = false;
 bool		gp_anser_runtime_filter = false;
 int			gp_anser_max_channels = 0;	/* 0 = auto (see AnserMaxChannels) */
-int			gp_anser_max_info_size = 16 * 1024 * 1024;
+int			gp_anser_max_info_size = 64 * 1024 * 1024 + 1024 * 1024;
 int			gp_anser_timeout_ms = 1000;
 int			gp_anser_max_consumers_per_channel = 64;
 
@@ -684,7 +684,6 @@ AnserProducerBegin(const AnserChannelKey *channel_key, int expected_producers,
 		entry->state = ANSER_CHANNEL_PENDING;
 		entry->creator_role = caller_role;
 		entry->dsm_handle = DSM_HANDLE_INVALID;
-		entry->created_at = now;
 	}
 	else if (entry->state == ANSER_CHANNEL_CANCELLED ||
 			 entry->state == ANSER_CHANNEL_CONSUMED)
@@ -1842,8 +1841,6 @@ AnserStorePayloadDSM(AnserChannelEntry *entry, const void *payload,
 	dsm_segment *acc_seg = NULL;
 	dsm_segment *new_seg;
 	void	   *acc_addr = NULL;
-	void	   *combined;
-	Size		combined_len = 0;
 
 	Assert(LWLockHeldByMeInMode(AnserChannelLock, LW_EXCLUSIVE));
 	Assert(entry != NULL);
@@ -1851,11 +1848,10 @@ AnserStorePayloadDSM(AnserChannelEntry *entry, const void *payload,
 	if (payload == NULL || payload_len == 0)
 		return true;
 
-	/*
-	 * Combine the incoming payload with the channel's current one -- bloom parts
-	 * are folded (unioned) into a single merged part, opaque payloads are
-	 * appended (see AnserCombinePayload).
-	 */
+	if (payload_len > (Size) gp_anser_max_info_size)
+		return false;
+
+	/* Attach the channel's running merged payload, if it already has one. */
 	if (entry->dsm_handle != DSM_HANDLE_INVALID && entry->data_len > 0)
 	{
 		acc_seg = dsm_attach(entry->dsm_handle);
@@ -1865,46 +1861,37 @@ AnserStorePayloadDSM(AnserChannelEntry *entry, const void *payload,
 	}
 
 	/*
-	 * Fast path: a size-preserving bloom union (a part folded into an existing,
-	 * equally-sized merged part) is a bitwise OR done in place in the current DSM
-	 * segment -- no fresh segment, no full-payload copy.  Safe because we hold
-	 * AnserChannelLock and consumers only ever read their own copies.  Anything
-	 * that changes the payload size (the first part, or an opaque append) returns
-	 * false here and takes the general path below.
+	 * Subsequent part: fold it into the existing payload in place.  Every part on
+	 * a channel shares the same (condition-key-derived) bloom parameters, so it is
+	 * the same serialized size and the union is a bitwise OR of the bitsets -- no
+	 * fresh segment, no full-payload copy.  Safe because we hold AnserChannelLock
+	 * and consumers only ever read their own copies.  A part that cannot fold in
+	 * place (wrong size, malformed) is rejected: the caller then cancels the
+	 * channel and its consumers fail open.
 	 */
-	if (acc_addr != NULL &&
-		AnserBloomFoldPartInPlace(acc_addr, entry->data_len, payload, payload_len))
+	if (acc_addr != NULL)
 	{
+		bool		folded = AnserBloomFoldPartInPlace(acc_addr, entry->data_len,
+													   payload, payload_len);
+
 		dsm_detach(acc_seg);
-		return true;
+		return folded;
 	}
 
-	combined = AnserCombinePayload(acc_addr, entry->data_len,
-								   payload, payload_len, &combined_len);
-	if (acc_seg != NULL)
-		dsm_detach(acc_seg);
-
-	if (combined == NULL || combined_len == 0 ||
-		combined_len > (Size) gp_anser_max_info_size)
-	{
-		if (combined != NULL)
-			pfree(combined);
-		return false;
-	}
-
-	new_seg = dsm_create(combined_len, DSM_CREATE_NULL_IF_MAXSEGMENTS);
+	/*
+	 * First part: store it verbatim in a fresh, pinned segment.  The coordinator
+	 * never reconstructs a filter from the payload -- it only copies the first
+	 * part and OR-folds the rest -- so no bitset parameters are needed here.
+	 */
+	new_seg = dsm_create(payload_len, DSM_CREATE_NULL_IF_MAXSEGMENTS);
 	if (new_seg == NULL)
-	{
-		pfree(combined);
 		return false;
-	}
-	memcpy(dsm_segment_address(new_seg), combined, combined_len);
-	pfree(combined);
+	memcpy(dsm_segment_address(new_seg), payload, payload_len);
 
 	AnserReleasePayloadDSM(entry);
 	dsm_pin_segment(new_seg);
 	entry->dsm_handle = dsm_segment_handle(new_seg);
-	entry->data_len = combined_len;
+	entry->data_len = payload_len;
 	dsm_detach(new_seg);
 
 	return true;

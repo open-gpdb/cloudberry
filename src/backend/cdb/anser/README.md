@@ -146,7 +146,7 @@ Key properties:
 | `gp_anser_enable` | `off` | POSTMASTER | Master switch. When on, the channel-map shared memory is sized/created and the gather + send background workers are started at postmaster start. Off = the whole subsystem is absent (zero shmem, no workers). |
 | `gp_anser_runtime_filter` | `off` | USERSET | Enables the post-planning pass that injects bloom-filter producer/consumer nodes into a matching plan. Requires `gp_anser_enable`; without it the pass is a no-op even when the subsystem is up. |
 | `gp_anser_max_channels` | `0` (auto) | POSTMASTER | Number of channels the map can hold; sizes the channel hash, the producer submission queue, and (× `gp_anser_max_consumers_per_channel`) the consumer wait table. `0` auto-sizes to `max_connections * gp_max_slices` — at most `max_connections` concurrent queries, each opening up to `gp_max_slices` runtime-filter channels — falling back to a fixed per-connection budget (8) when `gp_max_slices` is unbounded (`0`). Captured once at postmaster start so it is stable across all backends. |
-| `gp_anser_max_info_size` | `16 MB` | POSTMASTER | Maximum serialized payload (unioned bloom filter) a channel may hold; caps per-channel memory and bounds the effective bloom-filter size. |
+| `gp_anser_max_info_size` | `65 MB` | POSTMASTER | Maximum serialized payload (unioned bloom filter + part header) a channel may hold; caps per-channel memory and bounds the effective bloom-filter size. The default is `64 MB + 1 MB` so a full 64 MB power-of-two bitset fits with its header; `bloom_create` also floors every bitset at 1 MB. |
 | `gp_anser_max_consumers_per_channel` | `64` | POSTMASTER | Wait-table slots reserved per channel; the consumer wait table is sized `gp_anser_max_channels * this`. Bounds how many consumers can block on one channel at once. |
 | `gp_anser_timeout_ms` | `1000` | USERSET | Produce/collect deadline. A channel that is still collecting parts when this elapses is cancelled by the maintenance sweep, so waiting consumers fail open (run unfiltered) rather than hang. |
 
@@ -177,22 +177,24 @@ segment N producer:        ...         ┘             │
 Step by step:
 
 1. **Produce (per segment, in parallel).** Each segment's producer builds a bloom
-   filter over its local build keys and serializes it as one *part* (all parts
-   share the same bitset size / seed / hash count, derived from the channel's
-   `condition_key`). Segment producers push their parts to the coordinator
+   filter over its local build keys (`bloom_create` from `total_elems` /
+   `max_payload` / a `condition_key`-derived seed, all carried in the plan node —
+   *not* on the wire) and serializes it as one *part*. Because every producer and
+   the consumer pass the identical parameters, every part has a byte-for-byte
+   identical size and shape. Segment producers push their parts to the coordinator
    concurrently over their own libpq connections — the network transfer is
    parallel, and the submission queue is sized `channels * per-channel producers`
    so they hand off without serializing.
 
-2. **Gather (coordinator, once per part).** The gather service folds each
-   incoming part into the channel's payload with a **bitwise OR**
-   (`bloom_union` → `dst->bitset[i] |= src->bitset[i]`, `lib/bloomfilter.c`; driven
-   by `AnserBloomFoldPart` in `anserfilter.c`, called from `AnserStorePayloadDSM`
-   in `anser.c`). The payload is therefore always a **single merged bitset**, the
-   size of one filter — it does **not** grow with the segment count. The OR is
-   only valid because every part shares identical parameters; a mismatch makes
-   the fold fail and the channel is cancelled (consumers fail open). Non-bloom
-   opaque payloads (used only by lower-level tests) fall back to concatenation.
+2. **Gather (coordinator, once per part).** The coordinator never reconstructs a
+   filter — it works on raw bytes. The **first** part is stored verbatim; every
+   later part is folded into the channel's payload with an in-place **bitwise OR**
+   of the bitset (`AnserBloomFoldPartInPlace` in `anserfilter.c`, from
+   `AnserStorePayloadDSM` in `anser.c`). The payload is therefore always a
+   **single merged bitset**, the size of one filter — it does **not** grow with
+   the segment count. The OR requires the incoming part to be the same size as the
+   accumulator (guaranteed by the shared parameters); a mismatch makes the fold
+   fail and the channel is cancelled (consumers fail open).
 
 3. **Deliver (coordinator → every consumer).** Once every expected part is folded
    (channel `READY`), the send service delivers a copy of that one combined
@@ -200,9 +202,11 @@ Step by step:
    O(segments²), and the union work is done once on the master rather than
    repeated in every consumer.
 
-4. **Consume (per segment).** Each consumer deserializes the single merged part
-   (`AnserBloomDeserializePart`) and uses it to prune probe rows. It does **not**
-   re-union anything; the merged header's part count is surfaced as the
+4. **Consume (per segment).** Each consumer rebuilds an empty filter from its own
+   plan parameters (the same `total_elems` / `max_payload` / seed the producers
+   used) and loads the received bitset into it (`AnserBloomDeserializePart`),
+   requiring the received length to match exactly (else it fails open). It does
+   **not** re-union anything; the merged header's part count is surfaced as the
    `Rows Removed by Bloom Filter` / parts-received EXPLAIN stats.
 
 Correctness note: the combined filter is the OR (super-set) of every segment's

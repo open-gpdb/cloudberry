@@ -50,6 +50,8 @@ extern void ExecEndAnserBloomFilterProduce(AnserBloomFilterProduceState *state);
 
 extern AnserBloomFilterConsumeState *ExecInitAnserBloomFilterConsume(
 										const AnserChannelKey *channel_key,
+										int64 total_elems,
+										Size max_payload_bytes,
 										uint32 expected_parts);
 extern bool ExecAnserBloomFilterConsume(AnserBloomFilterConsumeState *state,
 									long registration_timeout_ms);

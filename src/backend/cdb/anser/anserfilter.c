@@ -32,11 +32,9 @@
 #include "port/pg_bitutils.h"
 
 #define ANSER_BLOOM_MIN_BITSET_BITS	(1024U * 8U)
-#define ANSER_BLOOM_DEFAULT_K		3
 
 static bool AnserBloomValidateHeader(const AnserBloomPartHeader *header,
 									 Size payload_len);
-static uint64 AnserBloomFloorPowerOfTwo(uint64 value);
 
 uint64
 AnserBloomSeed(const char *condition_key)
@@ -48,42 +46,38 @@ AnserBloomSeed(const char *condition_key)
 						   strlen(condition_key), 0);
 }
 
-uint64
-AnserBloomChooseBitsetBits(int64 total_elems, Size max_payload_bytes)
-{
-	Size		max_bitset_bytes;
-	uint64		target_bytes;
-	uint64		bits;
-
-	if (max_payload_bytes <= sizeof(AnserBloomPartHeader))
-		return 0;
-
-	max_bitset_bytes = max_payload_bytes - sizeof(AnserBloomPartHeader);
-	if (max_bitset_bytes < ANSER_BLOOM_MIN_BITSET_BITS / BITS_PER_BYTE)
-		return 0;
-
-	/* Prefer about two bytes per estimated element, capped by the payload. */
-	target_bytes = Max((uint64) ANSER_BLOOM_MIN_BITSET_BITS / BITS_PER_BYTE,
-					   (uint64) Max(total_elems, 1) * 2);
-	target_bytes = Min(target_bytes, (uint64) max_bitset_bytes);
-
-	bits = AnserBloomFloorPowerOfTwo(target_bytes * BITS_PER_BYTE);
-	if (bits < ANSER_BLOOM_MIN_BITSET_BITS)
-		return 0;
-
-	return bits;
-}
-
+/*
+ * Build the bloom filter for a channel from the caller's parameters.
+ *
+ * Producer and consumer both call this with the SAME (total_elems,
+ * max_payload_bytes, seed) -- carried in the plan node's custom_private and
+ * derived from the shared condition key -- so every segment and the consumer
+ * realize a byte-for-byte identical filter shape.  This is why the serialized
+ * part header does not need to carry the bitset parameters: the reconstructing
+ * side already knows them (see AnserBloomDeserializePart).
+ *
+ * We defer sizing to the standard bloom_create, which targets ~2 bytes per
+ * element, rounds the bitset down to a power of two, and floors it at 1 MB.
+ * max_payload_bytes bounds the bitset from above (minus header room), expressed
+ * as bloom_create's work_mem budget in KB.
+ */
 bloom_filter *
 AnserBloomCreate(int64 total_elems, Size max_payload_bytes, uint64 seed)
 {
-	uint64		bits;
+	Size		bitset_budget;
+	int			work_mem_kb;
 
-	bits = AnserBloomChooseBitsetBits(total_elems, max_payload_bytes);
-	if (bits == 0)
+	if (max_payload_bytes <= sizeof(AnserBloomPartHeader))
 		return NULL;
 
-	return bloom_create_with_params(bits, ANSER_BLOOM_DEFAULT_K, seed);
+	bitset_budget = max_payload_bytes - sizeof(AnserBloomPartHeader);
+	work_mem_kb = (int) (bitset_budget / 1024);
+
+	/* optimal_k divides by total_elems; never hand bloom_create zero. */
+	if (total_elems < 1)
+		total_elems = 1;
+
+	return bloom_create(total_elems, work_mem_kb, seed);
 }
 
 Size
@@ -96,9 +90,9 @@ AnserBloomSerializedSize(const bloom_filter *filter)
 }
 
 /*
- * Does this payload look like a serialized bloom part?  Used by the coordinator
- * to tell a runtime-filter part (which it folds/unions) from opaque channel
- * bytes (which it concatenates).  A false positive is effectively impossible: a
+ * Does this payload look like a serialized bloom part?  Used by the in-place fold
+ * to confirm both the accumulator and the incoming payload are well-formed parts
+ * before OR-ing their bitsets.  A false positive is effectively impossible: a
  * part must carry the ABF1 magic, a known version, a power-of-two bitset, and a
  * self-consistent length.
  */
@@ -113,82 +107,6 @@ AnserBloomLooksLikePart(const void *payload, Size payload_len)
 }
 
 /*
- * Fold one serialized bloom part into a running accumulator, on the coordinator.
- *
- * `acc`/`acc_len` is the current merged part (acc_len == 0 for the first fold);
- * `part`/`part_len` is the incoming per-segment part.  Both are unioned (bitwise
- * OR -- the parts share bitset params derived from the condition key) and the
- * result is returned as a freshly palloc'd single merged part (caller frees),
- * with part_index 0 and total_parts set to how many parts have been folded so
- * far.  This keeps the channel payload a single filter-sized chunk regardless of
- * the segment count, and lets consumers deserialize one part instead of unioning
- * N.  Returns NULL on malformed input or a parameter mismatch (the caller then
- * cancels the channel and consumers fail open).
- */
-void *
-AnserBloomFoldPart(const void *acc, Size acc_len,
-				   const void *part, Size part_len, Size *out_len)
-{
-	bloom_filter *bf_part;
-	bloom_filter *result;
-	uint32		pi;
-	uint32		tp;
-	uint32		folded;
-	Size		sz;
-	Size		written = 0;
-	void	   *out;
-
-	if (out_len != NULL)
-		*out_len = 0;
-
-	bf_part = AnserBloomDeserializePart(part, part_len, &pi, &tp);
-	if (bf_part == NULL)
-		return NULL;
-
-	if (acc == NULL || acc_len == 0)
-	{
-		result = bf_part;
-		folded = 1;
-	}
-	else
-	{
-		uint32		acc_pi;
-		uint32		acc_tp;
-		bloom_filter *bf_acc;
-
-		bf_acc = AnserBloomDeserializePart(acc, acc_len, &acc_pi, &acc_tp);
-		if (bf_acc == NULL)
-		{
-			bloom_free(bf_part);
-			return NULL;
-		}
-		if (!bloom_union(bf_acc, bf_part))
-		{
-			bloom_free(bf_acc);
-			bloom_free(bf_part);
-			return NULL;
-		}
-		bloom_free(bf_part);
-		result = bf_acc;
-		folded = acc_tp + 1;
-	}
-
-	sz = AnserBloomSerializedSize(result);
-	out = palloc(sz);
-	if (!AnserBloomSerializePart(result, 0, folded, out, sz, &written))
-	{
-		pfree(out);
-		bloom_free(result);
-		return NULL;
-	}
-	bloom_free(result);
-
-	if (out_len != NULL)
-		*out_len = written;
-	return out;
-}
-
-/*
  * Fold an incoming part into an accumulator part IN PLACE.
  *
  * When a merged part and the incoming part are the same serialized size (they
@@ -198,9 +116,12 @@ AnserBloomFoldPart(const void *acc, Size acc_len,
  * lock guards the buffer (AnserChannelLock, for the channel payload).
  *
  * Returns true only when the in-place union applied.  It returns false -- and
- * leaves `acc` untouched (all checks run before any write) -- when the fast path
- * does not apply: sizes differ, either side is not a valid part, or the filter
- * parameters disagree.  The caller then falls back to building a fresh payload.
+ * leaves `acc` untouched (all checks run before any write) -- when the union
+ * cannot be done by raw OR: sizes differ, either side is not a valid part, or
+ * the filter parameters disagree.  Since every part on a channel shares the same
+ * (condition-key-derived) parameters and therefore the same serialized size, the
+ * first part is stored verbatim and every later part folds in here; a false
+ * return means a malformed/mismatched payload and the caller cancels the channel.
  */
 bool
 AnserBloomFoldPartInPlace(void *acc, Size acc_len,
@@ -239,65 +160,6 @@ AnserBloomFoldPartInPlace(void *acc, Size acc_len,
 	ah->total_parts += 1;
 
 	return true;
-}
-
-/*
- * Combine an opaque payload into the accumulator by appending (concatenating).
- * This preserves the generic channel contract used by lower-level callers/tests
- * for payloads that are not bloom parts.  `acc` may be NULL/0 for the first one;
- * returns the concatenation as freshly palloc'd bytes (caller frees), length in
- * *out_len.  The incoming payload must be non-empty -- the caller validates that
- * before dispatching here (AnserStorePayloadDSM / AnserCombinePayload).
- */
-static void *
-AnserOpaqueFoldPart(const void *acc, Size acc_len,
-					const void *incoming, Size incoming_len, Size *out_len)
-{
-	char	   *out;
-	Size		total;
-
-	Assert(incoming != NULL && incoming_len > 0);
-
-	total = acc_len + incoming_len;
-	out = palloc(total);
-	if (acc != NULL && acc_len > 0)
-		memcpy(out, acc, acc_len);
-	memcpy(out + acc_len, incoming, incoming_len);
-
-	if (out_len != NULL)
-		*out_len = total;
-	return out;
-}
-
-/*
- * Combine an incoming payload into a channel's current payload.
- *
- * `acc`/`acc_len` is the channel's existing payload (NULL/0 for the first one);
- * `incoming`/`incoming_len` is the new payload.  Returns the combined result as
- * freshly palloc'd bytes (caller frees) with its length in *out_len, by
- * dispatching on the incoming payload's kind:
- *
- *   - a serialized bloom part is folded (bitwise-OR unioned) into the running
- *     merged part, so the payload stays one filter-sized chunk regardless of how
- *     many parts arrive (AnserBloomFoldPart);
- *   - any other, opaque payload is appended (AnserOpaqueFoldPart).
- *
- * Within one channel every payload is the same kind, so acc and incoming always
- * agree.  The incoming payload must be non-empty -- the caller
- * (AnserStorePayloadDSM) validates that.  Returns NULL on malformed bloom input.
- * This is the pure payload-combination policy, free of shared memory, so it can
- * be unit-tested directly.
- */
-void *
-AnserCombinePayload(const void *acc, Size acc_len,
-					const void *incoming, Size incoming_len, Size *out_len)
-{
-	Assert(incoming != NULL && incoming_len > 0);
-
-	if (AnserBloomLooksLikePart(incoming, incoming_len))
-		return AnserBloomFoldPart(acc, acc_len, incoming, incoming_len, out_len);
-
-	return AnserOpaqueFoldPart(acc, acc_len, incoming, incoming_len, out_len);
 }
 
 bool
@@ -339,13 +201,27 @@ AnserBloomSerializePart(const bloom_filter *filter, uint32 part_index,
 	return true;
 }
 
+/*
+ * Rebuild the filter from a received merged part.
+ *
+ * The bitset parameters are NOT taken from the wire header: the caller passes
+ * the same (total_elems, max_payload_bytes, seed) used to produce the filter --
+ * it holds them in the plan node, so both ends agree by construction.  We rebuild
+ * the empty filter from those, then load the received bitset into it.  The wire
+ * header is still validated (magic/version/counts) and, crucially, the received
+ * bitset length must exactly match the size the local parameters imply; any
+ * mismatch (version/parameter skew, truncation) returns NULL so the consumer
+ * fails open rather than loading a wrongly-shaped bitset.  part_index/total_parts
+ * are surfaced from the header for diagnostics.
+ */
 bloom_filter *
 AnserBloomDeserializePart(const void *payload, Size payload_len,
+						  int64 total_elems, Size max_payload_bytes, uint64 seed,
 						  uint32 *part_index, uint32 *total_parts)
 {
 	const AnserBloomPartHeader *header;
 	const unsigned char *bitset;
-	Size		bitset_bytes;
+	Size		expected_bytes;
 	bloom_filter *filter;
 
 	if (part_index != NULL)
@@ -360,32 +236,25 @@ AnserBloomDeserializePart(const void *payload, Size payload_len,
 	if (!AnserBloomValidateHeader(header, payload_len))
 		return NULL;
 
-	bitset_bytes = (Size) (header->bitset_bits / BITS_PER_BYTE);
-	bitset = (const unsigned char *) payload + sizeof(AnserBloomPartHeader);
-
-	filter = bloom_create_with_params(header->bitset_bits,
-								   header->k_hash_funcs,
-								   header->seed);
+	filter = AnserBloomCreate(total_elems, max_payload_bytes, seed);
 	if (filter == NULL)
 		return NULL;
 
-	bloom_set_bitset_data(filter, bitset, bitset_bytes);
+	/* The received bitset must be exactly the size our parameters imply. */
+	expected_bytes = bloom_bitset_bytes(filter);
+	if (payload_len - sizeof(AnserBloomPartHeader) != expected_bytes)
+	{
+		bloom_free(filter);
+		return NULL;
+	}
+
+	bitset = (const unsigned char *) payload + sizeof(AnserBloomPartHeader);
+	bloom_set_bitset_data(filter, bitset, expected_bytes);
 	if (part_index != NULL)
 		*part_index = header->part_index;
 	if (total_parts != NULL)
 		*total_parts = header->total_parts;
 	return filter;
-}
-
-static uint64
-AnserBloomFloorPowerOfTwo(uint64 value)
-{
-	uint64		result = 1;
-
-	while (result <= value / 2 && result < (PG_UINT32_MAX + UINT64CONST(1)))
-		result <<= 1;
-
-	return result;
 }
 
 static bool

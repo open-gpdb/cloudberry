@@ -30,6 +30,16 @@ RETURNS bool
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT;
 
+CREATE FUNCTION anser_test_publish_value(
+    gp_session_id int4,
+    gp_command_count int4,
+    condition_id int4,
+    condition_key text,
+    value int4)
+RETURNS bool
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT;
+
 CREATE FUNCTION anser_test_consume(
     gp_session_id int4,
     gp_command_count int4,
@@ -37,6 +47,16 @@ CREATE FUNCTION anser_test_consume(
     condition_key text,
     timeout_ms int4)
 RETURNS bytea
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT;
+
+CREATE FUNCTION anser_test_consume_has(
+    gp_session_id int4,
+    gp_command_count int4,
+    condition_id int4,
+    condition_key text,
+    value int4)
+RETURNS bool
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT;
 
@@ -63,28 +83,15 @@ RETURNS bool
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT;
 
-CREATE FUNCTION anser_test_bloom_fold(
-    condition_key text,
-    left_value int4,
-    right_value int4)
-RETURNS bool
-AS 'MODULE_PATHNAME'
-LANGUAGE C STRICT;
-
 CREATE FUNCTION anser_test_bloom_fold_inplace()
 RETURNS bool
 AS 'MODULE_PATHNAME'
 LANGUAGE C;
 
-CREATE FUNCTION anser_test_payload_combine()
+CREATE FUNCTION anser_test_bloom_rejects_mismatch()
 RETURNS bool
 AS 'MODULE_PATHNAME'
 LANGUAGE C;
-
-CREATE FUNCTION anser_test_bloom_rejects_tiny(bits int4)
-RETURNS bool
-AS 'MODULE_PATHNAME'
-LANGUAGE C STRICT;
 
 CREATE FUNCTION anser_test_node_roundtrip(value int4)
 RETURNS bool

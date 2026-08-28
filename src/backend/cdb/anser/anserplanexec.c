@@ -419,6 +419,8 @@ anser_consume_begin(CustomScanState *node, EState *estate, int eflags)
 	AnserChannelKey key;
 	uint32		part_index;
 	uint32		expected_parts;
+	int64		total_elems = intVal(list_nth(priv, ANSER_RF_PRIV_TOTAL_ELEMS));
+	Size		max_payload = (Size) intVal(list_nth(priv, ANSER_RF_PRIV_MAX_PAYLOAD));
 
 	st->key_attno = (AttrNumber) intVal(list_nth(priv, ANSER_RF_PRIV_KEY_ATTNO));
 	st->planned_bytes = intVal(list_nth(priv, ANSER_RF_PRIV_PLANNED_BYTES));
@@ -428,7 +430,8 @@ anser_consume_begin(CustomScanState *node, EState *estate, int eflags)
 	anser_rf_build_key(cscan, &key);
 	anser_rf_part_info(&part_index, &expected_parts);
 
-	st->consume = ExecInitAnserBloomFilterConsume(&key, expected_parts);
+	st->consume = ExecInitAnserBloomFilterConsume(&key, total_elems, max_payload,
+												  expected_parts);
 
 	node->custom_ps = list_make1(ExecInitNode(child, estate, eflags));
 }

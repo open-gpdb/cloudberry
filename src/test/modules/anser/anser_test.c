@@ -49,17 +49,26 @@
 
 PG_MODULE_MAGIC;
 
+/*
+ * Bloom sizing used by the test helpers.  bloom_create floors every filter at
+ * 1 MB, so these are the smallest filters we can build; producer and consumer
+ * sides must pass the identical pair (that is the whole point of carrying the
+ * parameters in the node rather than on the wire).
+ */
+#define ANSER_TEST_ELEMS		32
+#define ANSER_TEST_MAX_PAYLOAD	(1024 * 1024)
+
 PG_FUNCTION_INFO_V1(anser_test_register_condition);
 PG_FUNCTION_INFO_V1(anser_test_subscribe);
 PG_FUNCTION_INFO_V1(anser_test_publish);
+PG_FUNCTION_INFO_V1(anser_test_publish_value);
 PG_FUNCTION_INFO_V1(anser_test_consume);
+PG_FUNCTION_INFO_V1(anser_test_consume_has);
 PG_FUNCTION_INFO_V1(anser_test_state);
 PG_FUNCTION_INFO_V1(anser_test_cancel_query);
 PG_FUNCTION_INFO_V1(anser_test_bloom_roundtrip);
-PG_FUNCTION_INFO_V1(anser_test_bloom_fold);
 PG_FUNCTION_INFO_V1(anser_test_bloom_fold_inplace);
-PG_FUNCTION_INFO_V1(anser_test_payload_combine);
-PG_FUNCTION_INFO_V1(anser_test_bloom_rejects_tiny);
+PG_FUNCTION_INFO_V1(anser_test_bloom_rejects_mismatch);
 PG_FUNCTION_INFO_V1(anser_test_node_roundtrip);
 PG_FUNCTION_INFO_V1(anser_test_client_roundtrip);
 PG_FUNCTION_INFO_V1(anser_test_multi_consumer);
@@ -72,6 +81,8 @@ PG_FUNCTION_INFO_V1(anser_test_sweep);
 PG_FUNCTION_INFO_V1(anser_test_max_channels_stable_across_slices);
 
 static bool build_test_key(FunctionCallInfo fcinfo, AnserChannelKey *key);
+static char *anser_make_test_part(const char *condition_key, int32 value,
+								  Size *len_out);
 static const char *state_to_string(AnserChannelState state);
 static char *anser_loopback_host(void);
 static PGconn *anser_open_consumer(const AnserChannelKey *key);
@@ -141,6 +152,34 @@ anser_test_publish(PG_FUNCTION_ARGS)
 							  cancelled));
 }
 
+/*
+ * Publish a real serialized bloom part carrying a single int value.  Multiple
+ * producers on one channel each call this; the coordinator stores the first part
+ * and OR-folds the rest (all same size), so the merged filter contains every
+ * published value.  Used by the state-machine test that drives >1 producer, which
+ * a raw SQL bytea literal cannot express now that combine is bloom-only.
+ */
+Datum
+anser_test_publish_value(PG_FUNCTION_ARGS)
+{
+	AnserChannelKey key;
+	int32		value = PG_GETARG_INT32(4);
+	char	   *part;
+	Size		len = 0;
+	bool		ok;
+
+	if (!build_test_key(fcinfo, &key))
+		PG_RETURN_BOOL(false);
+
+	part = anser_make_test_part(key.condition_key, value, &len);
+	if (part == NULL)
+		PG_RETURN_BOOL(false);
+
+	ok = AnserPublish(&key, part, len, false);
+	pfree(part);
+	PG_RETURN_BOOL(ok);
+}
+
 Datum
 anser_test_consume(PG_FUNCTION_ARGS)
 {
@@ -178,6 +217,52 @@ anser_test_consume(PG_FUNCTION_ARGS)
 		memcpy(VARDATA(result), buffer, payload_len);
 
 	PG_RETURN_BYTEA_P(result);
+}
+
+/*
+ * Consume the merged bloom payload and test membership of a single value.  Like
+ * anser_test_consume, but rebuilds the filter from the shared (ANSER_TEST_ELEMS,
+ * ANSER_TEST_MAX_PAYLOAD, key-derived seed) parameters -- exactly how the real
+ * consumer node reconstructs it, with the parameters carried by the node rather
+ * than the wire.  Returns true iff the value is present in the received filter.
+ */
+Datum
+anser_test_consume_has(PG_FUNCTION_ARGS)
+{
+	AnserChannelKey key;
+	int32		value = PG_GETARG_INT32(4);
+	Datum		d = Int32GetDatum(value);
+	char	   *buffer;
+	Size		payload_len = 0;
+	bool		cancelled = false;
+	bloom_filter *filter;
+	bool		has;
+
+	if (!build_test_key(fcinfo, &key))
+		PG_RETURN_BOOL(false);
+
+	if (!AnserWaitReady(&key, &cancelled) || cancelled)
+		PG_RETURN_BOOL(false);
+
+	buffer = (char *) palloc((Size) gp_anser_max_info_size);
+	if (!AnserConsumeReady(&key, buffer, (Size) gp_anser_max_info_size,
+						   &payload_len, &cancelled) || cancelled)
+	{
+		pfree(buffer);
+		PG_RETURN_BOOL(false);
+	}
+
+	filter = AnserBloomDeserializePart(buffer, payload_len,
+									   ANSER_TEST_ELEMS, ANSER_TEST_MAX_PAYLOAD,
+									   AnserBloomSeed(key.condition_key),
+									   NULL, NULL);
+	pfree(buffer);
+	if (filter == NULL)
+		PG_RETURN_BOOL(false);
+
+	has = !bloom_lacks_element(filter, (unsigned char *) &d, sizeof(Datum));
+	bloom_free(filter);
+	PG_RETURN_BOOL(has);
 }
 
 Datum
@@ -235,6 +320,7 @@ anser_test_bloom_roundtrip(PG_FUNCTION_ARGS)
 		PG_RETURN_BOOL(false);
 
 	roundtrip = AnserBloomDeserializePart(payload, payload_len,
+									   32, 1024 * 1024, seed,
 									   &part_index, &total_parts);
 	if (roundtrip == NULL)
 		PG_RETURN_BOOL(false);
@@ -247,171 +333,11 @@ anser_test_bloom_roundtrip(PG_FUNCTION_ARGS)
 }
 
 /*
- * Coordinator-side fold: two segment parts folded (one at a time) must yield a
- * single merged part -- sized like one part regardless of the fold count, with
- * total_parts recording how many were combined -- whose filter contains both
- * segments' elements.  This is the master-side union that lets each consumer
- * receive one chunk instead of N.
- */
-Datum
-anser_test_bloom_fold(PG_FUNCTION_ARGS)
-{
-	char	   *key = text_to_cstring(PG_GETARG_TEXT_PP(0));
-	int32		left_arg = PG_GETARG_INT32(1);
-	int32		right_arg = PG_GETARG_INT32(2);
-	Datum		left_value = Int32GetDatum(left_arg);
-	Datum		right_value = Int32GetDatum(right_arg);
-	uint64		seed = AnserBloomSeed(key);
-	bloom_filter *left;
-	bloom_filter *right;
-	bloom_filter *merged_filter;
-	char	   *left_payload;
-	char	   *right_payload;
-	void	   *merged1;
-	void	   *merged2;
-	Size		left_size;
-	Size		right_size;
-	Size		left_len = 0;
-	Size		right_len = 0;
-	Size		merged1_len = 0;
-	Size		merged2_len = 0;
-	uint32		part_index = 0;
-	uint32		total_parts = 0;
-	bool		ok;
-
-	left = AnserBloomCreate(32, 1024 * 1024, seed);
-	right = AnserBloomCreate(32, 1024 * 1024, seed);
-	if (left == NULL || right == NULL)
-		PG_RETURN_BOOL(false);
-
-	bloom_add_element(left, (unsigned char *) &left_value, sizeof(Datum));
-	bloom_add_element(right, (unsigned char *) &right_value, sizeof(Datum));
-	left_size = AnserBloomSerializedSize(left);
-	right_size = AnserBloomSerializedSize(right);
-	left_payload = palloc(left_size);
-	right_payload = palloc(right_size);
-	ok = AnserBloomSerializePart(left, 0, 2, left_payload, left_size, &left_len) &&
-		AnserBloomSerializePart(right, 1, 2, right_payload, right_size,
-								&right_len);
-	bloom_free(left);
-	bloom_free(right);
-	if (!ok)
-		PG_RETURN_BOOL(false);
-
-	merged1 = AnserBloomFoldPart(NULL, 0, left_payload, left_len, &merged1_len);
-	if (merged1 == NULL)
-		PG_RETURN_BOOL(false);
-	merged2 = AnserBloomFoldPart(merged1, merged1_len, right_payload, right_len,
-								 &merged2_len);
-	pfree(merged1);
-	if (merged2 == NULL)
-		PG_RETURN_BOOL(false);
-
-	merged_filter = AnserBloomDeserializePart(merged2, merged2_len,
-											  &part_index, &total_parts);
-	ok = merged_filter != NULL &&
-		AnserBloomLooksLikePart(merged2, merged2_len) &&
-		merged2_len == left_size &&		/* one chunk, size independent of count */
-		part_index == 0 &&
-		total_parts == 2 &&
-		!bloom_lacks_element(merged_filter, (unsigned char *) &left_value,
-							 sizeof(Datum)) &&
-		!bloom_lacks_element(merged_filter, (unsigned char *) &right_value,
-							 sizeof(Datum));
-	if (merged_filter != NULL)
-		bloom_free(merged_filter);
-	PG_RETURN_BOOL(ok);
-}
-
-/*
- * AnserCombinePayload dispatch: an opaque payload is appended (concatenated),
- * while a serialized bloom part is folded (unioned) into a single merged part.
- * This is the pure combine policy extracted from AnserStorePayloadDSM, so it can
- * be exercised on plain byte buffers without shared memory.
- */
-Datum
-anser_test_payload_combine(PG_FUNCTION_ARGS)
-{
-	uint64		seed = AnserBloomSeed("combine_bloom");
-	bloom_filter *left;
-	bloom_filter *right;
-	bloom_filter *merged;
-	Datum		left_value = Int32GetDatum(11);
-	Datum		right_value = Int32GetDatum(22);
-	char	   *left_part;
-	char	   *right_part;
-	Size		left_size;
-	Size		right_size;
-	Size		left_len = 0;
-	Size		right_len = 0;
-	void	   *o1;
-	void	   *o2;
-	void	   *c1;
-	void	   *c2;
-	Size		o1_len = 0;
-	Size		o2_len = 0;
-	Size		c1_len = 0;
-	Size		c2_len = 0;
-	uint32		part_index = 0;
-	uint32		total_parts = 0;
-	bool		opaque_ok;
-	bool		bloom_ok;
-
-	/* Opaque path: first payload copied verbatim, second appended. */
-	o1 = AnserCombinePayload(NULL, 0, "aa", 2, &o1_len);
-	o2 = (o1 != NULL) ? AnserCombinePayload(o1, o1_len, "bb", 2, &o2_len) : NULL;
-	opaque_ok = o1 != NULL && o1_len == 2 && memcmp(o1, "aa", 2) == 0 &&
-		o2 != NULL && o2_len == 4 && memcmp(o2, "aabb", 4) == 0;
-
-	/* Bloom path: two parts combine into one merged, single-part chunk. */
-	left = AnserBloomCreate(32, 1024 * 1024, seed);
-	right = AnserBloomCreate(32, 1024 * 1024, seed);
-	if (left == NULL || right == NULL)
-		PG_RETURN_BOOL(false);
-
-	bloom_add_element(left, (unsigned char *) &left_value, sizeof(Datum));
-	bloom_add_element(right, (unsigned char *) &right_value, sizeof(Datum));
-	left_size = AnserBloomSerializedSize(left);
-	right_size = AnserBloomSerializedSize(right);
-	left_part = palloc(left_size);
-	right_part = palloc(right_size);
-	if (!AnserBloomSerializePart(left, 0, 2, left_part, left_size, &left_len) ||
-		!AnserBloomSerializePart(right, 1, 2, right_part, right_size, &right_len))
-	{
-		bloom_free(left);
-		bloom_free(right);
-		PG_RETURN_BOOL(false);
-	}
-	bloom_free(left);
-	bloom_free(right);
-
-	c1 = AnserCombinePayload(NULL, 0, left_part, left_len, &c1_len);
-	c2 = (c1 != NULL) ?
-		AnserCombinePayload(c1, c1_len, right_part, right_len, &c2_len) : NULL;
-	merged = (c2 != NULL) ?
-		AnserBloomDeserializePart(c2, c2_len, &part_index, &total_parts) : NULL;
-
-	bloom_ok = c1 != NULL &&
-		c2 != NULL &&
-		c2_len == left_size &&		/* one merged chunk, single-part size */
-		merged != NULL &&
-		part_index == 0 &&
-		total_parts == 2 &&
-		!bloom_lacks_element(merged, (unsigned char *) &left_value,
-							 sizeof(Datum)) &&
-		!bloom_lacks_element(merged, (unsigned char *) &right_value,
-							 sizeof(Datum));
-	if (merged != NULL)
-		bloom_free(merged);
-
-	PG_RETURN_BOOL(opaque_ok && bloom_ok);
-}
-
-/*
  * In-place fold: folding an equally-sized part into a merged part is a bitwise
  * OR of the bitset plus a fold-count bump, mutating the buffer without realloc.
- * A differently-sized part is rejected and leaves the accumulator untouched, so
- * the caller can fall back to building a fresh payload.
+ * This is the coordinator's only combine path now (the first part is stored
+ * verbatim, every later part folds in here).  A differently-sized part is
+ * rejected and leaves the accumulator untouched.
  */
 Datum
 anser_test_bloom_fold_inplace(PG_FUNCTION_ARGS)
@@ -462,7 +388,8 @@ anser_test_bloom_fold_inplace(PG_FUNCTION_ARGS)
 
 	same_ok = AnserBloomFoldPartInPlace(acc, acc_len, part, part_len);
 	merged = same_ok ?
-		AnserBloomDeserializePart(acc, acc_len, &part_index, &total_parts) : NULL;
+		AnserBloomDeserializePart(acc, acc_len, 32, 1024 * 1024, seed,
+								  &part_index, &total_parts) : NULL;
 	same_ok = same_ok &&
 		acc_len == acc_size &&			/* size unchanged, folded in place */
 		merged != NULL &&
@@ -475,8 +402,12 @@ anser_test_bloom_fold_inplace(PG_FUNCTION_ARGS)
 	if (merged != NULL)
 		bloom_free(merged);
 
-	/* A differently-sized part must be rejected and leave acc untouched. */
-	big = AnserBloomCreate(100000, 1024 * 1024, seed);
+	/*
+	 * A differently-sized part must be rejected and leave acc untouched.  Since
+	 * bloom_create floors every filter at 1 MB, we need a genuinely larger
+	 * cardinality/budget to get a bigger (2 MB) bitset than the 1 MB acc.
+	 */
+	big = AnserBloomCreate(1500000, 4 * 1024 * 1024, seed);
 	if (big == NULL)
 		PG_RETURN_BOOL(false);
 	big_size = AnserBloomSerializedSize(big);
@@ -498,44 +429,77 @@ anser_test_bloom_fold_inplace(PG_FUNCTION_ARGS)
 }
 
 /*
- * Security regression: a crafted bloom part with a tiny bitset (e.g. bits = 4,
- * so bitset_bytes == 0) must be rejected rather than producing a filter with no
- * bitset storage (which membership tests would index out of bounds).  This
- * payload path is reachable from the PUBLIC gp_anser_publish builtin, so both
- * entry points must return NULL for such a header.  Returns true iff the crafted
- * header is safely rejected everywhere (no crash, no filter built).
+ * Safety regression for the size/format check in AnserBloomDeserializePart.
+ *
+ * The consumer rebuilds the filter from its OWN (total_elems, max_payload, seed)
+ * parameters, then requires the received bitset to be exactly the size those
+ * parameters imply and the wire header to carry the expected magic.  A
+ * well-formed part must load; a truncated one, an oversized one, and one with a
+ * corrupted magic must all be rejected (NULL) so the consumer fails open rather
+ * than loading a wrongly-shaped bitset.  Returns true iff the good part loads and
+ * every bad one is rejected.
  */
 Datum
-anser_test_bloom_rejects_tiny(PG_FUNCTION_ARGS)
+anser_test_bloom_rejects_mismatch(PG_FUNCTION_ARGS)
 {
-	int32		bits_arg = PG_GETARG_INT32(0);
-	AnserBloomPartHeader header;
-	uint32		part_index = 0;
-	uint32		total_parts = 0;
-	bloom_filter *from_part;
-	bloom_filter *from_params;
+	uint64		seed = AnserBloomSeed("reject_mismatch");
+	bloom_filter *filter;
+	char	   *good;
+	Size		good_size;
+	Size		good_len = 0;
+	bloom_filter *ok_load;
+	bloom_filter *short_load;
+	bloom_filter *long_load;
+	bloom_filter *magic_load;
+	AnserBloomPartHeader *hdr;
+	uint32		saved_magic;
 	bool		ok;
 
-	MemSet(&header, 0, sizeof(header));
-	header.magic = ANSER_BLOOM_PART_MAGIC;
-	header.version = ANSER_BLOOM_PART_VERSION;
-	header.k_hash_funcs = 3;
-	header.seed = 0;
-	header.bitset_bits = (uint64) bits_arg;	/* tiny -> bitset_bytes == 0 */
-	header.part_index = 0;
-	header.total_parts = 1;
+	filter = AnserBloomCreate(ANSER_TEST_ELEMS, ANSER_TEST_MAX_PAYLOAD, seed);
+	if (filter == NULL)
+		PG_RETURN_BOOL(false);
 
-	/* The header itself is the whole payload (bitset_bytes == 0). */
-	from_part = AnserBloomDeserializePart(&header, sizeof(header),
-										  &part_index, &total_parts);
-	from_params = bloom_create_with_params(header.bitset_bits, 3, 0);
+	good_size = AnserBloomSerializedSize(filter);
+	good = palloc(good_size);
+	if (!AnserBloomSerializePart(filter, 0, 1, good, good_size, &good_len))
+	{
+		bloom_free(filter);
+		PG_RETURN_BOOL(false);
+	}
+	bloom_free(filter);
 
-	ok = (from_part == NULL && from_params == NULL);
+	/* Well-formed: loads. */
+	ok_load = AnserBloomDeserializePart(good, good_len, ANSER_TEST_ELEMS,
+										ANSER_TEST_MAX_PAYLOAD, seed, NULL, NULL);
 
-	if (from_part != NULL)
-		bloom_free(from_part);
-	if (from_params != NULL)
-		bloom_free(from_params);
+	/* One byte short of the expected bitset: rejected. */
+	short_load = AnserBloomDeserializePart(good, good_len - 1, ANSER_TEST_ELEMS,
+										   ANSER_TEST_MAX_PAYLOAD, seed, NULL, NULL);
+
+	/* Claiming more bytes than the expected bitset: rejected. */
+	long_load = AnserBloomDeserializePart(good, good_len + 1, ANSER_TEST_ELEMS,
+										  ANSER_TEST_MAX_PAYLOAD, seed, NULL, NULL);
+
+	/* Corrupted wire magic: rejected before the size check. */
+	hdr = (AnserBloomPartHeader *) good;
+	saved_magic = hdr->magic;
+	hdr->magic = saved_magic ^ 0xFFFFFFFFU;
+	magic_load = AnserBloomDeserializePart(good, good_len, ANSER_TEST_ELEMS,
+										   ANSER_TEST_MAX_PAYLOAD, seed, NULL, NULL);
+	hdr->magic = saved_magic;
+
+	ok = ok_load != NULL && short_load == NULL && long_load == NULL &&
+		magic_load == NULL;
+
+	if (ok_load != NULL)
+		bloom_free(ok_load);
+	if (short_load != NULL)
+		bloom_free(short_load);
+	if (long_load != NULL)
+		bloom_free(long_load);
+	if (magic_load != NULL)
+		bloom_free(magic_load);
+	pfree(good);
 
 	PG_RETURN_BOOL(ok);
 }
@@ -569,7 +533,7 @@ anser_test_node_roundtrip(PG_FUNCTION_ARGS)
 	if (!ok)
 		PG_RETURN_BOOL(false);
 
-	consumer = ExecInitAnserBloomFilterConsume(&key, 1);
+	consumer = ExecInitAnserBloomFilterConsume(&key, 32, 1024 * 1024, 1);
 	if (consumer == NULL)
 		PG_RETURN_BOOL(false);
 	ok = ExecAnserBloomFilterConsume(consumer, 1000) &&
@@ -843,7 +807,8 @@ anser_test_dsm_free_on_success(PG_FUNCTION_ARGS)
 	char	   *saved_host = qdHostname;
 	int			saved_port = qdPostmasterPort;
 	AnserChannelKey key;
-	unsigned char part[4];
+	char	   *part;
+	Size		part_len = 0;
 	int			nseg = getgpsegmentCount();
 	PGconn	  **cons;
 	int			i;
@@ -863,7 +828,7 @@ anser_test_dsm_free_on_success(PG_FUNCTION_ARGS)
 	key.gp_command_count = 1;
 	key.condition_id = 1;
 	strlcpy(key.condition_key, "dsm_success", ANSER_CONDITION_KEY_SIZE);
-	memset(part, 0xAB, sizeof(part));
+	part = anser_make_test_part(key.condition_key, 7, &part_len);
 
 	cons = (PGconn **) palloc0(sizeof(PGconn *) * nseg);
 
@@ -872,13 +837,13 @@ anser_test_dsm_free_on_success(PG_FUNCTION_ARGS)
 		bool		ready = false;
 
 		/* 5 producers publish until the channel is READY (payload allocated). */
-		if (AnserProducerBegin(&key, 5, GetUserId(), superuser()))
+		if (part != NULL && AnserProducerBegin(&key, 5, GetUserId(), superuser()))
 		{
 			int			p;
 
 			ready = true;
 			for (p = 0; p < 5; p++)
-				if (!AnserPublish(&key, part, sizeof(part), false))
+				if (!AnserPublish(&key, part, part_len, false))
 					ready = false;
 		}
 
@@ -935,7 +900,8 @@ Datum
 anser_test_dsm_free_on_timeout(PG_FUNCTION_ARGS)
 {
 	AnserChannelKey key;
-	unsigned char part[4];
+	char	   *part;
+	Size		part_len = 0;
 	char		saved_timeout[32];
 	bool		present_collecting = false;
 	bool		freed_after_timeout = false;
@@ -949,16 +915,16 @@ anser_test_dsm_free_on_timeout(PG_FUNCTION_ARGS)
 	key.gp_command_count = 1;
 	key.condition_id = 1;
 	strlcpy(key.condition_key, "dsm_timeout", ANSER_CONDITION_KEY_SIZE);
-	memset(part, 0xCD, sizeof(part));
+	part = anser_make_test_part(key.condition_key, 5, &part_len);
 
 	PG_TRY();
 	{
 		int			p;
 
-		if (AnserProducerBegin(&key, 5, GetUserId(), superuser()))
+		if (part != NULL && AnserProducerBegin(&key, 5, GetUserId(), superuser()))
 		{
 			for (p = 0; p < 3; p++)
-				(void) AnserPublish(&key, part, sizeof(part), false);
+				(void) AnserPublish(&key, part, part_len, false);
 
 			present_collecting = AnserChannelPayloadBytes(&key) > 0;
 
@@ -998,7 +964,8 @@ anser_test_dsm_free_on_cancel(PG_FUNCTION_ARGS)
 	char	   *saved_host = qdHostname;
 	int			saved_port = qdPostmasterPort;
 	AnserChannelKey key;
-	unsigned char part[4];
+	char	   *part;
+	Size		part_len = 0;
 	int			nseg = getgpsegmentCount();
 	PGconn	  **cons;
 	int			i;
@@ -1017,7 +984,7 @@ anser_test_dsm_free_on_cancel(PG_FUNCTION_ARGS)
 	key.gp_command_count = 1;
 	key.condition_id = 1;
 	strlcpy(key.condition_key, "dsm_cancel", ANSER_CONDITION_KEY_SIZE);
-	memset(part, 0xEF, sizeof(part));
+	part = anser_make_test_part(key.condition_key, 9, &part_len);
 
 	cons = (PGconn **) palloc0(sizeof(PGconn *) * nseg);
 
@@ -1025,13 +992,13 @@ anser_test_dsm_free_on_cancel(PG_FUNCTION_ARGS)
 	{
 		bool		ready = false;
 
-		if (AnserProducerBegin(&key, 5, GetUserId(), superuser()))
+		if (part != NULL && AnserProducerBegin(&key, 5, GetUserId(), superuser()))
 		{
 			int			p;
 
 			ready = true;
 			for (p = 0; p < 5; p++)
-				if (!AnserPublish(&key, part, sizeof(part), false))
+				if (!AnserPublish(&key, part, part_len, false))
 					ready = false;
 		}
 
@@ -1333,6 +1300,40 @@ anser_test_sweep(PG_FUNCTION_ARGS)
 {
 	AnserServiceMaintenance();
 	PG_RETURN_VOID();
+}
+
+/*
+ * Build a serialized single bloom part (index 0 of 1) carrying one int value,
+ * seeded from condition_key so every part on the same channel is byte-identical
+ * in size and parameters (letting the coordinator OR-fold them in place).  The
+ * caller frees the returned buffer; *len_out gets the serialized length.
+ */
+static char *
+anser_make_test_part(const char *condition_key, int32 value, Size *len_out)
+{
+	uint64		seed = AnserBloomSeed(condition_key);
+	bloom_filter *filter = AnserBloomCreate(ANSER_TEST_ELEMS,
+											ANSER_TEST_MAX_PAYLOAD, seed);
+	Datum		d = Int32GetDatum(value);
+	Size		sz;
+	Size		len = 0;
+	char	   *buf;
+
+	if (filter == NULL)
+		return NULL;
+
+	bloom_add_element(filter, (unsigned char *) &d, sizeof(Datum));
+	sz = AnserBloomSerializedSize(filter);
+	buf = palloc(sz);
+	if (!AnserBloomSerializePart(filter, 0, 1, buf, sz, &len))
+	{
+		bloom_free(filter);
+		pfree(buf);
+		return NULL;
+	}
+	bloom_free(filter);
+	*len_out = len;
+	return buf;
 }
 
 static bool

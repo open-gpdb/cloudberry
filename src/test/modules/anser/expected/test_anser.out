@@ -9,7 +9,10 @@ SELECT anser_test_set_sweep(false);
  
 (1 row)
 
--- Happy path: one condition, two producers, two consumers.
+-- Happy path: one condition, two producers, two consumers.  Each producer
+-- publishes a real bloom part (multi-payload combine is bloom-only now); the two
+-- parts union on the coordinator, so each consumer's received filter contains
+-- both producers' values.
 SELECT anser_test_register_condition(1, 1, 1, 'join_a', 2);
  anser_test_register_condition 
 -------------------------------
@@ -28,9 +31,9 @@ SELECT anser_test_subscribe(1, 1, 1, 'join_a');
  t
 (1 row)
 
-SELECT anser_test_publish(1, 1, 1, 'join_a', '\x6161'::bytea, false);
- anser_test_publish 
---------------------
+SELECT anser_test_publish_value(1, 1, 1, 'join_a', 10);
+ anser_test_publish_value 
+--------------------------
  t
 (1 row)
 
@@ -40,9 +43,9 @@ SELECT anser_test_state(1, 1, 1, 'join_a');
  COLLECTING
 (1 row)
 
-SELECT anser_test_publish(1, 1, 1, 'join_a', '\x6262'::bytea, false);
- anser_test_publish 
---------------------
+SELECT anser_test_publish_value(1, 1, 1, 'join_a', 20);
+ anser_test_publish_value 
+--------------------------
  t
 (1 row)
 
@@ -52,16 +55,16 @@ SELECT anser_test_state(1, 1, 1, 'join_a');
  READY
 (1 row)
 
-SELECT encode(anser_test_consume(1, 1, 1, 'join_a', 0), 'escape');
- encode 
---------
- aabb
+SELECT anser_test_consume_has(1, 1, 1, 'join_a', 10);
+ anser_test_consume_has 
+------------------------
+ t
 (1 row)
 
-SELECT encode(anser_test_consume(1, 1, 1, 'join_a', 0), 'escape');
- encode 
---------
- aabb
+SELECT anser_test_consume_has(1, 1, 1, 'join_a', 20);
+ anser_test_consume_has 
+------------------------
+ t
 (1 row)
 
 SELECT anser_test_state(1, 1, 1, 'join_a');
@@ -173,24 +176,12 @@ SELECT anser_test_bloom_roundtrip('bf_roundtrip', 42);
  t
 (1 row)
 
--- Coordinator-side fold: parts combined into one merged chunk (union on master).
-SELECT anser_test_bloom_fold('bf_fold', 42, 84);
- anser_test_bloom_fold 
------------------------
- t
-(1 row)
-
--- In-place fold: same-size union mutates the buffer; mismatched size is rejected.
+-- In-place fold: same-size union mutates the buffer; a mismatched size is
+-- rejected.  This is the coordinator's only combine path (first part is stored
+-- verbatim, every later part folds in here).
 SELECT anser_test_bloom_fold_inplace() AS fold_inplace_ok;
  fold_inplace_ok 
 -----------------
- t
-(1 row)
-
--- Payload-combine policy: opaque payloads append, bloom parts union (one chunk).
-SELECT anser_test_payload_combine() AS combine_ok;
- combine_ok 
-------------
  t
 (1 row)
 
@@ -200,23 +191,12 @@ SELECT anser_test_node_roundtrip(168);
  t
 (1 row)
 
--- Security regression: a crafted part header with a tiny bitset (bitset_bytes
--- == 0) must be rejected, not turned into a filter with no bitset storage.
-SELECT anser_test_bloom_rejects_tiny(0) AS reject_0;
- reject_0 
-----------
- t
-(1 row)
-
-SELECT anser_test_bloom_rejects_tiny(2) AS reject_2;
- reject_2 
-----------
- t
-(1 row)
-
-SELECT anser_test_bloom_rejects_tiny(4) AS reject_4;
- reject_4 
-----------
+-- Safety regression: the consumer rebuilds the filter from its own parameters and
+-- requires the received bitset to be exactly the expected size (and the header
+-- magic to match); truncated/oversized/corrupt parts are rejected (fail open).
+SELECT anser_test_bloom_rejects_mismatch() AS reject_mismatch;
+ reject_mismatch 
+-----------------
  t
 (1 row)
 

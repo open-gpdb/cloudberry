@@ -113,11 +113,18 @@ ExecAnserBloomFilterProducePublish(AnserBloomFilterProduceState *state)
 		return AnserProducePublishPart(state, NULL, 0, true);
 	}
 
+	/*
+	 * Serialize as a self-contained single part (index 0 of 1).  The coordinator
+	 * stores the first part verbatim and OR-folds each later part, bumping the
+	 * merged header's fold count, so the final count reflects how many parts were
+	 * unioned.  state->part_index / state->total_parts identify this producer to
+	 * the channel (expected_producers), not the on-wire part layout.
+	 */
 	payload_size = AnserBloomSerializedSize(state->filter);
 	payload = palloc(payload_size);
 	ok = AnserBloomSerializePart(state->filter,
-								  state->part_index,
-								  state->total_parts,
+								  0,
+								  1,
 								  payload,
 								  payload_size,
 								  &payload_len);

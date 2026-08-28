@@ -101,8 +101,7 @@ typedef struct AnserChannelEntry
 	int32		done_consumers;
 	Size		data_len;
 	dsm_handle	dsm_handle;
-	TimestampTz created_at;
-	TimestampTz updated_at;
+	TimestampTz updated_at;		/* last activity; drives the produce timeout */
 } AnserChannelEntry;
 
 typedef struct AnserControl

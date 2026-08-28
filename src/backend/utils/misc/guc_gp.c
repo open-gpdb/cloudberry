@@ -3468,11 +3468,11 @@ struct config_int ConfigureNamesInt_gp[] =
 	{
 		{"gp_anser_max_info_size", PGC_POSTMASTER, CUSTOM_OPTIONS,
 			gettext_noop("Sets the maximum byte size of one Anser information record."),
-			gettext_noop("This is the per-record DSM payload cap for Anser information."),
+			gettext_noop("Per-record DSM payload cap for Anser information.  The default holds a full 64 MB bloom-filter bitset plus its serialized-part header."),
 			GUC_NOT_IN_SAMPLE
 		},
 		&gp_anser_max_info_size,
-		16 * 1024 * 1024, 1, INT_MAX,
+		64 * 1024 * 1024 + 1024 * 1024, 1, INT_MAX,
 		NULL, NULL, NULL
 	},
 
