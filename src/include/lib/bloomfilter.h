@@ -30,7 +30,9 @@ extern bloom_filter *bloom_create_aggresive(int64 total_elems,
 extern bool bloom_union(bloom_filter *dst, const bloom_filter *src);
 extern Size bloom_bitset_bytes(const bloom_filter *filter);
 extern const unsigned char *bloom_bitset_data(const bloom_filter *filter);
-extern void bloom_set_bitset_data(bloom_filter *filter,
-								  const unsigned char *data, Size len);
+extern bloom_filter *bloom_create_from_bitset(int64 total_elems,
+											  int bloom_work_mem, uint64 seed,
+											  const unsigned char *bitset,
+											  Size bitset_len);
 
 #endif							/* BLOOMFILTER_H */

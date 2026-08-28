@@ -326,16 +326,32 @@ bloom_bitset_data(const bloom_filter *filter)
 	return filter != NULL ? filter->bitset : NULL;
 }
 
-void
-bloom_set_bitset_data(bloom_filter *filter, const unsigned char *data, Size len)
+/*
+ * Create a filter sized exactly as bloom_create(total_elems, work_mem, seed) and
+ * initialize its bitset from the supplied bytes in one step.  Returns NULL if the
+ * supplied length is not the filter's bitset size, so a wrongly-sized bitset is
+ * rejected rather than partially loaded.  This is the only supported way to
+ * populate a filter from serialized bytes; afterwards a filter is only ever grown
+ * by bloom_add_element / bloom_union.
+ */
+bloom_filter *
+bloom_create_from_bitset(int64 total_elems, int bloom_work_mem, uint64 seed,
+						 const unsigned char *bitset, Size bitset_len)
 {
-	if (filter == NULL || data == NULL)
-		return;
+	bloom_filter *filter;
 
-	if (len != bloom_bitset_bytes(filter))
-		return;
+	if (bitset == NULL)
+		return NULL;
 
-	memcpy(filter->bitset, data, len);
+	filter = bloom_create(total_elems, bloom_work_mem, seed);
+	if (bitset_len != (Size) (filter->m / BITS_PER_BYTE))
+	{
+		bloom_free(filter);
+		return NULL;
+	}
+
+	memcpy(filter->bitset, bitset, bitset_len);
+	return filter;
 }
 
 double

@@ -34,6 +34,17 @@
 static bool AnserBloomValidateHeader(const AnserBloomPartHeader *header,
 									 Size payload_len);
 
+/*
+ * Map Anser's payload budget to bloom_create's work_mem (KB): the space left for
+ * the bitset after the part header.  Callers must have checked that
+ * max_payload_bytes leaves room for a header.
+ */
+static int
+AnserBloomWorkMemKb(Size max_payload_bytes)
+{
+	return (int) ((max_payload_bytes - sizeof(AnserBloomPartHeader)) / 1024);
+}
+
 uint64
 AnserBloomSeed(const char *condition_key)
 {
@@ -62,20 +73,14 @@ AnserBloomSeed(const char *condition_key)
 bloom_filter *
 AnserBloomCreate(int64 total_elems, Size max_payload_bytes, uint64 seed)
 {
-	Size		bitset_budget;
-	int			work_mem_kb;
-
 	if (max_payload_bytes <= sizeof(AnserBloomPartHeader))
 		return NULL;
-
-	bitset_budget = max_payload_bytes - sizeof(AnserBloomPartHeader);
-	work_mem_kb = (int) (bitset_budget / 1024);
 
 	/* optimal_k divides by total_elems; never hand bloom_create zero. */
 	if (total_elems < 1)
 		total_elems = 1;
 
-	return bloom_create(total_elems, work_mem_kb, seed);
+	return bloom_create(total_elems, AnserBloomWorkMemKb(max_payload_bytes), seed);
 }
 
 Size
@@ -213,8 +218,6 @@ AnserBloomDeserializePart(const void *payload, Size payload_len,
 						  uint32 *part_index, uint32 *total_parts)
 {
 	const AnserBloomPartHeader *header;
-	const unsigned char *bitset;
-	Size		expected_bytes;
 	bloom_filter *filter;
 
 	if (part_index != NULL)
@@ -229,20 +232,28 @@ AnserBloomDeserializePart(const void *payload, Size payload_len,
 	if (!AnserBloomValidateHeader(header, payload_len))
 		return NULL;
 
-	filter = AnserBloomCreate(total_elems, max_payload_bytes, seed);
+	if (max_payload_bytes <= sizeof(AnserBloomPartHeader))
+		return NULL;
+	if (total_elems < 1)
+		total_elems = 1;
+
+	/*
+	 * Build the filter straight from the received bitset, sized by our own
+	 * parameters.  bloom_create_from_bitset returns NULL unless the received
+	 * length is exactly the size those parameters imply, so a truncated payload or
+	 * a version/parameter skew fails open here instead of loading a wrongly-shaped
+	 * bitset.  A filter is thus only ever populated at construction and, from then
+	 * on, only grown by add/union -- never re-set.
+	 */
+	filter = bloom_create_from_bitset(total_elems,
+									  AnserBloomWorkMemKb(max_payload_bytes),
+									  seed,
+									  (const unsigned char *) payload +
+									  sizeof(AnserBloomPartHeader),
+									  payload_len - sizeof(AnserBloomPartHeader));
 	if (filter == NULL)
 		return NULL;
 
-	/* The received bitset must be exactly the size our parameters imply. */
-	expected_bytes = bloom_bitset_bytes(filter);
-	if (payload_len - sizeof(AnserBloomPartHeader) != expected_bytes)
-	{
-		bloom_free(filter);
-		return NULL;
-	}
-
-	bitset = (const unsigned char *) payload + sizeof(AnserBloomPartHeader);
-	bloom_set_bitset_data(filter, bitset, expected_bytes);
 	if (part_index != NULL)
 		*part_index = header->part_index;
 	if (total_parts != NULL)
