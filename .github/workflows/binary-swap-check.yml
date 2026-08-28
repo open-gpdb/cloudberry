@@ -246,14 +246,14 @@ jobs:
           echo "Building RPM with Version: ${SAFE_VERSION}"
           
           "${SRC_DIR}"/devops/build/packaging/rpm/build-rpm.sh --version "${SAFE_VERSION}" --release "1"
-          os_version=$(grep -oP '(?<=^VERSION_ID=")[0-9]' /etc/os-release)
+          os_version=$(grep -oP '(?<=^VERSION_ID=")[0-9]+' /etc/os-release)
           RPM_FILE="${HOME}"/rpmbuild/RPMS/x86_64/apache-cloudberry-db-incubating-"${SAFE_VERSION}"-"1".el"${os_version}".x86_64.rpm
           
           # Verify RPM
           echo "Verifying RPM..."
           rpm -qip "${RPM_FILE}"
           for binary in "bin/postgres" "bin/psql"; do
-            if ! rpm -qlp "${RPM_FILE}" | grep -q "${binary}$"; then
+            if ! rpm -qlp "${RPM_FILE}" | grep "${binary}$" >/dev/null 2>&1; then
               echo "::error::Critical binary '${binary}' not found in RPM"
               exit 1
             fi
@@ -390,14 +390,14 @@ jobs:
           SAFE_VERSION=$(echo "99.0.0" | tr '-' '_')
           "${SRC_DIR}"/devops/build/packaging/rpm/build-rpm.sh --version "${SAFE_VERSION}" --release "current"
           
-          os_version=$(grep -oP '(?<=^VERSION_ID=")[0-9]' /etc/os-release)
+          os_version=$(grep -oP '(?<=^VERSION_ID=")[0-9]+' /etc/os-release)
           RPM_FILE="${HOME}"/rpmbuild/RPMS/x86_64/apache-cloudberry-db-incubating-"${SAFE_VERSION}"-"current".el"${os_version}".x86_64.rpm
 
           # Verify RPM
           echo "Verifying RPM..."
           rpm -qip "${RPM_FILE}"
           for binary in "bin/postgres" "bin/psql"; do
-            if ! rpm -qlp "${RPM_FILE}" | grep -q "${binary}$"; then
+            if ! rpm -qlp "${RPM_FILE}" | grep "${binary}$" >/dev/null 2>&1; then
               echo "::error::Critical binary '${binary}' not found in RPM"
               exit 1
             fi
@@ -525,10 +525,15 @@ jobs:
           echo "Installing baseline RPM: ${BASELINE_RPM}"
           dnf install -y "${BASELINE_RPM}"
           
-          # Check installed location based on where bin/postgres ended up
-          INSTALLED_PG=$(rpm -ql apache-cloudberry-db-incubating | grep "bin/postgres$" | head -1)
+          # Check installed location based on where bin/postgres ended up.
+          # Ask the RPM for its own Name: the package name now carries the
+          # major version (apache-cloudberry-db-incubating-<major>), and the
+          # baseline may still use the historical unversioned name.
+          PKG_NAME=$(rpm -qp --queryformat '%{NAME}\n' "${BASELINE_RPM}")
+          echo "Querying installed package: ${PKG_NAME}"
+          INSTALLED_PG=$(rpm -ql "${PKG_NAME}" | grep "bin/postgres$" | head -1)
           if [ -z "$INSTALLED_PG" ]; then
-             echo "::error::Could not find bin/postgres in installed RPM"
+             echo "::error::Could not find bin/postgres in installed RPM (${PKG_NAME})"
              exit 1
           fi
           
@@ -582,8 +587,15 @@ jobs:
 
           dnf install -y "${CURRENT_RPM}" || dnf upgrade -y "${CURRENT_RPM}"
           
-          # Check installed location
-          INSTALLED_PG=$(rpm -ql apache-cloudberry-db-incubating | grep "bin/postgres$" | head -1)
+          # Check installed location (see the baseline step for why the
+          # package name is read from the RPM instead of hardcoded).
+          PKG_NAME=$(rpm -qp --queryformat '%{NAME}\n' "${CURRENT_RPM}")
+          echo "Querying installed package: ${PKG_NAME}"
+          INSTALLED_PG=$(rpm -ql "${PKG_NAME}" | grep "bin/postgres$" | head -1)
+          if [ -z "$INSTALLED_PG" ]; then
+             echo "::error::Could not find bin/postgres in installed RPM (${PKG_NAME})"
+             exit 1
+          fi
           INSTALLED_DIR=$(dirname $(dirname "$INSTALLED_PG"))
           echo "Detected installation at: ${INSTALLED_DIR}"
           
