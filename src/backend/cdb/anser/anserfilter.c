@@ -31,8 +31,6 @@
 #include "common/hashfn.h"
 #include "port/pg_bitutils.h"
 
-#define ANSER_BLOOM_MIN_BITSET_BITS	(1024U * 8U)
-
 static bool AnserBloomValidateHeader(const AnserBloomPartHeader *header,
 									 Size payload_len);
 
@@ -128,7 +126,6 @@ AnserBloomFoldPartInPlace(void *acc, Size acc_len,
 						  const void *part, Size part_len)
 {
 	AnserBloomPartHeader *ah;
-	const AnserBloomPartHeader *ph;
 	unsigned char *abits;
 	const unsigned char *pbits;
 	Size		bitset_bytes;
@@ -141,15 +138,14 @@ AnserBloomFoldPartInPlace(void *acc, Size acc_len,
 		return false;
 
 	ah = (AnserBloomPartHeader *) acc;
-	ph = (const AnserBloomPartHeader *) part;
 
-	/* Identical filter parameters, or OR-ing the bitsets is meaningless. */
-	if (ah->bitset_bits != ph->bitset_bits ||
-		ah->k_hash_funcs != ph->k_hash_funcs ||
-		ah->seed != ph->seed)
-		return false;
-
-	bitset_bytes = (Size) (ah->bitset_bits / BITS_PER_BYTE);
+	/*
+	 * Equal serialized size is sufficient: every part on a channel is built by
+	 * bloom_create from the same (condition-key-derived) parameters, so equal
+	 * length implies an identical bitset shape.  The bitset is whatever follows
+	 * the header, so its length is the payload length minus the header.
+	 */
+	bitset_bytes = acc_len - sizeof(AnserBloomPartHeader);
 	abits = (unsigned char *) acc + sizeof(AnserBloomPartHeader);
 	pbits = (const unsigned char *) part + sizeof(AnserBloomPartHeader);
 
@@ -186,9 +182,6 @@ AnserBloomSerializePart(const bloom_filter *filter, uint32 part_index,
 	MemSet(&header, 0, sizeof(header));
 	header.magic = ANSER_BLOOM_PART_MAGIC;
 	header.version = ANSER_BLOOM_PART_VERSION;
-	header.k_hash_funcs = bloom_k_hash_funcs(filter);
-	header.seed = bloom_seed(filter);
-	header.bitset_bits = bloom_bitset_bits(filter);
 	header.part_index = part_index;
 	header.total_parts = total_parts;
 
@@ -257,11 +250,17 @@ AnserBloomDeserializePart(const void *payload, Size payload_len,
 	return filter;
 }
 
+/*
+ * Validate the wire framing of a part header.  The bitset parameters are not on
+ * the wire anymore (both ends rebuild the filter from the shared plan
+ * parameters), so this only checks the framing: magic/version, a sane fold
+ * count, and that the payload carries a header plus at least some bitset.  The
+ * authoritative size check -- that the received bitset matches the size the local
+ * parameters imply -- is done in AnserBloomDeserializePart.
+ */
 static bool
 AnserBloomValidateHeader(const AnserBloomPartHeader *header, Size payload_len)
 {
-	Size		bitset_bytes;
-
 	if (header == NULL)
 		return false;
 
@@ -272,14 +271,5 @@ AnserBloomValidateHeader(const AnserBloomPartHeader *header, Size payload_len)
 	if (header->total_parts == 0 || header->part_index >= header->total_parts)
 		return false;
 
-	if (header->bitset_bits < ANSER_BLOOM_MIN_BITSET_BITS ||
-		header->bitset_bits > (PG_UINT32_MAX + UINT64CONST(1)) ||
-		((header->bitset_bits - 1) & header->bitset_bits) != 0)
-		return false;
-
-	if (header->k_hash_funcs < 1 || header->k_hash_funcs > 10)
-		return false;
-
-	bitset_bytes = (Size) (header->bitset_bits / BITS_PER_BYTE);
-	return payload_len >= sizeof(AnserBloomPartHeader) + bitset_bytes;
+	return payload_len > sizeof(AnserBloomPartHeader);
 }

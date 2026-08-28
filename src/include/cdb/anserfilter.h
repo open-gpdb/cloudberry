@@ -35,13 +35,19 @@
 #define ANSER_BLOOM_PART_MAGIC		0x41424631U /* ABF1 */
 #define ANSER_BLOOM_PART_VERSION		1U
 
+/*
+ * On-wire framing for a serialized bloom part.  It deliberately does NOT carry
+ * the bitset parameters (size / seed / hash count): both the producer and the
+ * consumer build the filter with bloom_create from the same plan parameters, so
+ * the shape is agreed by construction and never reconstructed from the wire.
+ * magic/version guard the framing; part_index/total_parts track the coordinator
+ * fold count (surfaced as diagnostics).  Kept as a struct for forward
+ * extensibility.
+ */
 typedef struct AnserBloomPartHeader
 {
 	uint32		magic;
 	uint32		version;
-	int32		k_hash_funcs;
-	uint64		seed;
-	uint64		bitset_bits;
 	uint32		part_index;
 	uint32		total_parts;
 } AnserBloomPartHeader;

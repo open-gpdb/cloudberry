@@ -314,24 +314,6 @@ bloom_union(bloom_filter *dst, const bloom_filter *src)
 	return true;
 }
 
-int
-bloom_k_hash_funcs(const bloom_filter *filter)
-{
-	return filter != NULL ? filter->k_hash_funcs : 0;
-}
-
-uint64
-bloom_seed(const bloom_filter *filter)
-{
-	return filter != NULL ? filter->seed : 0;
-}
-
-uint64
-bloom_bitset_bits(const bloom_filter *filter)
-{
-	return filter != NULL ? filter->m : 0;
-}
-
 Size
 bloom_bitset_bytes(const bloom_filter *filter)
 {
