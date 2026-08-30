@@ -420,7 +420,7 @@ anser_produce_explain(CustomScanState *node, List *ancestors, ExplainState *es)
 	 */
 	snprintf(buf, sizeof(buf), "memory=" INT64_FORMAT "kB",
 			 st->planned_bytes / 1024);
-	ExplainPropertyString("Bloom Filter Stats", buf, es);
+	ExplainPropertyText("Bloom Filter Stats", buf, es);
 }
 
 /* ---- consumer ---- */
@@ -594,7 +594,7 @@ anser_consume_explain(CustomScanState *node, List *ancestors, ExplainState *es)
 		snprintf(buf, sizeof(buf),
 				 "memory=" INT64_FORMAT "kB checked=%.0f rejected=%.0f",
 				 st->planned_bytes / 1024, nchecked, nfiltered);
-		ExplainPropertyString("Bloom Filter Stats", buf, es);
+		ExplainPropertyText("Bloom Filter Stats", buf, es);
 
 		if (nloops > 0)
 			ExplainPropertyFloat("Rows Removed by Bloom Filter", NULL,
