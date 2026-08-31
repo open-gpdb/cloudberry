@@ -96,6 +96,28 @@ AnserApplyRuntimeFilters(PlannedStmt *stmt)
 		 * Injected nodes need plan_node_ids unique across the whole statement.
 		 * set_plan_references already numbered every existing node, so continue
 		 * past the current maximum (planTree + subplans).
+		 *
+		 * Why walk the tree instead of reusing the planner's id counter: both
+		 * planners do keep one, but neither survives to this hook.  The
+		 * Postgres planner counts in PlannerGlobal.lastPlanNodeId (planner.c /
+		 * setrefs.c), which is a local of standard_planner() and is gone by the
+		 * time planner() calls us; ORCA counts separately in its DXL
+		 * translation context (CTranslatorDXLToPlStmt::GetNextPlanId), likewise
+		 * internal.  And PlannedStmt carries no max-id field to consult.
+		 * Reaching either counter would mean a core change (a new PlannedStmt
+		 * field with outfuncs/readfuncs/copyfuncs support, plus a gporca API
+		 * change) and would still not cover third-party planner_hooks, whose
+		 * plans arrive numbered who-knows-how.  So we walk: one extra pass over
+		 * a tree that typically has tens of nodes, once per query, only when
+		 * the feature is on -- the same order of work set_plan_refs just did,
+		 * and the only planner-agnostic option at this hook point.
+		 *
+		 * We take the max, not the node count: counting costs the identical
+		 * walk, and "count == next free id" additionally assumes dense
+		 * numbering, which holds for the Postgres planner today (single
+		 * lastPlanNodeId++ per visited node) but is not promised by ORCA's
+		 * CIdGenerator or by third-party hooks.  max + 1 is correct under any
+		 * assignment scheme.
 		 */
 		maxid = anser_max_plan_node_id(stmt->planTree);
 		foreach(lc, stmt->subplans)
