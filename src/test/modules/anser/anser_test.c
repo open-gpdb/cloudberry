@@ -157,8 +157,9 @@ anser_test_publish(PG_FUNCTION_ARGS)
  * Publish a real serialized bloom part carrying a single int value.  Multiple
  * producers on one channel each call this; the coordinator stores the first part
  * and OR-folds the rest (all same size), so the merged filter contains every
- * published value.  Used by the state-machine test that drives >1 producer, which
- * a raw SQL bytea literal cannot express now that combine is bloom-only.
+ * published value.  Needed by the state-machine test that drives >1 producer:
+ * the coordinator only combines serialized bloom parts, which a raw SQL bytea
+ * literal cannot express.
  */
 Datum
 anser_test_publish_value(PG_FUNCTION_ARGS)
@@ -336,8 +337,8 @@ anser_test_bloom_roundtrip(PG_FUNCTION_ARGS)
 /*
  * In-place fold: folding an equally-sized part into a merged part is a bitwise
  * OR of the bitset plus a fold-count bump, mutating the buffer without realloc.
- * This is the coordinator's only combine path now (the first part is stored
- * verbatim, every later part folds in here).  A differently-sized part is
+ * This is the coordinator's only combine path: the first part is stored
+ * verbatim, every later part folds in here.  A differently-sized part is
  * rejected and leaves the accumulator untouched.
  */
 Datum
@@ -726,15 +727,15 @@ anser_test_multi_consumer(PG_FUNCTION_ARGS)
 }
 
 /*
- * Regression guard for the abandoned-consumer recycle bug.
+ * Regression guard: an abandoned consumer must not block channel recycling.
  *
  * Same shape as anser_test_multi_consumer, but the assertion is specifically
  * that the channel does NOT leave stale data behind: after one consumer is
- * cancelled mid-wait and the surviving consumer is delivered, the channel must
- * recycle to CONSUMED.  Before the fix, the cancelled consumer kept counting
- * toward the expected consumer total, so done_consumers never caught up and the
- * channel lingered in READY forever (and was never reclaimable) -- this helper
- * would then time out waiting for CONSUMED and return false.
+ * cancelled mid-wait and the surviving consumers are delivered, the channel
+ * must recycle to CONSUMED.  The cancelled consumer must not count toward the
+ * expected consumer total, or done_consumers would never catch up and the
+ * channel would wedge in READY forever (never reclaimable); this helper would
+ * then time out waiting for CONSUMED and return false.
  */
 Datum
 anser_test_abandoned_consumer_recycles(PG_FUNCTION_ARGS)
@@ -1161,6 +1162,7 @@ anser_wait_consumer_count(const AnserChannelKey *key, int target)
 	return false;
 }
 
+/* Send a cancel request for conn's in-flight query (best effort). */
 static void
 anser_cancel_conn(PGconn *conn)
 {
@@ -1362,6 +1364,11 @@ anser_make_test_part(const char *condition_key, int32 value, Size *len_out)
 	return buf;
 }
 
+/*
+ * Fill key from the common leading args (session id, command count, condition
+ * id, condition key) shared by most test functions.  Returns false on invalid
+ * input.
+ */
 static bool
 build_test_key(FunctionCallInfo fcinfo, AnserChannelKey *key)
 {
@@ -1384,6 +1391,7 @@ build_test_key(FunctionCallInfo fcinfo, AnserChannelKey *key)
 	return true;
 }
 
+/* Printable name for a channel state ("UNKNOWN" when out of range). */
 static const char *
 state_to_string(AnserChannelState state)
 {

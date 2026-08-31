@@ -33,8 +33,15 @@
 #include "cdb/anser.h"
 #include "lib/bloomfilter.h"
 
+/*
+ * Opaque executor state handles for the Bloom filter producer and
+ * consumer; the struct definitions are private to
+ * nodeAnserBloomFilterProduce.c and nodeAnserBloomFilterConsume.c.
+ */
 typedef struct AnserBloomFilterProduceState AnserBloomFilterProduceState;
 typedef struct AnserBloomFilterConsumeState AnserBloomFilterConsumeState;
+
+/* Producer side: build one Bloom filter part and publish it to the channel. */
 
 /*
  * `token` is the QD session token used to authenticate the segment -> QD
@@ -54,6 +61,7 @@ extern bool ExecAnserBloomFilterProducePublish(AnserBloomFilterProduceState *sta
 extern bool ExecAnserBloomFilterProduceCancel(AnserBloomFilterProduceState *state);
 extern void ExecEndAnserBloomFilterProduce(AnserBloomFilterProduceState *state);
 
+/* Consumer side: gather all parts of a channel into one Bloom filter. */
 extern AnserBloomFilterConsumeState *ExecInitAnserBloomFilterConsume(
 										const AnserChannelKey *channel_key,
 										int64 total_elems,

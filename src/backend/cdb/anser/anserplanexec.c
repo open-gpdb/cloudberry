@@ -24,8 +24,8 @@
  *	  pass-through "consumer" above the probe scan that prunes rows whose key is
  *	  definitely absent from the received (unioned) filter.
  *
- * Both are thin drivers over the PR2 helper library
- * (executor/nodeAnserBloomFilter.h), which already selects transport by role
+ * Both are thin drivers over the helper library in
+ * executor/nodeAnserBloomFilter.h, which selects transport by role
  * (segment -> libpq to QD; coordinator -> direct shmem) and unions parts.  The
  * plan-injection pass (anserplan.c) builds the nodes and stashes the parameters
  * in CustomScan.custom_private using the layout in AnserRfPrivateIndex below.
@@ -72,6 +72,10 @@ typedef enum AnserRfPrivateIndex
 /* Registration-timeout for the consumer's wait-for-registration phase. */
 #define ANSER_RF_REGISTRATION_TIMEOUT_MS	((long) gp_anser_timeout_ms)
 
+/*
+ * Producer scan state: feeds the build key of every child tuple into the
+ * filter and publishes this backend's part once the child is exhausted.
+ */
 typedef struct AnserBloomProduceScanState
 {
 	CustomScanState csstate;
@@ -82,6 +86,10 @@ typedef struct AnserBloomProduceScanState
 	bool		published;
 } AnserBloomProduceScanState;
 
+/*
+ * Consumer scan state: receives and unions the bloom parts on first use,
+ * then prunes probe rows whose key is definitely absent from the filter.
+ */
 typedef struct AnserBloomConsumeScanState
 {
 	CustomScanState csstate;

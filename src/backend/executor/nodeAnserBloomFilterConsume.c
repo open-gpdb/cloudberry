@@ -33,6 +33,13 @@
 #include "cdb/cdbvars.h"
 #include "executor/nodeAnserBloomFilter.h"
 
+/*
+ * State for one Bloom filter consumer.  Consumes the merged payload for a
+ * channel exactly once (consumed), either from the coordinator's shared
+ * memory channel map or over libpq.  token authenticates the libpq
+ * transport on segments and is NULL on the coordinator.  cancelled records
+ * that the producer side aborted instead of delivering the payload.
+ */
 struct AnserBloomFilterConsumeState
 {
 	AnserChannelKey channel_key;
@@ -94,9 +101,9 @@ ExecAnserBloomFilterConsume(AnserBloomFilterConsumeState *state,
 }
 
 /*
- * Direct shared-memory consume path (coordinator).  Unchanged from the
- * pre-network behavior: wait for producer registration, wait for READY, copy the
- * payload out, and union the parts.
+ * Direct shared-memory consume path (coordinator): wait for producer
+ * registration, wait for READY, then copy the merged payload out of the
+ * channel map.
  */
 static bool
 ExecAnserBloomFilterConsumeDirect(AnserBloomFilterConsumeState *state,
@@ -161,7 +168,7 @@ ExecAnserBloomFilterConsumeDirect(AnserBloomFilterConsumeState *state,
  * Network consume path (segment).  Blocks in the coordinator backend via libpq
  * until the send service delivers the whole payload (or cancels this consumer);
  * there is no registration/ready polling here -- the wait is unbounded and
- * cancellation is the backstop, per the agreed two-phase consumer semantics.
+ * cancellation is the only backstop.
  */
 static bool
 ExecAnserBloomFilterConsumeClient(AnserBloomFilterConsumeState *state)

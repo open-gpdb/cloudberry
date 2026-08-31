@@ -24,8 +24,8 @@
  * The pass runs once from planner() (after both the Postgres planner and ORCA,
  * and after set_plan_references / the cdbllize slice passes), recognizes one
  * supported join shape, and inserts a producer on the hash build side and a
- * consumer above the probe scan.  See src/include/cdb/anserplan.h and the PR4
- * design notes for the full rationale.
+ * consumer above the probe scan.  See src/include/cdb/anserplan.h for the
+ * rationale.
  *
  * IDENTIFICATION
  *	  src/backend/cdb/anser/anserplan.c
@@ -47,6 +47,7 @@
 #define ANSER_RF_MAX_BYTES		(64 * 1024 * 1024)
 #define ANSER_RF_HEADER_ROOM	64
 
+/* Per-statement state for the injection pass. */
 typedef struct AnserInjectCtx
 {
 	uint32		next_condition_id;
@@ -97,26 +98,15 @@ AnserApplyRuntimeFilters(PlannedStmt *stmt)
 		 * set_plan_references already numbered every existing node, so continue
 		 * past the current maximum (planTree + subplans).
 		 *
-		 * Why walk the tree instead of reusing the planner's id counter: both
-		 * planners do keep one, but neither survives to this hook.  The
-		 * Postgres planner counts in PlannerGlobal.lastPlanNodeId (planner.c /
-		 * setrefs.c), which is a local of standard_planner() and is gone by the
-		 * time planner() calls us; ORCA counts separately in its DXL
-		 * translation context (CTranslatorDXLToPlStmt::GetNextPlanId), likewise
-		 * internal.  And PlannedStmt carries no max-id field to consult.
-		 * Reaching either counter would mean a core change (a new PlannedStmt
-		 * field with outfuncs/readfuncs/copyfuncs support, plus a gporca API
-		 * change) and would still not cover third-party planner_hooks, whose
-		 * plans arrive numbered who-knows-how.  So we walk: one extra pass over
-		 * a tree that typically has tens of nodes, once per query, only when
-		 * the feature is on -- the same order of work set_plan_refs just did,
-		 * and the only planner-agnostic option at this hook point.
+		 * We walk the tree because neither planner's id counter survives to
+		 * this hook (the Postgres planner counts in a standard_planner()
+		 * local; ORCA counts inside its DXL translation context) and
+		 * PlannedStmt carries no max-id field -- walking is the only
+		 * planner-agnostic option, and cheap at this hook point.
 		 *
-		 * We take the max, not the node count: counting costs the identical
-		 * walk, and "count == next free id" additionally assumes dense
-		 * numbering, which holds for the Postgres planner today (single
-		 * lastPlanNodeId++ per visited node) but is not promised by ORCA's
-		 * CIdGenerator or by third-party hooks.  max + 1 is correct under any
+		 * We take the max, not the node count: "count == next free id"
+		 * assumes dense numbering, which ORCA's CIdGenerator and third-party
+		 * planner_hooks do not promise.  max + 1 is correct under any
 		 * assignment scheme.
 		 */
 		maxid = anser_max_plan_node_id(stmt->planTree);
@@ -367,10 +357,10 @@ anser_try_inject(HashJoin *hj, AnserInjectCtx *ctx)
 	 * never inject one -- skip the whole join and fail open instead.
 	 *
 	 * Minting a unique condition_id per injection makes this hold by
-	 * construction today, so the check never fires.  It becomes load-bearing if
-	 * the channel key is ever derived from the build's semantic identity (the
-	 * equivalence-class direction), where two joins could legitimately collide
-	 * on one channel.
+	 * construction, so the check never fires.  It stays as a guard against
+	 * channel-key collisions if the key derivation ever changes (e.g. keys
+	 * derived from the build's semantic identity, where two joins could share
+	 * one channel).
 	 */
 	foreach(lc, ctx->consumer_keys)
 	{

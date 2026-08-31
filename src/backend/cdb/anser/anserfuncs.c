@@ -166,6 +166,12 @@ gp_anser_consume_wait(PG_FUNCTION_ARGS)
 	PG_RETURN_BYTEA_P(result);
 }
 
+/*
+ * anser_builtin_build_key(ssid, ccnt, cond_id, cond_key, key)
+ *
+ * Validate the caller-supplied channel key components and copy them into
+ * *key.  Returns false (fail open) when a component is out of range.
+ */
 static bool
 anser_builtin_build_key(int32 gp_session_id, int32 gp_command_count,
 						int32 condition_id, text *condition_key_text,

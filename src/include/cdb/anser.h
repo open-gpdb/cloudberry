@@ -65,9 +65,9 @@
 /*
  * Registered adaptive-information condition for one running command.
  *
- * The planner integration will eventually populate condition_key with the
- * optimizer-generated equivalence-class symbols described in the Anser paper.
- * For PR 1 this key is intentionally opaque and provided by callers/tests.
+ * condition_key is an opaque symbol that identifies the condition (the
+ * optimizer-generated equivalence-class symbols described in the Anser
+ * paper); the channel map only compares keys for equality.
  */
 typedef struct AnserChannelKey
 {
@@ -77,6 +77,12 @@ typedef struct AnserChannelKey
 	char		condition_key[ANSER_CONDITION_KEY_SIZE];
 } AnserChannelKey;
 
+/*
+ * Channel lifecycle: PENDING (created, awaiting producers) -> COLLECTING
+ * (first part received) -> READY (all expected parts unioned) ->
+ * CONSUMED (all expected consumers delivered).  CANCELLED replaces any
+ * state on produce timeout, producer cancel, or owning query end.
+ */
 typedef enum AnserChannelState
 {
 	ANSER_CHANNEL_PENDING = 0,
@@ -86,6 +92,11 @@ typedef enum AnserChannelState
 	ANSER_CHANNEL_CONSUMED
 } AnserChannelState;
 
+/*
+ * One channel in the shared-memory map: the condition key, lifecycle state,
+ * creator ownership, producer/consumer accounting, and the DSM handle of
+ * the gathered payload.
+ */
 typedef struct AnserChannelEntry
 {
 	AnserChannelKey key;
@@ -104,6 +115,10 @@ typedef struct AnserChannelEntry
 	TimestampTz updated_at;		/* last activity; drives the produce timeout */
 } AnserChannelEntry;
 
+/*
+ * Shared control block: effective sizing limits, the background services'
+ * latches, and the maintenance-sweep switch.
+ */
 typedef struct AnserControl
 {
 	uint32		max_channels;

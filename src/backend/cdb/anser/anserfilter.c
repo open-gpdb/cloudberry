@@ -93,8 +93,7 @@ AnserBloomSerializedSize(const bloom_filter *filter)
  * Does this payload look like a serialized bloom part?  Used by the in-place fold
  * to confirm both the accumulator and the incoming payload are well-formed parts
  * before OR-ing their bitsets.  A false positive is effectively impossible: a
- * part must carry the ABF1 magic, a known version, a power-of-two bitset, and a
- * self-consistent length.
+ * part must carry the ABF1 magic, a known version, and sane part counts.
  */
 bool
 AnserBloomLooksLikePart(const void *payload, Size payload_len)
@@ -160,6 +159,10 @@ AnserBloomFoldPartInPlace(void *acc, Size acc_len,
 	return true;
 }
 
+/*
+ * Serialize one filter as a wire part: an AnserBloomPartHeader followed by the
+ * raw bitset.  Fails (returns false) on bogus arguments or a too-small buffer.
+ */
 bool
 AnserBloomSerializePart(const bloom_filter *filter, uint32 part_index,
 						uint32 total_parts, void *buffer, Size buffer_size,
@@ -237,10 +240,9 @@ AnserBloomDeserializePart(const void *payload, Size payload_len,
 	/*
 	 * Build the filter straight from the received bitset, sized by our own
 	 * parameters.  bloom_create_from_bitset returns NULL unless the received
-	 * length is exactly the size those parameters imply, so a truncated payload or
-	 * a version/parameter skew fails open here instead of loading a wrongly-shaped
-	 * bitset.  A filter is thus only ever populated at construction and, from then
-	 * on, only grown by add/union -- never re-set.
+	 * length is exactly the size those parameters imply, so the fail-open
+	 * described above happens here.  A filter is thus only ever populated at
+	 * construction and, from then on, only grown by add/union -- never re-set.
 	 */
 	filter = bloom_create_from_bitset(total_elems,
 									  AnserBloomWorkMemKb(max_payload_bytes),
@@ -259,8 +261,8 @@ AnserBloomDeserializePart(const void *payload, Size payload_len,
 }
 
 /*
- * Validate the wire framing of a part header.  The bitset parameters are not on
- * the wire anymore (both ends rebuild the filter from the shared plan
+ * Validate the wire framing of a part header.  The bitset parameters are not
+ * carried on the wire (both ends rebuild the filter from the shared plan
  * parameters), so this only checks the framing: magic/version, a sane fold
  * count, and that the payload carries a header plus at least some bitset.  The
  * authoritative size check -- that the received bitset matches the size the local

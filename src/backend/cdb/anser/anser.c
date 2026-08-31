@@ -68,12 +68,14 @@
 #define ANSER_TOKEN_BYTES		16	/* 128 bits, as ENDPOINT_TOKEN_ARR_LEN */
 #define ANSER_TOKEN_HEX_LEN		(ANSER_TOKEN_BYTES * 2)
 
+/* Token hash key: one token per (gp_session_id, session user). */
 typedef struct AnserTokenTag
 {
 	int			session_id;
 	Oid			user_id;
 } AnserTokenTag;
 
+/* Token hash entry: the hex-encoded random token registered by a session. */
 typedef struct AnserTokenEntry
 {
 	AnserTokenTag tag;
@@ -751,10 +753,9 @@ AnserProducerBegin(const AnserChannelKey *channel_key, int expected_producers,
 	 * consumer per segment executing the consumer slice) known here.  The send
 	 * service must deliver to all of them before recycling the payload.
 	 *
-	 * getgpsegmentCount() is the per-segment count -- correct for the
-	 * segment-executed filters Anser targets today.  A coordinator-only slice
-	 * would want 1; representing that exactly needs the consumer slice's real
-	 * gang size threaded down from the plan (future work), not this proxy.
+	 * getgpsegmentCount() is the per-segment count, which matches the
+	 * segment-executed filters Anser targets; a coordinator-only consumer
+	 * slice would want 1, which this proxy does not represent.
 	 */
 	entry->expected_consumers = getgpsegmentCount();
 
@@ -1393,8 +1394,8 @@ AnserGatherApply(const AnserChannelKey *channel_key, int expected_producers,
 
 /*
  * Cancel any channel that announced producers (COLLECTING) but did not reach
- * READY within gp_anser_timeout_ms.  Whole-dataset cancellation, per the agreed
- * all-parts-or-nothing semantics.
+ * READY within gp_anser_timeout_ms.  Cancellation is whole-dataset:
+ * all-parts-or-nothing.
  */
 static void
 AnserCancelStaleChannels(void)
@@ -1735,9 +1736,9 @@ AnserChannelHasWaiters(const AnserChannelKey *channel_key)
 /*
  * May this caller produce/consume on the channel?  A superuser always may; any
  * other role may only touch a channel it created.  An unknown channel, or one
- * with no recorded creator, is permitted here -- callers handle "not found" via
- * their normal not-found paths, and an unowned channel predates ownership.
- * If found is non-NULL it receives whether the channel currently exists.
+ * with no recorded creator, is permitted here -- callers handle "not found"
+ * through their normal paths.  If found is non-NULL it receives whether the
+ * channel currently exists.
  */
 static bool
 AnserChannelAccessAllowed(const AnserChannelKey *channel_key, Oid caller_role,
@@ -1992,10 +1993,11 @@ AnserSweepOrphanChannels(void)
 }
 
 /*
- * Conservative placeholder for liveness checking.
+ * Is the query that owns this channel still alive?
  *
- * Correct ssid/ccnt owner validation is intentionally left for a follow-up;
- * PR 1 has explicit AnserCancelQuery() cleanup at query end/failure.
+ * Validation is deliberately conservative, at session granularity rather than
+ * per query/command: a channel lives as long as its owning coordinator session
+ * does, and AnserCancelQuery() provides explicit cleanup at query end/failure.
  */
 static bool
 AnserChannelOwnerIsAlive(const AnserChannelEntry *entry)

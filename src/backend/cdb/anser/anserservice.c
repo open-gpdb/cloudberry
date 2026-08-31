@@ -18,7 +18,7 @@
  * under the License.
  *
  * anserservice.c
- *	  Coordinator-local Anser background service skeletons.
+ *	  Coordinator-local Anser background services.
  *
  * IDENTIFICATION
  *	  src/backend/cdb/anser/anserservice.c

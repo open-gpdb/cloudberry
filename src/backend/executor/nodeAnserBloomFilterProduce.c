@@ -33,6 +33,12 @@
 #include "cdb/cdbvars.h"
 #include "executor/nodeAnserBloomFilter.h"
 
+/*
+ * State for a single bloom filter producer: the target channel, the filter
+ * being built, this producer's identity within total_parts, and the QD
+ * session token used by segments to publish over libpq.  published and
+ * cancelled guard against double publication and drive teardown.
+ */
 struct AnserBloomFilterProduceState
 {
 	AnserChannelKey channel_key;
