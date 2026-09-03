@@ -1515,3 +1515,82 @@ reset optimizer;
 drop table outer_foo;
 drop table inner_bar;
 drop table t;
+
+--
+-- Correlated aggregate subquery pulled up into a join (convert_EXPR_to_join).
+--
+-- An outer row with no matching inner row has to be compared with the value
+-- the subquery returns over an empty input, so those rows cannot simply be
+-- dropped by the join.  Each query is repeated with OFFSET 0 in the subquery,
+-- which keeps the sublink a SubPlan and so shows the expected answer.
+--
+create table csq_outer(a int, b int) distributed by (a);
+create table csq_inner(a int, b int) distributed by (a);
+-- 1 and 2 have a match in csq_inner, 99 and NULL do not
+insert into csq_outer values (0,99),(1,1),(2,2),(3,99),(7,1),(9,99),(5,NULL);
+insert into csq_inner values (1,10),(1,20),(2,30);
+analyze csq_outer;
+analyze csq_inner;
+
+set optimizer to off;
+
+-- count() is 0 over an empty input
+select * from csq_outer
+  where a > (select count(*) from csq_inner where csq_inner.a = csq_outer.b) order by 1,2;
+select * from csq_outer
+  where a > (select count(*) from csq_inner where csq_inner.a = csq_outer.b offset 0) order by 1,2;
+
+-- the same through an expression around the aggregate
+select * from csq_outer
+  where a > (select count(*) + 1 from csq_inner where csq_inner.a = csq_outer.b) order by 1,2;
+select * from csq_outer
+  where a > (select count(*) + 1 from csq_inner where csq_inner.a = csq_outer.b offset 0) order by 1,2;
+
+-- regr_count() is another aggregate that is 0, not NULL, over an empty input
+select * from csq_outer
+  where a > (select regr_count(csq_inner.a, csq_inner.b) from csq_inner where csq_inner.a = csq_outer.b) order by 1,2;
+select * from csq_outer
+  where a > (select regr_count(csq_inner.a, csq_inner.b) from csq_inner where csq_inner.a = csq_outer.b offset 0) order by 1,2;
+
+-- sum() is NULL over an empty input, so no-match rows fail the comparison
+-- anyway and the plain inner join is kept
+explain (costs off) select * from csq_outer
+  where a > (select sum(csq_inner.b) from csq_inner where csq_inner.a = csq_outer.b);
+select * from csq_outer
+  where a > (select sum(csq_inner.b) from csq_inner where csq_inner.a = csq_outer.b) order by 1,2;
+select * from csq_outer
+  where a > (select sum(csq_inner.b) from csq_inner where csq_inner.a = csq_outer.b offset 0) order by 1,2;
+
+-- a window function is not pulled up: after the pull-up the subquery is
+-- grouped, and the window would run over all of the groups
+select * from csq_outer
+  where a > (select count(*) + count(*) over () from csq_inner where csq_inner.a = csq_outer.b) order by 1,2;
+select * from csq_outer
+  where a > (select count(*) + count(*) over () from csq_inner where csq_inner.a = csq_outer.b offset 0) order by 1,2;
+
+-- neither is a hypothetical-set aggregate, which returns 1 over an empty input
+select * from csq_outer
+  where a > (select rank(5) within group (order by csq_inner.b) from csq_inner where csq_inner.a = csq_outer.b) order by 1,2;
+select * from csq_outer
+  where a > (select rank(5) within group (order by csq_inner.b) from csq_inner where csq_inner.a = csq_outer.b offset 0) order by 1,2;
+
+-- the empty-input value must not be folded into the comparison while planning:
+-- here that would divide by zero, although the query never does
+explain (costs off) select * from csq_outer
+  where a > (select 10 / count(*) from csq_inner where csq_inner.a = csq_outer.b);
+select * from csq_outer where b in (1,2)
+  and a > (select 10 / count(*) from csq_inner where csq_inner.a = csq_outer.b) order by 1,2;
+select * from csq_outer where b in (1,2)
+  and a > (select 10 / count(*) from csq_inner where csq_inner.a = csq_outer.b offset 0) order by 1,2;
+
+-- an aggregate of the subquery used inside a sub-select of its targetlist
+select * from csq_outer
+  where a > (select (select count(*) from csq_inner x where x.a = count(csq_inner.b))
+             from csq_inner where csq_inner.a = csq_outer.b) order by 1,2;
+select * from csq_outer
+  where a > (select (select count(*) from csq_inner x where x.a = count(csq_inner.b))
+             from csq_inner where csq_inner.a = csq_outer.b offset 0) order by 1,2;
+
+reset optimizer;
+drop table csq_outer;
+drop table csq_inner;
