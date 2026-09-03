@@ -1487,6 +1487,18 @@ code or new licensing patterns.
             <exclude>gpcontrib/yezzey/yezzey.h</exclude>
             <exclude>gpcontrib/yezzey/yezzey/devops/packaging/ubuntu/script/build_cloudberry_deb.sh</exclude>
             <exclude>gpcontrib/yezzey/ystat.h</exclude>
+            <exclude>gpcontrib/yezzey/Makefile.tidy</exclude>
+            <exclude>gpcontrib/yezzey/docker/format/run-format.sh</exclude>
+            <exclude>gpcontrib/yezzey/docker/format/Dockerfile</exclude>
+            <exclude>gpcontrib/yezzey/test/relpath_parse_test.cpp</exclude>
+            <exclude>gpcontrib/yezzey/include/relfilelocator.h</exclude>
+            <exclude>gpcontrib/yezzey/include/relpath_parse.h</exclude>
+            <exclude>gpcontrib/yezzey/include/scope_guard.h</exclude>
+            <exclude>gpcontrib/yezzey/Makefile.fmt</exclude>
+            <exclude>gpcontrib/yezzey/.gitmodules</exclude>
+            <exclude>gpcontrib/yezzey/.clang-format</exclude>
+            <exclude>gpcontrib/yezzey/.clang-tidy</exclude>
+            <exclude>gpcontrib/yezzey/.github/workflows/format.yml</exclude>
 
             <exclude>gpcontrib/gp_relsizes_stats/Makefile</exclude>
             <exclude>gpcontrib/gp_relsizes_stats/.clang-format</exclude>
