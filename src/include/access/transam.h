@@ -210,7 +210,7 @@ FullTransactionIdAdvance(FullTransactionId *dest)
 
 /*
  * Reserve a block of OIDs for auxiliary catalog objects (such as the
- * mdb_admin role created by contrib/pg_aux_catalog).  These need fixed,
+ * mdb_admin role created by gp_toolkit).  These need fixed,
  * well-known OIDs that are stable across clusters, so they live in their own
  * range below FirstBinaryUpgradeReservedObjectId.
  */

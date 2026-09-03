@@ -19,7 +19,7 @@
 /*
  * OID to assign to the next auxiliary pg_authid role created through
  * GetNewOidForAuthId(), or InvalidOid for normal allocation.  Set by
- * contrib/pg_aux_catalog to create roles such as mdb_admin with a fixed OID.
+ * gp_toolkit to create roles such as mdb_admin with a fixed OID.
  */
 extern PGDLLIMPORT Oid next_aux_pg_authid_oid;
 

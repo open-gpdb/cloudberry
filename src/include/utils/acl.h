@@ -215,7 +215,7 @@ extern bool is_admin_of_role(Oid member, Oid role);
 // -- non-upstream patch begin
 /*
  * Fixed, well-known OID of the mdb_admin role.  The role is created by
- * contrib/pg_aux_catalog (pg_create_mdb_admin_role()) with this OID, and the
+ * gp_toolkit (pg_create_mdb_admin_role()) with this OID, and the
  * resource-group permission checks identify it by OID.  It lives in the
  * auxiliary OID range (see IsAuxOid()).
  */

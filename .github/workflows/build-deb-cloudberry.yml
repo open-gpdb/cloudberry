@@ -249,7 +249,6 @@ jobs:
                                "contrib/tablefunc:installcheck",
                                "contrib/try_convert:installcheck",
                                "contrib/passwordcheck:installcheck",
-                               "contrib/pg_aux_catalog:installcheck",
                                "contrib/pg_buffercache:installcheck",
                                "contrib/sslinfo:installcheck"]
               },
