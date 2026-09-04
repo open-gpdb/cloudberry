@@ -36,6 +36,7 @@
 #   - PAX Access Method
 #   - PXF External Table Access
 #   - Test Automation Support (tap-tests)
+#   - Yezzey Extension (yezzey)
 #
 # System Integration:
 #   - GSSAPI Authentication
@@ -53,7 +54,6 @@
 #
 # Optional Environment Variables:
 #   LOG_DIR - Directory for logs (defaults to ${SRC_DIR}/build-logs)
-#   CONFIGURE_EXTRA_OPTS - Args to pass to configure command
 #   ENABLE_DEBUG - Enable debug build options (true/false, defaults to
 #                  false)
 #
@@ -68,6 +68,12 @@
 #
 #                 When true, add option:
 #                   --with-mdblocales
+#
+#   ENABLE_YEZZEY - Enable Yezzey extension (true/false, defaults to
+#                   false)
+#
+#                 When true, add option:
+#                   --with-yezzey
 #
 # Prerequisites:
 #   - System dependencies must be installed:
@@ -150,6 +156,11 @@ if [ "${ENABLE_MDBLOCALES:-false}" = "true" ]; then
     CONFIGURE_MDBLOCALES_OPTS="--with-mdblocales"
 fi
 
+CONFIGURE_YEZZEY_OPTS=""
+if [ "${ENABLE_YEZZEY:-false}" = "true" ]; then
+    CONFIGURE_YEZZEY_OPTS="--with-yezzey"
+fi
+
 # Configure build
 log_section "Configure"
 execute_cmd ./configure --prefix=${BUILD_DESTINATION} \
@@ -179,6 +190,8 @@ execute_cmd ./configure --prefix=${BUILD_DESTINATION} \
             --with-openssl \
             --with-uuid=e2fs \
             ${CONFIGURE_MDBLOCALES_OPTS} \
+            ${CONFIGURE_YEZZEY_OPTS} \
+     ${CONFIGURE_EXTRA_OPTS:-} \
             --with-includes=/usr/local/xerces-c/include \
             --with-libraries=${BUILD_DESTINATION}/lib \
             --with-varlena_gpdb_layout \
@@ -187,7 +200,7 @@ log_section_end "Configure"
 
 # Capture version information
 log_section "Version Information"
-execute_cmd ag "GP_VERSION | GP_VERSION_NUM | PG_VERSION | PG_VERSION_NUM | PG_VERSION_STR" src/include/pg_config.h
+execute_cmd grep -E "GP_VERSION|GP_VERSION_NUM|PG_VERSION|PG_VERSION_NUM|PG_VERSION_STR" src/include/pg_config.h || true
 log_section_end "Version Information"
 
 # Log completion

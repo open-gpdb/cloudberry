@@ -1204,6 +1204,22 @@ pg_get_indexdef_columns(Oid indexrelid, bool pretty)
 								  prettyFlags, false);
 }
 
+/* Internal version, extensible with flags to control its behavior */
+char *
+pg_get_indexdef_columns_extended(Oid indexrelid, bits16 flags)
+{
+	bool		pretty = ((flags & RULE_INDEXDEF_PRETTY) != 0);
+	bool		keys_only = ((flags & RULE_INDEXDEF_KEYS_ONLY) != 0);
+	int			prettyFlags;
+
+	prettyFlags = pretty ? (PRETTYFLAG_PAREN | PRETTYFLAG_INDENT | PRETTYFLAG_SCHEMA) : PRETTYFLAG_INDENT;
+
+	return pg_get_indexdef_worker(indexrelid, 0, NULL,
+								  true, keys_only,
+								  false, false,
+								  prettyFlags, false);
+}
+
 /*
  * Internal workhorse to decompile an index definition.
  *
@@ -10486,7 +10502,7 @@ get_func_sql_syntax(FuncExpr *expr, deparse_context *context)
 				Assert(IsA(con, Const) &&
 					   con->consttype == TEXTOID &&
 					   !con->constisnull);
-				appendStringInfoString(buf, TextDatumGetCString(con->constvalue));
+				appendStringInfoString(buf, quote_identifier(TextDatumGetCString(con->constvalue)));
 			}
 			appendStringInfoString(buf, " FROM ");
 			get_rule_expr((Node *) lsecond(expr->args), context, false);
@@ -10506,6 +10522,7 @@ get_func_sql_syntax(FuncExpr *expr, deparse_context *context)
 				Assert(IsA(con, Const) &&
 					   con->consttype == TEXTOID &&
 					   !con->constisnull);
+				/* NB: safe because no allowed words need quoted/escaped */
 				appendStringInfo(buf, " %s",
 								 TextDatumGetCString(con->constvalue));
 			}

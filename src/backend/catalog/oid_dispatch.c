@@ -163,7 +163,7 @@ static bool preserve_oids_on_commit = false;
  *
  * This is the GPDB analogue of upstream PostgreSQL's
  * binary_upgrade_next_pg_authid_oid (which is disabled here in favour of the
- * generic OID pre-assignment machinery).  It lets contrib/pg_aux_catalog
+ * generic OID pre-assignment machinery).  It lets gp_toolkit
  * create roles such as mdb_admin with a fixed, well-known OID.  It is reset
  * to InvalidOid as soon as it is consumed.
  */
@@ -600,7 +600,7 @@ GetNewOidForAuthId(Relation relation, Oid indexId, AttrNumber oidcolumn,
 	key.objname = rolname;
 
 	/*
-	 * Allow auxiliary roles (such as mdb_admin, see contrib/pg_aux_catalog)
+	 * Allow auxiliary roles (such as mdb_admin, see gpcontrib/gp_toolkit)
 	 * to be created with a fixed, well-known OID.  The OID is supplied through
 	 * the next_aux_pg_authid_oid override, mirroring how upstream PostgreSQL
 	 * assigns role OIDs during binary upgrade.  We only honor it for OIDs in

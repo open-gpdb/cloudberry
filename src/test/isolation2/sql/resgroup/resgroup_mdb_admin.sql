@@ -19,12 +19,12 @@ DROP RESOURCE GROUP rg_perm_test;
 
 -- ---------------------------------------------------------------------
 -- Setup.  mdb_admin is identified by its fixed OID, so it must be created
--- through contrib/pg_aux_catalog (a plain CREATE ROLE would assign a
--- different OID and the permission checks would not recognise its members).
+-- through gp_toolkit.pg_create_mdb_admin_role() (a plain CREATE ROLE would
+-- assign a different OID and the permission checks would not recognise its
+-- members).
 -- ---------------------------------------------------------------------
 CREATE RESOURCE GROUP rg_perm_test WITH (concurrency=2, cpu_max_percent=10);
-CREATE EXTENSION IF NOT EXISTS pg_aux_catalog;
-SELECT pg_create_mdb_admin_role();
+SELECT gp_toolkit.pg_create_mdb_admin_role();
 CREATE ROLE role_rg_admin RESOURCE GROUP rg_perm_test;
 CREATE ROLE role_rg_noadmin RESOURCE GROUP rg_perm_test;
 GRANT mdb_admin TO role_rg_admin;
