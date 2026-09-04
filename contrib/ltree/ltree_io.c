@@ -7,6 +7,7 @@
 
 #include <ctype.h>
 
+#include "common/int.h"
 #include "crc32.h"
 #include "libpq/pqformat.h"
 #include "ltree.h"

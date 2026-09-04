@@ -1,6 +1,6 @@
 # Intercontect 
 
-This subtree contains interconnect module && test && benchmark that different with other subtree inside {cbdb_src}/contrib. Other moudles are not part of the core CloudBerry system, but interconnect module split from `cdb module`, it **must be preload with CloudBerry**, otherwise CloudBerry system will not work properly.
+This subtree contains interconnect module && test && benchmark that different with other subtree inside {cbdb_src}/contrib. Other moudles are not part of the core Cloudberry system, but interconnect module split from `cdb module`, it **must be preload with Cloudberry**, otherwise Cloudberry system will not work properly.
 
 **The interconnect module will be preloaded by default as a library.** When the compile option `--disable-preload-ic-module` is turned on, then the interconnect module will not be preloaded, then users need to add `interconnect` into guc `shared_preload_libraries`.
 

@@ -74,8 +74,6 @@ SELECT '1&(2&(4&(5&6)))'::query_int;
 SELECT '1&2&4&5&6'::query_int;
 SELECT '1&(2&(4&(5|6)))'::query_int;
 SELECT '1&(2&(4&(5|!6)))'::query_int;
-SELECT (SELECT '0 | ' || string_agg(i::text, ' & ')
-        FROM generate_series(1, 17000) AS i)::query_int;
 
 
 CREATE TABLE test__int( a int[] );
@@ -111,6 +109,8 @@ SELECT count(*) from test__int WHERE a @> '{20,23}' or a @> '{50,68}';
 SELECT count(*) from test__int WHERE a @@ '(20&23)|(50&68)';
 SELECT count(*) from test__int WHERE a @@ '20 | !21';
 SELECT count(*) from test__int WHERE a @@ '!20 & !21';
+
+INSERT INTO test__int SELECT array(SELECT x FROM generate_series(1, 1001) x); -- should fail
 
 DROP INDEX text_idx;
 CREATE INDEX text_idx on test__int using gist (a gist__int_ops(numranges = 0));

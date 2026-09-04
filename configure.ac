@@ -20,8 +20,8 @@ m4_pattern_forbid(^PGAC_)dnl to catch undefined macros
 dnl The PACKAGE_VERSION from upstream PostgreSQL is maintained in the
 dnl PG_PACKAGE_VERSION variable, when merging make sure to update this
 dnl variable with the merge conflict from the AC_INIT() statement.
-AC_INIT([Apache Cloudberry], [2.1.0-incubating], [dev@cloudberry.apache.org], [], [https://cloudberry.apache.org/])
-[PG_PACKAGE_VERSION=14.7]
+AC_INIT([Apache Cloudberry], [2.2.0-incubating], [dev@cloudberry.apache.org], [], [https://cloudberry.apache.org/])
+[PG_PACKAGE_VERSION=14.9]
 AC_SUBST(PG_PACKAGE_VERSION)
 
 dnl m4_if(m4_defn([m4_PACKAGE_VERSION]), [2.69], [], [m4_fatal([Autoconf version 2.69 is required.
@@ -975,9 +975,19 @@ if test "$enable_pax" = yes; then
     [AC_MSG_ERROR([libzstd >= 1.4.0 is required for PAX support])]
   )
 
-  # Check liburing
-  AC_CHECK_LIB(uring, io_uring_queue_init, [],
-               [AC_MSG_ERROR([library 'uring' is required for PAX support])])
+  # Check liburing. liburing is Linux-only (io_uring kernel iface, 5.1+).
+  # On Linux it is required as before; on non-Linux hosts (macOS / *BSD)
+  # PAX falls back to pread-based SyncFastIO and the IOUringFastIO path
+  # is conditionally compiled — see contrib/pax_storage/src/cpp/comm/fast_io.*
+  case $host_os in
+    linux*)
+      AC_CHECK_LIB(uring, io_uring_queue_init, [],
+                   [AC_MSG_ERROR([library 'uring' is required for PAX support on Linux])])
+      ;;
+    *)
+      AC_CHECK_LIB(uring, io_uring_queue_init, [], [])
+      ;;
+  esac
 
   # Check cmake >= 3.11.0 using AX_COMPARE_VERSION
   AC_PATH_PROG([CMAKE], [cmake], [no])
@@ -1392,7 +1402,6 @@ if test "$with_gp_stats_collector" = yes; then
     AC_MSG_ERROR([protoc is required for gp_stats_collector but was not found in PATH])
   fi
 fi
-
 if test "$with_zstd" = yes; then
   dnl zstd_errors.h was renamed from error_public.h in v1.4.0
   PKG_CHECK_MODULES([ZSTD], [libzstd >= 1.4.0])
@@ -1404,6 +1413,11 @@ fi
 PGAC_ARG_BOOL(with, yezzey, no,
               [build with Yezzey extension])
 AC_SUBST(with_yezzey)
+
+AS_IF([test "$with_yezzey" = yes],
+[ # then
+  AX_CXX_COMPILE_STDCXX([11], [noext], [mandatory])
+]) # fi
 
 #
 # diskquota
@@ -1813,6 +1827,10 @@ if test "$with_ssl" = openssl ; then
   AC_DEFINE([USE_OPENSSL], 1, [Define to 1 to build with OpenSSL support. (--with-ssl=openssl)])
 elif test "$with_ssl" != no ; then
   AC_MSG_ERROR([--with-ssl must specify openssl])
+fi
+
+if test "$with_yezzey" = yes && test "$with_ssl" != openssl ; then
+  AC_MSG_ERROR([OpenSSL is required for Yezzey; specify --with-ssl=openssl when using --with-yezzey])
 fi
 AC_SUBST(with_ssl)
 
