@@ -73,6 +73,7 @@
 #include "utils/syscache.h"
 
 #include "catalog/pg_proc.h"
+#include "cdb/anserplan.h"
 #include "cdb/cdbhash.h"
 #include "cdb/cdbllize.h"
 #include "cdb/cdbmutate.h"		/* apply_shareinput */
@@ -361,6 +362,14 @@ planner(Query *parse, const char *query_string, int cursorOptions,
 	}
 	else
 		result = standard_planner(parse, query_string, cursorOptions, boundParams, optimizer_options);
+
+	/*
+	 * Single post-plan hook covering both ORCA and the Postgres planner: inject
+	 * Anser runtime bloom-filter nodes into the finished plan tree.  A no-op
+	 * unless the Anser runtime-filter GUCs are on (see anserplan.c).
+	 */
+	AnserApplyRuntimeFilters(result);
+
 	pfree(optimizer_options);
 	return result;
 }

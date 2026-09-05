@@ -35,6 +35,8 @@ OBJS = \
 	functions.o \
 	instrument.o \
 	nodeAgg.o \
+	nodeAnserBloomFilterConsume.o \
+	nodeAnserBloomFilterProduce.o \
 	nodeAppend.o \
 	nodeBitmapAnd.o \
 	nodeBitmapHeapscan.o \

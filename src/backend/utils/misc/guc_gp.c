@@ -24,6 +24,7 @@
 #include "access/transam.h"
 #include "access/url.h"
 #include "access/xlog_internal.h"
+#include "cdb/anser.h"
 #include "cdb/cdbappendonlyam.h"
 #include "cdb/cdbendpoint.h"
 #include "cdb/cdbdisp.h"
@@ -622,6 +623,28 @@ struct config_bool ConfigureNamesBool_gp[] =
 	},
 
 	{
+		{"gp_anser_enable", PGC_POSTMASTER, CUSTOM_OPTIONS,
+			gettext_noop("Enables the Anser adaptive information sharing subsystem."),
+			gettext_noop("When disabled, Anser does not allocate shared memory and its background services are not started."),
+			GUC_NOT_IN_SAMPLE
+		},
+		&gp_anser_enable,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"gp_anser_runtime_filter", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Enables Anser-backed runtime bloom filter helpers."),
+			gettext_noop("This GUC is a no-op until Anser bloom filter plan nodes are inserted into the plan tree."),
+			GUC_NOT_IN_SAMPLE
+		},
+		&gp_anser_runtime_filter,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"gp_maintenance_conn", PGC_BACKEND, CUSTOM_OPTIONS,
 			gettext_noop("Maintenance Connection"),
 			NULL,
@@ -1009,6 +1032,17 @@ struct config_bool ConfigureNamesBool_gp[] =
 			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE | GUC_NO_RESET_ALL
 		},
 		&am_cursor_retrieve_handler,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"gp_anser_conn", PGC_BACKEND, GP_WORKER_IDENTITY,
+			gettext_noop("Specify this is a connection for the Anser runtime filter transport"),
+			NULL,
+			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE | GUC_NO_RESET_ALL
+		},
+		&gp_anser_conn,
 		false,
 		NULL, NULL, NULL
 	},
@@ -3426,6 +3460,58 @@ struct config_int ConfigureNamesInt_gp[] =
 		},
 		&gp_max_local_distributed_cache,
 		1024, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"gp_anser_max_channels", PGC_POSTMASTER, CUSTOM_OPTIONS,
+			gettext_noop("Sets the maximum number of Anser channels."),
+			gettext_noop("This value sizes the fixed Anser shared-memory channel map at postmaster start. "
+						 "0 (the default) auto-sizes it to max_connections * gp_max_slices, "
+						 "falling back to a fixed per-connection budget when gp_max_slices is unbounded."),
+			GUC_NOT_IN_SAMPLE
+		},
+		&gp_anser_max_channels,
+		0, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"gp_anser_max_info_size", PGC_POSTMASTER, CUSTOM_OPTIONS,
+			gettext_noop("Sets the maximum byte size of one Anser information record."),
+			gettext_noop("Per-record DSM payload cap for Anser information.  The default holds a full 64 MB bloom-filter bitset plus its serialized-part header."),
+			GUC_NOT_IN_SAMPLE
+		},
+		&gp_anser_max_info_size,
+		64 * 1024 * 1024 + 1024 * 1024, 1, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"gp_anser_timeout_ms", PGC_USERSET, CUSTOM_OPTIONS,
+			gettext_noop("Sets how long Anser consumers wait for producer registration."),
+			gettext_noop("After producer registration, consumers wait for data without this timeout and rely on query cancellation or channel cancellation."),
+			GUC_UNIT_MS | GUC_NOT_IN_SAMPLE
+		},
+		&gp_anser_timeout_ms,
+		1000, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"gp_anser_max_consumers_per_channel", PGC_POSTMASTER, CUSTOM_OPTIONS,
+			gettext_noop("Sets the maximum number of waiting Anser consumers per channel."),
+			gettext_noop("This value sizes the fixed Anser consumer wait table at postmaster start "
+						 "(gp_anser_max_channels * this). Each channel has one consumer per segment, "
+						 "so it should be set to the number of primary segments; the plan pass injects "
+						 "at most one consumer per channel. It cannot be auto-derived because the "
+						 "segment count is a catalog value unavailable at postmaster start. Over-sizing "
+						 "only wastes shared memory; under-sizing makes surplus consumers fail open "
+						 "(unfiltered), never wrong results."),
+			GUC_NOT_IN_SAMPLE
+		},
+		&gp_anser_max_consumers_per_channel,
+		64, 1, INT_MAX,
 		NULL, NULL, NULL
 	},
 

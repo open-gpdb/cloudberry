@@ -107,6 +107,6 @@ extern bool amAuxiliaryBgWorker(void);
  */
 #define MAX_BACKENDS	0x3FFFF
 
-#define MaxPMAuxProc	(4 + IC_PROXY_NUM_BGWORKER + FTS_NUM_BGWORKER)
+#define MaxPMAuxProc	(6 + IC_PROXY_NUM_BGWORKER + FTS_NUM_BGWORKER)
 
 #endif							/* _POSTMASTER_H */

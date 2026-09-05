@@ -1,0 +1,5 @@
+# test_anser extension
+comment = 'test helpers for Anser'
+default_version = '1.0'
+module_pathname = '$libdir/test_anser'
+relocatable = true

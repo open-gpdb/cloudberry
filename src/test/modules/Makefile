@@ -5,6 +5,7 @@ top_builddir = ../../..
 include $(top_builddir)/src/Makefile.global
 
 SUBDIRS = \
+		  anser \
 		  brin \
 		  commit_ts \
 		  delay_execution \

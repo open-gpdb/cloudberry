@@ -14,6 +14,7 @@
 
 #include <unistd.h>
 
+#include "cdb/anser.h"
 #include "cdb/ic_proxy_bgworker.h"
 
 #include "access/parallel.h"
@@ -165,6 +166,12 @@ static const struct
 	},
 	{
 		"CronBackgroundWorker", CronBackgroundWorker
+	},
+	{
+		"AnserGatherServiceMain", AnserGatherServiceMain
+	},
+	{
+		"AnserSendServiceMain", AnserSendServiceMain
 	},
 #ifdef ENABLE_IC_PROXY
 	{

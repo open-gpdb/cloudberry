@@ -153,6 +153,7 @@
 #include "cdb/cdbgang.h"                /* cdbgang_parse_gpqeid_params */
 #include "cdb/cdbtm.h"
 #include "cdb/cdbvars.h"
+#include "cdb/anser.h"
 #include "cdb/cdbendpoint.h"
 #include "cdb/ic_proxy_bgworker.h"
 #include "cdb/ml_ipc.h"
@@ -445,6 +446,20 @@ static BackgroundWorker PMAuxProcList[MaxPMAuxProc] =
 	 1,
 	 "postgres", "PgCronLauncherMain", 0, {0}, 0,
 	 PgCronStartRule},
+
+	{"anser gather service", "anser gather service",
+	 BGWORKER_SHMEM_ACCESS,
+	 BgWorkerStart_RecoveryFinished,
+	 1,
+	 "postgres", "AnserGatherServiceMain", 0, {0}, 0,
+	 AnserStartRule},
+
+	{"anser send service", "anser send service",
+	 BGWORKER_SHMEM_ACCESS,
+	 BgWorkerStart_RecoveryFinished,
+	 1,
+	 "postgres", "AnserSendServiceMain", 0, {0}, 0,
+	 AnserStartRule},
 
 #ifdef ENABLE_IC_PROXY
 	{"ic proxy process", "ic proxy process",
