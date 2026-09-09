@@ -133,6 +133,9 @@ typedef struct PgStat_TableCounts
 
 	PgStat_Counter t_blocks_fetched;
 	PgStat_Counter t_blocks_hit;
+
+	PgStat_Counter t_rev_all_frozen_pages;
+	PgStat_Counter t_rev_all_visible_pages;
 } PgStat_TableCounts;
 
 /* Possible targets for resetting cluster-wide shared values */
@@ -1060,6 +1063,19 @@ extern void pgstat_report_connect(Oid dboid);
 extern void pgstat_report_autovac(Oid dboid);
 extern void pgstat_report_vacuum(Oid tableoid, bool shared,
 								 PgStat_Counter livetuples, PgStat_Counter deadtuples);
+
+/* count a page whose all-visible bit is being cleared */
+#define pgstat_count_rev_all_visible(rel)							\
+	do {															\
+		if ((rel)->pgstat_info != NULL)								\
+			(rel)->pgstat_info->t_counts.t_rev_all_visible_pages++;	\
+	} while (0)
+/* count a page whose all-frozen bit is being cleared */
+#define pgstat_count_rev_all_frozen(rel)							\
+	do {															\
+		if ((rel)->pgstat_info != NULL)								\
+			(rel)->pgstat_info->t_counts.t_rev_all_frozen_pages++;	\
+	} while (0)
 extern void pgstat_report_analyze(Relation rel,
 								  PgStat_Counter livetuples, PgStat_Counter deadtuples,
 								  bool resetcounter);

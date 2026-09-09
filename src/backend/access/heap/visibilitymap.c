@@ -90,6 +90,7 @@
 #include "access/visibilitymap.h"
 #include "access/xlog.h"
 #include "miscadmin.h"
+#include "pgstat.h"
 #include "port/pg_bitutils.h"
 #include "storage/bufmgr.h"
 #include "storage/lmgr.h"
@@ -159,10 +160,24 @@ visibilitymap_clear(Relation rel, BlockNumber heapBlk, Buffer buf, uint8 flags)
 
 	if (map[mapByte] & mask)
 	{
+		uint8		cleared_bits = (map[mapByte] & mask) >> mapOffset;
+
 		map[mapByte] &= ~mask;
 
 		MarkBufferDirty(buf);
 		cleared = true;
+
+		/*
+		 * Count the pages that just lost their all-visible/all-frozen status
+		 * for the vacuum statistics (see pg_stat_vacuum_tables and friends).
+		 * The counters are delivered with the regular relation statistics, so
+		 * nothing is counted during recovery, where rel is a fake relcache
+		 * entry without a pgstat entry.
+		 */
+		if (cleared_bits & VISIBILITYMAP_ALL_VISIBLE)
+			pgstat_count_rev_all_visible(rel);
+		if (cleared_bits & VISIBILITYMAP_ALL_FROZEN)
+			pgstat_count_rev_all_frozen(rel);
 	}
 
 	LockBuffer(buf, BUFFER_LOCK_UNLOCK);
