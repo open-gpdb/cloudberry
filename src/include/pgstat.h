@@ -438,6 +438,14 @@ typedef struct PgStat_VacuumStats
 	PgStat_Counter pages_frozen;	/* pages where vacuum froze tuples */
 	PgStat_Counter pages_all_visible;	/* pages marked all-visible by vacuum */
 
+	/*
+	 * Number of vacuum runs that had to scan the whole relation because its
+	 * relfrozenxid/relminmxid reached the freeze table age.  Such a run
+	 * cannot skip pages using the visibility map, so it is much more
+	 * expensive than an ordinary one.
+	 */
+	PgStat_Counter wraparound_vacuum_count;
+
 	PgStat_Counter total_time;	/* total vacuum time, in microseconds */
 
 	/*

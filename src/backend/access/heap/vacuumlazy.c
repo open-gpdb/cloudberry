@@ -516,6 +516,7 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 				write_rate;
 	bool		aggressive;		/* should we scan all unfrozen pages? */
 	bool		scanned_all_unfrozen;	/* actually scanned all such pages? */
+	bool		wraparound;		/* did the freeze table age make it aggressive? */
 	instr_time	vacstart;
 	int64		startdelaytime;
 	instr_time	vacend;
@@ -585,6 +586,14 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 											   xidFullScanLimit);
 	aggressive |= MultiXactIdPrecedesOrEquals(rel->rd_rel->relminmxid,
 											  mxactFullScanLimit);
+
+	/*
+	 * Remember whether the relation reached the freeze table age, for the
+	 * vacuum statistics; a run forced by DISABLE_PAGE_SKIPPING is aggressive
+	 * too, but it is not driven by wraparound.
+	 */
+	wraparound = aggressive;
+
 	if (params->options & VACOPT_DISABLE_PAGE_SKIPPING)
 		aggressive = true;
 
@@ -776,6 +785,7 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 		vacstats.dead_pages = (PgStat_Counter) vacrel->dead_pages;
 		vacstats.pages_frozen = (PgStat_Counter) vacrel->pages_frozen;
 		vacstats.pages_all_visible = (PgStat_Counter) vacrel->pages_all_visible;
+		vacstats.wraparound_vacuum_count = wraparound ? 1 : 0;
 
 		INSTR_TIME_SET_CURRENT(vacend);
 		INSTR_TIME_SUBTRACT(vacend, vacstart);
@@ -785,9 +795,11 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 
 		ereport(elevel,
 				(errmsg("table \"%s\": vacuum statistics", vacrel->relname),
-				 errdetail("elapsed: %.3f ms, cost-based delay: %.3f ms",
+				 errdetail("elapsed: %.3f ms, cost-based delay: %.3f ms\n"
+						   "aggressive scan required by freeze age: %s",
 						   vacstats.total_time / 1000.0,
-						   vacstats.delay_time / 1000.0)));
+						   vacstats.delay_time / 1000.0,
+						   wraparound ? _("yes") : _("no"))));
 
 	}
 
@@ -862,6 +874,8 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 							 vacrel->pages_frozen);
 			appendStringInfo(&buf, _("pages marked all-visible: %u\n"),
 							 vacrel->pages_all_visible);
+			appendStringInfo(&buf, _("aggressive scan required by freeze age: %s\n"),
+							 wraparound ? _("yes") : _("no"));
 			appendStringInfo(&buf,
 							 _("tuples: %lld removed, %lld remain, %lld are dead but not yet removable, oldest xmin: %u\n"),
 							 (long long) vacrel->tuples_deleted,
