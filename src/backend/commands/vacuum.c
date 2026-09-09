@@ -105,6 +105,13 @@ static BufferAccessStrategy vac_strategy;
 
 
 /*
+ * Time this process has spent sleeping in vacuum_delay_point(), in
+ * microseconds.  The vacuum statistics report the share of a run that went
+ * into the cost-based delay rather than into work; see PgStat_VacuumStats.
+ */
+int64		VacuumDelayTime = 0;
+
+/*
  * Variables for cost-based parallel vacuum.  See comments atop
  * compute_parallel_delay to understand how it works.
  */
@@ -3007,12 +3014,20 @@ vacuum_delay_point(void)
 	/* Nap if appropriate */
 	if (msec > 0)
 	{
+		instr_time	delay_start;
+		instr_time	delay_end;
+
 		if (msec > VacuumCostDelay * 4)
 			msec = VacuumCostDelay * 4;
 
 		pgstat_report_wait_start(WAIT_EVENT_VACUUM_DELAY);
+		INSTR_TIME_SET_CURRENT(delay_start);
 		pg_usleep(msec * 1000);
+		INSTR_TIME_SET_CURRENT(delay_end);
 		pgstat_report_wait_end();
+
+		INSTR_TIME_SUBTRACT(delay_end, delay_start);
+		VacuumDelayTime += INSTR_TIME_GET_MICROSEC(delay_end);
 
 		/*
 		 * We don't want to ignore postmaster death during very long vacuums
