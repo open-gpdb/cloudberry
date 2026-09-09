@@ -62,6 +62,10 @@ Questions the counters answer:
   runs with `pages_frozen` staying at zero is never getting its tuples
   frozen — the freezing is being deferred to a later, much more expensive
   full-table run, and `vacuum_freeze_min_age` is worth revisiting.
+- **Is the load skewed?**  The `gp_segment_id` breakdown in the
+  `gp_stat_vacuum_*` views shows a segment doing much more vacuum work
+  than its peers, which usually means unevenly distributed data rather
+  than a vacuum problem.
 
 ## Counters
 
@@ -130,7 +134,8 @@ remain in the statistics views; they are not attributed to a vacuum run.
 Run the TAP suite with `make installcheck` (or `make installcheck-tap`)
 after installation; the build must use `--enable-tap-tests`.  TAP creates
 temporary standalone nodes in utility/maintenance mode and checks the
-local views.
+local views.  It does not exercise dispatch through the cluster-wide
+`gp_stat_vacuum_*` views.
 
 ## Views
 
@@ -140,6 +145,20 @@ Local (current node) views:
 - `pg_stat_vacuum_indexes`
 - `pg_stat_vacuum_database`
 
+Cluster-wide views (coordinator plus every segment, with a `gp_segment_id`
+column; vacuum does its real work on the segments, so these are usually
+the interesting ones):
+
+- `gp_stat_vacuum_tables`
+- `gp_stat_vacuum_indexes`
+- `gp_stat_vacuum_database`
+
+Like `gp_stat_replication`, the cluster-wide views are a `UNION ALL` of a
+function running on the coordinator and a function running on all
+segments.  In a utility-mode session there are no segments to dispatch to
+and both halves execute locally, so every relation is reported twice; use
+the local views there.
+
 ## Usage
 
 ```sql
@@ -147,11 +166,26 @@ CREATE EXTENSION vacuum_stats;
 
 VACUUM my_table;
 
-SELECT tuples_deleted, dead_tuples, pages_deleted,
+SELECT gp_segment_id, tuples_deleted, dead_tuples, pages_deleted,
        pages_all_visible, rev_all_visible_pages,
        wraparound_vacuum_count, total_time
-FROM pg_stat_vacuum_tables
+FROM gp_stat_vacuum_tables
 WHERE relname = 'my_table';
+```
+
+Summed over the segments, to rank the tables by the vacuum time they
+cost:
+
+```sql
+SELECT schemaname, relname,
+       round(sum(total_time), 2) AS total_time_ms,
+       sum(tuples_deleted) AS tuples_deleted,
+       sum(dead_tuples) AS dead_tuples
+FROM gp_stat_vacuum_tables
+GROUP BY schemaname, relname
+HAVING sum(total_time) > 0
+ORDER BY total_time_ms DESC
+LIMIT 10;
 ```
 
 The counters are reset together with the rest of the collected statistics
