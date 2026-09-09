@@ -774,7 +774,7 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 						 Max(new_live_tuples, 0),
 						 vacrel->new_dead_tuples);
 
-	/* assemble the per-vacuum measurements for subsequent reporting */
+	/* report the per-vacuum counters as well */
 	{
 		PgStat_VacuumStats vacstats;
 
@@ -801,6 +801,10 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 						   vacstats.delay_time / 1000.0,
 						   wraparound ? _("yes") : _("no"))));
 
+		pgstat_report_vacstats(RelationGetRelid(rel),
+							   rel->rd_rel->relisshared,
+							   false,
+							   &vacstats);
 	}
 
 	pgstat_progress_end_command();
@@ -3124,7 +3128,7 @@ lazy_cleanup_all_indexes(LVRelState *vacrel)
 
 /*
  * lazy_index_vacstats_start() -- remember where an index vacuum call starts,
- * for lazy_measure_index_vacstats().
+ * for lazy_report_index_vacstats().
  *
  * The counters in istat accumulate over all the calls made for the index
  * during one vacuum, so we report what each call added to them.  That keeps
@@ -3149,7 +3153,7 @@ lazy_index_vacstats_start(IndexBulkDeleteResult *istat,
 }
 
 /*
- * lazy_measure_index_vacstats() -- assemble the vacuum statistics of one index
+ * lazy_report_index_vacstats() -- report the vacuum statistics of one index
  * vacuum call.
  *
  * pages_deleted and pages_free describe the whole index as the call left it,
@@ -3158,7 +3162,7 @@ lazy_index_vacstats_start(IndexBulkDeleteResult *istat,
  * pages.
  */
 static void
-lazy_measure_index_vacstats(Relation indrel, IndexBulkDeleteResult *istat,
+lazy_report_index_vacstats(Relation indrel, IndexBulkDeleteResult *istat,
 						   IndexBulkDeleteResult *before, bool cleanup,
 						   instr_time starttime, int64 startdelaytime)
 {
@@ -3189,6 +3193,10 @@ lazy_measure_index_vacstats(Relation indrel, IndexBulkDeleteResult *istat,
 	vacstats.total_time = (PgStat_Counter) INSTR_TIME_GET_MICROSEC(endtime);
 	vacstats.delay_time = (PgStat_Counter) (VacuumDelayTime - startdelaytime);
 
+	pgstat_report_vacstats(RelationGetRelid(indrel),
+						   indrel->rd_rel->relisshared,
+						   true,
+						   &vacstats);
 }
 
 /*
@@ -3240,7 +3248,7 @@ lazy_vacuum_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 											 &startdelaytime);
 	istat = index_bulk_delete(&ivinfo, istat, lazy_tid_reaped,
 							  (void *) vacrel->dead_tuples);
-	lazy_measure_index_vacstats(indrel, istat, &istat_before, false,
+	lazy_report_index_vacstats(indrel, istat, &istat_before, false,
 							   starttime, startdelaytime);
 
 	ereport(elevel,
@@ -3304,7 +3312,7 @@ lazy_cleanup_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 	istat_before = lazy_index_vacstats_start(istat, &starttime,
 											 &startdelaytime);
 	istat = index_vacuum_cleanup(&ivinfo, istat);
-	lazy_measure_index_vacstats(indrel, istat, &istat_before, true,
+	lazy_report_index_vacstats(indrel, istat, &istat_before, true,
 							   starttime, startdelaytime);
 
 	if (istat)
