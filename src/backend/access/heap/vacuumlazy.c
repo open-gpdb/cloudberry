@@ -372,6 +372,7 @@ typedef struct LVRelState
 	BlockNumber nonempty_pages; /* actually, last nonempty page + 1 */
 	/* Counters reported as the relation's vacuum statistics */
 	BlockNumber dead_pages;		/* pages left with unremovable dead tuples */
+	BlockNumber pages_frozen;	/* pages where we froze tuples */
 
 	/* Statistics output by us, for table */
 	double		new_rel_tuples; /* new estimated total # of tuples */
@@ -772,6 +773,7 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 		vacstats.dead_tuples = (PgStat_Counter) vacrel->new_dead_tuples;
 		vacstats.pages_deleted = (PgStat_Counter) vacrel->pages_removed;
 		vacstats.dead_pages = (PgStat_Counter) vacrel->dead_pages;
+		vacstats.pages_frozen = (PgStat_Counter) vacrel->pages_frozen;
 
 		INSTR_TIME_SET_CURRENT(vacend);
 		INSTR_TIME_SUBTRACT(vacend, vacstart);
@@ -854,6 +856,8 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 							 vacrel->frozenskipped_pages);
 			appendStringInfo(&buf, _("pages with dead tuples not yet removable: %u\n"),
 							 vacrel->dead_pages);
+			appendStringInfo(&buf, _("pages with tuples frozen: %u\n"),
+							 vacrel->pages_frozen);
 			appendStringInfo(&buf,
 							 _("tuples: %lld removed, %lld remain, %lld are dead but not yet removable, oldest xmin: %u\n"),
 							 (long long) vacrel->tuples_deleted,
@@ -1725,6 +1729,8 @@ lazy_scan_heap(LVRelState *vacrel, VacuumParams *params, bool aggressive)
 					 (long long) vacrel->new_dead_tuples, vacrel->OldestXmin);
 	appendStringInfo(&buf, _("pages with dead tuples not yet removable: %u\n"),
 					 vacrel->dead_pages);
+	appendStringInfo(&buf, _("pages with tuples frozen: %u\n"),
+					 vacrel->pages_frozen);
 	appendStringInfo(&buf, ngettext("Skipped %u page due to buffer pins, ",
 									"Skipped %u pages due to buffer pins, ",
 									vacrel->pinskipped_pages),
@@ -2031,6 +2037,8 @@ retry:
 	if (nfrozen > 0)
 	{
 		Assert(prunestate->hastup);
+
+		vacrel->pages_frozen++;
 
 		/*
 		 * At least one tuple with storage needs to be frozen -- execute that
