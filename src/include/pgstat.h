@@ -423,6 +423,30 @@ typedef struct PgStat_MsgVacuum
 
 
 /* ----------
+ * PgStat_VacuumStats			Counters accumulated by (auto)vacuum for a
+ *								single relation.  Tuple counters cover heap
+ *								relations, page counters both heap relations
+ *								and indexes.
+ * ----------
+ */
+typedef struct PgStat_VacuumStats
+{
+	PgStat_Counter tuples_deleted;	/* tuples removed by vacuum */
+	PgStat_Counter dead_tuples; /* dead tuples left unremoved */
+	PgStat_Counter pages_deleted;	/* pages removed/deleted by vacuum */
+
+	PgStat_Counter total_time;	/* total vacuum time, in microseconds */
+
+	/*
+	 * Of that time, what went into the cost-based vacuum delay rather than
+	 * into work.  Without it a slow run cannot be told from a throttled one;
+	 * it is mostly autovacuum that sleeps, since vacuum_cost_delay is 0 by
+	 * default while autovacuum_vacuum_cost_delay is not.
+	 */
+	PgStat_Counter delay_time;
+} PgStat_VacuumStats;
+
+/* ----------
  * PgStat_MsgAnalyze			Sent by the backend or autovacuum daemon
  *								after ANALYZE
  * ----------
