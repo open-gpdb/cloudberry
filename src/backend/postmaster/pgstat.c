@@ -372,6 +372,7 @@ static void pgstat_recv_resetslrucounter(PgStat_MsgResetslrucounter *msg, int le
 static void pgstat_recv_resetreplslotcounter(PgStat_MsgResetreplslotcounter *msg, int len);
 static void pgstat_recv_autovac(PgStat_MsgAutovacStart *msg, int len);
 static void pgstat_recv_vacuum(PgStat_MsgVacuum *msg, int len);
+static void pgstat_recv_vacstats(PgStat_MsgVacstats *msg, int len);
 static void pgstat_recv_analyze(PgStat_MsgAnalyze *msg, int len);
 static void pgstat_recv_archiver(PgStat_MsgArchiver *msg, int len);
 static void pgstat_recv_queuestat(PgStat_MsgQueuestat *msg, int len); /* GPDB */
@@ -1603,6 +1604,29 @@ pgstat_report_vacuum(Oid tableoid, bool shared,
 	msg.m_vacuumtime = GetCurrentTimestamp();
 	msg.m_live_tuples = livetuples;
 	msg.m_dead_tuples = deadtuples;
+	pgstat_send(&msg, sizeof(msg));
+}
+
+/* ---------
+ * pgstat_report_vacstats() -
+ *
+ *	Tell the collector about the counters accumulated while vacuuming a
+ *	relation (a heap relation or an index).
+ * ---------
+ */
+void
+pgstat_report_vacstats(Oid tableoid, bool shared,
+					   const PgStat_VacuumStats *stats)
+{
+	PgStat_MsgVacstats msg;
+
+	if (pgStatSock == PGINVALID_SOCKET || !pgstat_track_counts)
+		return;
+
+	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_VACSTATS);
+	msg.m_databaseid = shared ? InvalidOid : MyDatabaseId;
+	msg.m_tableoid = tableoid;
+	msg.m_stats = *stats;
 	pgstat_send(&msg, sizeof(msg));
 }
 
@@ -3677,6 +3701,10 @@ PgstatCollectorMain(int argc, char *argv[])
 					pgstat_recv_vacuum(&msg.msg_vacuum, len);
 					break;
 
+				case PGSTAT_MTYPE_VACSTATS:
+					pgstat_recv_vacstats(&msg.msg_vacstats, len);
+					break;
+
 				case PGSTAT_MTYPE_ANALYZE:
 					pgstat_recv_analyze(&msg.msg_analyze, len);
 					break;
@@ -3820,6 +3848,9 @@ reset_dbentry_counters(PgStat_StatDBEntry *dbentry)
 	dbentry->n_sessions_abandoned = 0;
 	dbentry->n_sessions_fatal = 0;
 	dbentry->n_sessions_killed = 0;
+	MemSet(&dbentry->n_vacuum_stats, 0, sizeof(dbentry->n_vacuum_stats));
+	dbentry->n_rev_all_frozen_pages = 0;
+	dbentry->n_rev_all_visible_pages = 0;
 
 	dbentry->stat_reset_timestamp = GetCurrentTimestamp();
 	dbentry->stats_timestamp = 0;
@@ -3914,6 +3945,9 @@ pgstat_get_tab_entry(PgStat_StatDBEntry *dbentry, Oid tableoid, bool create)
 		result->analyze_count = 0;
 		result->autovac_analyze_timestamp = 0;
 		result->autovac_analyze_count = 0;
+		MemSet(&result->vacuum_stats, 0, sizeof(result->vacuum_stats));
+		result->rev_all_frozen_pages = 0;
+		result->rev_all_visible_pages = 0;
 	}
 
 	return result;
@@ -5275,6 +5309,11 @@ pgstat_recv_tabstat(PgStat_MsgTabstat *msg, int len)
 			tabentry->analyze_count = 0;
 			tabentry->autovac_analyze_timestamp = 0;
 			tabentry->autovac_analyze_count = 0;
+			MemSet(&tabentry->vacuum_stats, 0, sizeof(tabentry->vacuum_stats));
+			tabentry->rev_all_frozen_pages =
+				tabmsg->t_counts.t_rev_all_frozen_pages;
+			tabentry->rev_all_visible_pages =
+				tabmsg->t_counts.t_rev_all_visible_pages;
 		}
 		else
 		{
@@ -5301,6 +5340,10 @@ pgstat_recv_tabstat(PgStat_MsgTabstat *msg, int len)
 			tabentry->inserts_since_vacuum += tabmsg->t_counts.t_tuples_inserted;
 			tabentry->blocks_fetched += tabmsg->t_counts.t_blocks_fetched;
 			tabentry->blocks_hit += tabmsg->t_counts.t_blocks_hit;
+			tabentry->rev_all_frozen_pages +=
+				tabmsg->t_counts.t_rev_all_frozen_pages;
+			tabentry->rev_all_visible_pages +=
+				tabmsg->t_counts.t_rev_all_visible_pages;
 		}
 
 		/* Clamp n_live_tuples in case of negative delta_live_tuples */
@@ -5318,6 +5361,10 @@ pgstat_recv_tabstat(PgStat_MsgTabstat *msg, int len)
 		dbentry->n_tuples_deleted += tabmsg->t_counts.t_tuples_deleted;
 		dbentry->n_blocks_fetched += tabmsg->t_counts.t_blocks_fetched;
 		dbentry->n_blocks_hit += tabmsg->t_counts.t_blocks_hit;
+		dbentry->n_rev_all_frozen_pages +=
+			tabmsg->t_counts.t_rev_all_frozen_pages;
+		dbentry->n_rev_all_visible_pages +=
+			tabmsg->t_counts.t_rev_all_visible_pages;
 	}
 }
 
@@ -5630,6 +5677,46 @@ pgstat_recv_vacuum(PgStat_MsgVacuum *msg, int len)
 		tabentry->vacuum_timestamp = msg->m_vacuumtime;
 		tabentry->vacuum_count++;
 	}
+}
+
+/* ----------
+ * pgstat_recv_vacstats() -
+ *
+ *	Process a VACSTATS message: accumulate the vacuum counters into the
+ *	relation's entry and into the per-database totals.
+ * ----------
+ */
+static void
+pgstat_recv_vacstats(PgStat_MsgVacstats *msg, int len)
+{
+	PgStat_StatDBEntry *dbentry;
+	PgStat_StatTabEntry *tabentry;
+
+	dbentry = pgstat_get_db_entry(msg->m_databaseid, true);
+
+	tabentry = pgstat_get_tab_entry(dbentry, msg->m_tableoid, true);
+
+	tabentry->vacuum_stats.tuples_deleted += msg->m_stats.tuples_deleted;
+	tabentry->vacuum_stats.dead_tuples += msg->m_stats.dead_tuples;
+	tabentry->vacuum_stats.pages_deleted += msg->m_stats.pages_deleted;
+	tabentry->vacuum_stats.dead_pages += msg->m_stats.dead_pages;
+	tabentry->vacuum_stats.pages_frozen += msg->m_stats.pages_frozen;
+	tabentry->vacuum_stats.pages_all_visible += msg->m_stats.pages_all_visible;
+	tabentry->vacuum_stats.wraparound_vacuum_count +=
+		msg->m_stats.wraparound_vacuum_count;
+	tabentry->vacuum_stats.total_time += msg->m_stats.total_time;
+	tabentry->vacuum_stats.delay_time += msg->m_stats.delay_time;
+
+	dbentry->n_vacuum_stats.tuples_deleted += msg->m_stats.tuples_deleted;
+	dbentry->n_vacuum_stats.dead_tuples += msg->m_stats.dead_tuples;
+	dbentry->n_vacuum_stats.pages_deleted += msg->m_stats.pages_deleted;
+	dbentry->n_vacuum_stats.dead_pages += msg->m_stats.dead_pages;
+	dbentry->n_vacuum_stats.pages_frozen += msg->m_stats.pages_frozen;
+	dbentry->n_vacuum_stats.pages_all_visible += msg->m_stats.pages_all_visible;
+	dbentry->n_vacuum_stats.wraparound_vacuum_count +=
+		msg->m_stats.wraparound_vacuum_count;
+	dbentry->n_vacuum_stats.total_time += msg->m_stats.total_time;
+	dbentry->n_vacuum_stats.delay_time += msg->m_stats.delay_time;
 }
 
 /* ----------

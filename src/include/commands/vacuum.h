@@ -371,6 +371,7 @@ extern int	vacuum_multixact_failsafe_age;
 extern pg_atomic_uint32 *VacuumSharedCostBalance;
 extern pg_atomic_uint32 *VacuumActiveNWorkers;
 extern int	VacuumCostBalanceLocal;
+extern PGDLLIMPORT int64 VacuumDelayTime;
 
 
 /* in commands/vacuum.c */
