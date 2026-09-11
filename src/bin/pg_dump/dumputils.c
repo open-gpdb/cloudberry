@@ -16,6 +16,7 @@
 
 #include <ctype.h>
 
+#include "common/logging.h"
 #include "dumputils.h"
 #include "fe_utils/string_utils.h"
 
@@ -888,6 +889,138 @@ SplitGUCList(char *rawstring, char separator,
 	return true;
 }
 
+static void makeAlterConfigCommandInternal(PGconn *conn, const char *configitem,
+										   const char *type, const char *name,
+										   const char *type2, const char *name2,
+										   PQExpBuffer buf);
+
+static char *
+trimStorageWhitespace(char *s)
+{
+	char	   *end;
+
+	while (isspace((unsigned char) *s))
+		s++;
+	end = s + strlen(s);
+	while (end > s && isspace((unsigned char) end[-1]))
+		*--end = '\0';
+	return s;
+}
+
+/* Accept the same unambiguous boolean prefixes as the source server. */
+static bool
+parseStorageBool(const char *value, bool *result)
+{
+	size_t		len = strlen(value);
+
+	if (len == 0)
+		return false;
+	if (pg_strncasecmp(value, "true", len) == 0 ||
+		pg_strncasecmp(value, "yes", len) == 0 ||
+		(len >= 2 && pg_strncasecmp(value, "on", len) == 0) ||
+		strcmp(value, "1") == 0)
+		*result = true;
+	else if (pg_strncasecmp(value, "false", len) == 0 ||
+			 pg_strncasecmp(value, "no", len) == 0 ||
+			 (len >= 2 && pg_strncasecmp(value, "off", len) == 0) ||
+			 strcmp(value, "0") == 0)
+		*result = false;
+	else
+		return false;
+	return true;
+}
+
+/* Split legacy storage defaults at the same database/role scope. */
+static bool
+dumpGpDefaultStorageOptions(PGconn *conn, const char *guc,
+							const char *type, const char *name,
+							const char *type2, const char *name2,
+							PQExpBuffer outbuf)
+{
+	static const char prefix[] = "gp_default_storage_options=";
+	char	   *value;
+	char	   *tok;
+	char	   *next;
+	int			ao_state = -1;
+	bool		orient_seen = false;
+	bool		is_column = false;
+	const char *am;
+	PQExpBuffer remaining;
+	PQExpBuffer opt;
+
+	if (strncmp(guc, prefix, strlen(prefix)) != 0)
+		return false;
+
+	remaining = createPQExpBuffer();
+	value = pg_strdup(guc + strlen(prefix));
+
+	for (tok = *value ? value : NULL; tok != NULL; tok = next)
+	{
+		char	   *optname;
+		char	   *val;
+		char	   *eq;
+		bool		ao;
+
+		next = strchr(tok, ',');
+		if (next)
+			*next++ = '\0';
+		eq = strchr(tok, '=');
+		if (eq == NULL)
+			goto invalid;
+		*eq = '\0';
+		optname = trimStorageWhitespace(tok);
+		val = trimStorageWhitespace(eq + 1);
+		if (*optname == '\0' || *val == '\0' || strchr(val, '='))
+			goto invalid;
+
+		if (pg_strcasecmp(optname, "appendonly") == 0 ||
+			pg_strcasecmp(optname, "appendoptimized") == 0)
+		{
+			if (ao_state != -1 || !parseStorageBool(val, &ao))
+				goto invalid;
+			ao_state = ao ? 1 : 0;
+		}
+		else if (pg_strcasecmp(optname, "orientation") == 0)
+		{
+			if (orient_seen ||
+				(pg_strcasecmp(val, "column") != 0 &&
+				 pg_strcasecmp(val, "row") != 0))
+				goto invalid;
+			orient_seen = true;
+			is_column = (pg_strcasecmp(val, "column") == 0);
+		}
+		else
+		{
+			if (remaining->len > 0)
+				appendPQExpBufferChar(remaining, ',');
+			appendPQExpBuffer(remaining, "%s=%s", optname, val);
+		}
+	}
+
+	if (ao_state != 1)
+		am = "default_table_access_method=heap";
+	else if (is_column)
+		am = "default_table_access_method=ao_column";
+	else
+		am = "default_table_access_method=ao_row";
+
+	/* Both settings must override lower-priority scopes, even when empty. */
+	makeAlterConfigCommandInternal(conn, am, type, name, type2, name2, outbuf);
+	opt = createPQExpBuffer();
+	appendPQExpBuffer(opt, "gp_default_storage_options=%s", remaining->data);
+	makeAlterConfigCommandInternal(conn, opt->data, type, name, type2, name2,
+								   outbuf);
+	destroyPQExpBuffer(opt);
+	destroyPQExpBuffer(remaining);
+	pg_free(value);
+	return true;
+
+invalid:
+	pg_log_error("invalid gp_default_storage_options setting for %s \"%s\": \"%s\"",
+				 type, name, guc);
+	exit(EXIT_FAILURE);
+}
+
 /*
  * Helper function for dumping "ALTER DATABASE/ROLE SET ..." commands.
  *
@@ -897,10 +1030,24 @@ SplitGUCList(char *rawstring, char separator,
  * type is DATABASE or ROLE, and name is the name of the database or role.
  * If we need an "IN" clause, type2 and name2 similarly define what to put
  * there; otherwise they should be NULL.
- * conn is used only to determine string-literal quoting conventions.
+ * conn supplies the source version and string-literal quoting conventions.
  */
 void
 makeAlterConfigCommand(PGconn *conn, const char *configitem,
+					   const char *type, const char *name,
+					   const char *type2, const char *name2,
+					   PQExpBuffer buf)
+{
+	/* GP7+ stores the access method in a separate GUC already. */
+	if (PQserverVersion(conn) < 120000 &&
+		dumpGpDefaultStorageOptions(conn, configitem, type, name, type2, name2, buf))
+		return;
+
+	makeAlterConfigCommandInternal(conn, configitem, type, name, type2, name2, buf);
+}
+
+static void
+makeAlterConfigCommandInternal(PGconn *conn, const char *configitem,
 					   const char *type, const char *name,
 					   const char *type2, const char *name2,
 					   PQExpBuffer buf)
