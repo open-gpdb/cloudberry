@@ -7202,14 +7202,19 @@ getTables(Archive *fout, int *numTables)
 		appendPQExpBufferStr(query,
 						  "0 AS relminmxid, 0 AS tminmxid, ");
 
+	/* Storage-model reloptions are emitted from the table access method. */
 	if (fout->remoteVersion >= 90300)
 		appendPQExpBufferStr(query,
-						  "array_remove(array_remove(c.reloptions,'check_option=local'),'check_option=cascaded') AS reloptions, "
+						  "ARRAY(SELECT x FROM unnest("
+						  "array_remove(array_remove(c.reloptions,'check_option=local'),'check_option=cascaded')"
+						  ") x WHERE x NOT LIKE 'appendonly=%' AND x NOT LIKE 'orientation=%') AS reloptions, "
 						  "CASE WHEN 'check_option=local' = ANY (c.reloptions) THEN 'LOCAL'::text "
 						  "WHEN 'check_option=cascaded' = ANY (c.reloptions) THEN 'CASCADED'::text ELSE NULL END AS checkoption, ");
 	else
 		appendPQExpBufferStr(query,
-						  "c.reloptions, NULL AS checkoption, ");
+						  "ARRAY(SELECT x FROM unnest(c.reloptions) x "
+						  "WHERE x NOT LIKE 'appendonly=%' AND x NOT LIKE 'orientation=%') AS reloptions, "
+						  "NULL AS checkoption, ");
 
 	if (fout->remoteVersion >= 80400)
 		appendPQExpBufferStr(query,
@@ -7229,9 +7234,21 @@ getTables(Archive *fout, int *numTables)
 		appendPQExpBufferStr(query,
 						  "am.amname, am.oid as amoid, ");
 	else
-		appendPQExpBufferStr(query,
-						  "NULL AS amname, NULL as amoid, ");
-
+		/* Explicit source AMs prevent target defaults from changing table storage. */
+		appendPQExpBuffer(query,
+						  "CASE c.relstorage "
+						  "WHEN 'a' THEN 'ao_row' "
+						  "WHEN 'c' THEN 'ao_column' "
+						  "WHEN 'h' THEN 'heap' "
+						  "ELSE NULL END AS amname, "
+						  "CASE c.relstorage "
+						  "WHEN 'a' THEN %u::oid "
+						  "WHEN 'c' THEN %u::oid "
+						  "WHEN 'h' THEN %u::oid "
+						  "ELSE NULL END AS amoid, ",
+						  AO_ROW_TABLE_AM_OID,
+						  AO_COLUMN_TABLE_AM_OID,
+						  HEAP_TABLE_AM_OID);
 	if (fout->remoteVersion >= 90600)
 		appendPQExpBufferStr(query,
 						  "c.relkind = " CppAsString2(RELKIND_SEQUENCE)
@@ -17834,11 +17851,9 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 						 */
 						appendPQExpBufferStr(q, " INTEGER /* dummy */");
 
-						/* Dropped columns are dumped during binary upgrade.
-						 * Dump the encoding clause also to maintain a consistent
-						 * catalog entry in pg_attribute_encoding post upgrade.
-						 */
-						if (tbinfo->attencoding[j] != NULL)
+						/* Preserve dropped-column encodings only for AOCO tables. */
+						if (tbinfo->amoid == AO_COLUMN_TABLE_AM_OID &&
+							tbinfo->attencoding[j] != NULL)
 							appendPQExpBuffer(q, " ENCODING (%s)", tbinfo->attencoding[j]);
 
 						/* Skip all the rest */
@@ -17911,30 +17926,26 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 				actual_atts++;
 			}
 
-			/*
-			 * Add AOCO ENCODING directives, if any.
-			 *
-			 * We dump these as separate "COLUMN <col> ENCODING ..." clauses,
-			 * instead of tacking the ENCODING at the column definition, so
-			 * that this works for inherited columns, too. Inherited columns
-			 * are not listed in the column list.
-			 */
-			for (j = 0; j < tbinfo->numatts; j++)
+			/* Separate AOCO ENCODING clauses also cover inherited columns. */
+			if (tbinfo->amoid == AO_COLUMN_TABLE_AM_OID)
 			{
-				if (tbinfo->attisdropped[j])
-					continue;
-
-				if (tbinfo->attencoding[j] != NULL)
+				for (j = 0; j < tbinfo->numatts; j++)
 				{
-					if (actual_atts == 0)
-						appendPQExpBufferStr(q, " (\n    ");
-					else
-						appendPQExpBufferStr(q, ",\n    ");
+					if (tbinfo->attisdropped[j])
+						continue;
 
-					appendPQExpBuffer(q, "COLUMN %s ENCODING (%s)",
-									  fmtId(tbinfo->attnames[j]),
-									  tbinfo->attencoding[j]);
-					actual_atts++;
+					if (tbinfo->attencoding[j] != NULL)
+					{
+						if (actual_atts == 0)
+							appendPQExpBufferStr(q, " (\n    ");
+						else
+							appendPQExpBufferStr(q, ",\n    ");
+
+						appendPQExpBuffer(q, "COLUMN %s ENCODING (%s)",
+										  fmtId(tbinfo->attnames[j]),
+										  tbinfo->attencoding[j]);
+						actual_atts++;
+					}
 				}
 			}
 
