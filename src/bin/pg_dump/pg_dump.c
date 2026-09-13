@@ -9692,8 +9692,8 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 			/* these flags will be set in flagInhAttrs() */
 			tbinfo->inhNotNull[j] = false;
 			/* column storage attributes */
-			if (!PQgetisnull(res, j, i_attencoding))
-				tbinfo->attencoding[j] = pg_strdup(PQgetvalue(res, j, i_attencoding));
+			if (!PQgetisnull(res, r, i_attencoding))
+				tbinfo->attencoding[j] = pg_strdup(PQgetvalue(res, r, i_attencoding));
 			else
 				tbinfo->attencoding[j] = NULL;
 		}
