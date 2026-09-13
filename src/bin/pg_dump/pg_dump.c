@@ -8733,7 +8733,7 @@ getTriggers(Archive *fout, TableInfo tblinfo[], int numTables)
 						  "SELECT t.tgrelid, t.tgname, "
 						  "t.tgfoid::pg_catalog.regproc AS tgfname, "
 						  "pg_catalog.pg_get_triggerdef(t.oid, false) AS tgdef, "
-						  "t.tgenabled, t.tableoid, t.oid, t.tgisinternal as tgispartition\n"
+						  "t.tgenabled, t.tableoid, t.oid, t.tgisinternal\n"
 						  "FROM unnest('%s'::pg_catalog.oid[]) AS src(tbloid)\n"
 						  "JOIN pg_catalog.pg_trigger t ON (src.tbloid = t.tgrelid) "
 						  "LEFT JOIN pg_catalog.pg_trigger u ON (u.oid = t.tgparentid) "
@@ -8754,7 +8754,7 @@ getTriggers(Archive *fout, TableInfo tblinfo[], int numTables)
 						  "SELECT t.tgrelid, t.tgname, "
 						  "t.tgfoid::pg_catalog.regproc AS tgfname, "
 						  "pg_catalog.pg_get_triggerdef(t.oid, false) AS tgdef, "
-						  "t.tgenabled, t.tableoid, t.oid, t.tgisinternal as tgispartition "
+						  "t.tgenabled, t.tableoid, t.oid, t.tgisinternal "
 						  "FROM unnest('%s'::pg_catalog.oid[]) AS src(tbloid)\n"
 						  "JOIN pg_catalog.pg_trigger t ON (src.tbloid = t.tgrelid) "
 						  "LEFT JOIN pg_catalog.pg_depend AS d ON "
@@ -9647,8 +9647,8 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 			/* these flags will be set in flagInhAttrs() */
 			tbinfo->inhNotNull[j] = false;
 			/* column storage attributes */
-			if (!PQgetisnull(res, j, i_attencoding))
-				tbinfo->attencoding[j] = pg_strdup(PQgetvalue(res, j, i_attencoding));
+			if (!PQgetisnull(res, r, i_attencoding))
+				tbinfo->attencoding[j] = pg_strdup(PQgetvalue(res, r, i_attencoding));
 			else
 				tbinfo->attencoding[j] = NULL;
 		}
@@ -15386,7 +15386,7 @@ dumpAgg(Archive *fout, const AggInfo *agginfo)
 		else
 			appendPQExpBufferStr(query,
 								 "'0' AS aggfinalmodify,\n"
-								 "'0' AS aggmfinalmodify\n");
+								 "'0' AS aggmfinalmodify,\n");
 		
 		if (fout->remoteVersion >= 140000 && fout->version.type == Cloudberry && fout->version.version >= 2)
 			appendPQExpBufferStr(query,
