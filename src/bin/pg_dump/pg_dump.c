@@ -5500,6 +5500,12 @@ binary_upgrade_set_pg_class_oids_impl(Archive *fout,
 	Oid			ao_visimapidxid = InvalidOid;
 	bool		ao_columnstore = false;
 	char		pg_class_relkind;
+	bool		is_part_parent;
+	TableInfo  *reltbinfo;
+
+	/* Legacy parents lose their storage; indexes are not TableInfo objects. */
+	reltbinfo = is_index ? NULL : findTableByOid(pg_class_oid);
+	is_part_parent = (reltbinfo != NULL && reltbinfo->is_part_parent);
 
 	/* GPDB_14_MERGE_FIXME: we must put this sql here for variables which will befetched later by other sqls */
 	appendPQExpBuffer(upgrade_query,
@@ -5597,7 +5603,8 @@ binary_upgrade_set_pg_class_oids_impl(Archive *fout,
 		 * in preassignment.
 		 */
 		if (OidIsValid(pg_class_reltoastrelid) &&
-			pg_class_relkind != RELKIND_PARTITIONED_TABLE && !ao_columnstore)
+			pg_class_relkind != RELKIND_PARTITIONED_TABLE &&
+			!is_part_parent && !ao_columnstore)
 		{
 			appendPQExpBuffer(upgrade_buffer,
 							  "SELECT pg_catalog.binary_upgrade_set_next_toast_pg_class_oid('%u'::pg_catalog.oid, '%u'::pg_catalog.oid, $$pg_toast_%u$$::text);\n",
@@ -5610,8 +5617,8 @@ binary_upgrade_set_pg_class_oids_impl(Archive *fout,
 								  pg_index_indexrelid, pg_class_reltoastnamespace, pg_class_oid);
 		}
 
-		/* Set up any AO auxiliary tables with preallocated OIDs as well. */
-		if (OidIsValid(ao_segrelid))
+		/* Preassign AO auxiliary OIDs only for relations that retain storage. */
+		if (OidIsValid(ao_segrelid) && !is_part_parent)
 		{
 			/*
 			 * Adjust the names of all pg_aoseg aux tables to match what they
@@ -7835,8 +7842,8 @@ getPartitionDefs(Archive *fout, TableInfo tblinfo[], int numTables)
 	int			i_partclause;
 	int			i_parttemplate;
 
-	/* Only relevant for GP5/GP6 */
-	if (fout->remoteVersion > GPDB6_MAJOR_PGVERSION)
+	/* Include GP5/GP6 point releases; GP7 uses declarative partitioning. */
+	if (fout->remoteVersion >= GPDB7_MAJOR_PGVERSION)
 		return;
 
 	/*
@@ -7888,7 +7895,7 @@ getPartitionDefs(Archive *fout, TableInfo tblinfo[], int numTables)
 	for (int i = 0; i < ntups; i++)
 	{
 		TableInfo *tbinfo = findTableByOid(atooid(PQgetvalue(res, i, i_oid)));
-		if (tblinfo)
+		if (tbinfo)
 		{
 			tbinfo->partclause = pg_strdup(PQgetvalue(res, i, i_partclause));
 			tbinfo->parttemplate = pg_strdup(PQgetvalue(res, i, i_parttemplate));
@@ -7899,6 +7906,51 @@ getPartitionDefs(Archive *fout, TableInfo tblinfo[], int numTables)
 
 	destroyPQExpBuffer(query);
 	destroyPQExpBuffer(tbloids);
+}
+
+/* Mark legacy roots and intermediate parents, whose target has no storage. */
+void
+getPartitionParents(Archive *fout, TableInfo tblinfo[], int numTables)
+{
+	PQExpBuffer query;
+	PGresult   *res;
+	int			ntups;
+
+	/* Only GP5/GP6 have the legacy pg_partition catalogs. */
+	if (fout->remoteVersion >= GPDB7_MAJOR_PGVERSION)
+		return;
+
+	query = createPQExpBuffer();
+
+	/* Intermediate parents have a deeper partition level under the same root. */
+	appendPQExpBufferStr(query,
+						 "SELECT pp.parrelid AS oid "
+						 "FROM pg_catalog.pg_partition pp "
+						 "WHERE pp.parlevel = 0 AND NOT pp.paristemplate "
+						 "UNION "
+						 "SELECT pr.parchildrelid AS oid "
+						 "FROM pg_catalog.pg_partition_rule pr "
+						 "JOIN pg_catalog.pg_partition pp "
+						 "  ON pp.oid = pr.paroid "
+						 "JOIN pg_catalog.pg_partition deeper "
+						 "  ON deeper.parrelid = pp.parrelid "
+						 " AND deeper.parlevel = pp.parlevel + 1 "
+						 "WHERE NOT pp.paristemplate AND NOT deeper.paristemplate");
+
+	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+
+	ntups = PQntuples(res);
+
+	for (int i = 0; i < ntups; i++)
+	{
+		TableInfo  *tbinfo = findTableByOid(atooid(PQgetvalue(res, i, 0)));
+
+		if (tbinfo)
+			tbinfo->is_part_parent = true;
+	}
+
+	PQclear(res);
+	destroyPQExpBuffer(query);
 }
 
 /*
@@ -18349,13 +18401,11 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 		}
 
 		/*
-		 * In binary_upgrade mode, arrange to restore the old relfrozenxid and
-		 * relminmxid of all vacuumable relations.  (While vacuum.c processes
-		 * TOAST tables semi-independently, here we see them only as children
-		 * of other relations; so this "if" lacks RELKIND_TOASTVALUE, and the
-		 * child toast table is handled below.)
+		 * Restore freeze horizons only on relations that retain storage.
+		 * Check the target relkind too, since external tables become foreign.
 		 */
 		if (dopt->binary_upgrade &&
+			!tbinfo->is_part_parent &&
 			(tbinfo->relkind == RELKIND_RELATION ||
 			 tbinfo->relkind == RELKIND_MATVIEW))
 		{
@@ -18363,7 +18413,10 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 			appendPQExpBufferStr(q, "\n-- For binary upgrade, set heap's relfrozenxid and relminmxid\n");
 			appendPQExpBuffer(q, "UPDATE pg_catalog.pg_class\n"
 							  "SET relfrozenxid = '%u', relminmxid = '%u'\n"
-							  "WHERE oid = ",
+							  "WHERE relkind IN ("
+							  CppAsString2(RELKIND_RELATION) ", "
+							  CppAsString2(RELKIND_MATVIEW) ")\n"
+							  "  AND oid = ",
 							  tbinfo->frozenxid, tbinfo->minmxid);
 			appendStringLiteralAH(q, qualrelname, fout);
 			appendPQExpBufferStr(q, "::pg_catalog.regclass;\n");
@@ -18377,7 +18430,8 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 				appendPQExpBufferStr(q, "\n-- For binary upgrade, set toast's relfrozenxid and relminmxid\n");
 				appendPQExpBuffer(q, "UPDATE pg_catalog.pg_class\n"
 								  "SET relfrozenxid = '%u', relminmxid = '%u'\n"
-								  "WHERE oid = '%u';\n",
+								  "WHERE relkind = " CppAsString2(RELKIND_TOASTVALUE)
+								  "\n  AND oid = '%u';\n",
 								  tbinfo->toast_frozenxid,
 								  tbinfo->toast_minmxid, tbinfo->toast_oid);
 			}

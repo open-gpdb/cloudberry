@@ -7,6 +7,7 @@
  */
 #include "postgres_fe.h"
 
+#include "catalog/pg_class_d.h"
 #include "pg_upgrade_greenplum.h"
 
 #include "pqexpbuffer.h"
@@ -63,6 +64,20 @@ restore_aosegment_table(PGconn *conn, RelInfo *rel)
 	char	   *vmaprelname;
 	char	   *blkdirrelname;
 	PGresult   *res;
+
+	if (rel->missing_ao_aux)
+	{
+		res = executeQueryOrDie(conn,
+								"SELECT relkind FROM pg_catalog.pg_class "
+								"WHERE oid = %u::pg_catalog.oid", rel->reloid);
+		if (PQntuples(res) != 1 ||
+			PQgetvalue(res, 0, 0)[0] != RELKIND_PARTITIONED_TABLE)
+			pg_fatal("Missing AO auxiliary metadata for relation %u (%s.%s): "
+					 "target is not a partitioned table\n",
+					 rel->reloid, rel->nspname, rel->relname);
+		PQclear(res);
+		return;
+	}
 
 	/*
 	 * The visibility maps and such can be quite large, so we need a large

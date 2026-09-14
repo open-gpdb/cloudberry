@@ -215,6 +215,7 @@ typedef struct
 	char	   *relname;		/* relation name */
 	Oid			reloid;			/* relation OID */
 	char		relstorage;
+	char		relkind;		/* pg_class.relkind */
 	Oid 		relfilenode;	/* relation file node */
 	Oid			indtable;		/* if index, OID of its table, else 0 */
 	Oid			toastheap;		/* if toast table, OID of base table, else 0 */
@@ -225,6 +226,7 @@ typedef struct
 	RelType		reltype;
 
 	/* Extra information for append-only tables */
+	bool		missing_ao_aux;	/* legacy metadata awaiting target validation */
 	AOSegInfo  *aosegments;
 	AOCSSegInfo *aocssegments;
 	int			naosegments;
