@@ -59,6 +59,7 @@
 #include "utils/varlena.h"
 #include "utils/vmem_tracker.h"
 #include "catalog/index.h"
+#include "catalog/pg_attribute_encoding.h"
 
 /*
  * These constants are copied from guc.c. They should not bitrot when we
@@ -628,6 +629,17 @@ struct config_bool ConfigureNamesBool_gp[] =
 			GUC_SUPERUSER_ONLY | GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
 		},
 		&gp_maintenance_conn,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"gp_binary_upgrade_legacy_aoco", PGC_SUSET, COMPAT_OPTIONS_PREVIOUS,
+			gettext_noop("Use GP6 AOCO column file numbers during binary upgrade."),
+			NULL,
+			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
+		},
+		&gp_binary_upgrade_legacy_aoco,
 		false,
 		NULL, NULL, NULL
 	},

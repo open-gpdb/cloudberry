@@ -62,6 +62,8 @@ DECLARE_TOAST(pg_attribute_encoding, 6233, 6234);
 DECLARE_UNIQUE_INDEX(pg_attribute_encoding_attrelid_filenum_index, 6238, on pg_attribute_encoding using btree(attrelid oid_ops, filenum int2_ops));
 #define AttributeEncodingAttrelidFilenumIndexId        6238
 
+extern PGDLLIMPORT bool gp_binary_upgrade_legacy_aoco;
+
 extern PGFunction *get_funcs_for_compression(char *compresstype);
 extern StdRdOptions **RelationGetAttributeOptions(Relation rel);
 extern List **RelationGetUntransformedAttributeOptions(Relation rel);
