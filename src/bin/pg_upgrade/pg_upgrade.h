@@ -294,6 +294,8 @@ typedef struct
 	char	   *db_ctype;
 	int			db_encoding;
 	RelInfoArr	rel_arr;		/* array of all user relinfos */
+	uint32		datfrozenxid;
+	uint32		datminmxid;
 } DbInfo;
 
 typedef struct
