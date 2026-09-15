@@ -26,6 +26,69 @@ static void get_rel_infos(ClusterInfo *cluster, DbInfo *dbinfo);
 static void free_rel_infos(RelInfoArr *rel_arr);
 static void print_db_infos(DbInfoArr *dbinfo);
 static void print_rel_infos(RelInfoArr *rel_arr);
+static const RelInfo *find_rel_by_oid(const DbInfo *db, Oid oid);
+static bool is_orphan_of_new_partitioned_parent(const RelInfo *old_rel,
+												const DbInfo *old_db,
+												const DbInfo *new_db);
+
+
+/* get_rel_infos() sorts the array by OID. */
+static const RelInfo *
+find_rel_by_oid(const DbInfo *db, Oid oid)
+{
+	int			lo = 0;
+	int			hi = db->rel_arr.nrels - 1;
+
+	while (lo <= hi)
+	{
+		int			mid = lo + (hi - lo) / 2;
+		const RelInfo *rel = &db->rel_arr.rels[mid];
+
+		if (oid < rel->reloid)
+			hi = mid - 1;
+		else if (oid > rel->reloid)
+			lo = mid + 1;
+		else
+			return rel;
+	}
+	return NULL;
+}
+
+/*
+ * Legacy parents lose their storage, TOAST tables and indexes. Identify them
+ * by the target relkind: legacy partition catalogs are empty on segments.
+ */
+static bool
+is_orphan_of_new_partitioned_parent(const RelInfo *old_rel,
+									const DbInfo *old_db,
+									const DbInfo *new_db)
+{
+	Oid			base;
+	const RelInfo *new_base;
+
+	if (old_rel->toastheap)
+	{
+		base = old_rel->toastheap;
+	}
+	else if (old_rel->indtable)
+	{
+		/* A TOAST index needs one more ownership lookup. */
+		const RelInfo *indrel = find_rel_by_oid(old_db, old_rel->indtable);
+
+		if (indrel && indrel->toastheap)
+			base = indrel->toastheap;
+		else
+			base = old_rel->indtable;
+	}
+	else
+	{
+		return false;
+	}
+
+	new_base = find_rel_by_oid(new_db, base);
+	return new_base != NULL &&
+		new_base->relkind == RELKIND_PARTITIONED_TABLE;
+}
 
 
 /*
@@ -68,10 +131,12 @@ gen_db_file_maps(DbInfo *old_db, DbInfo *new_db,
 		/* handle running off one array before the other */
 		if (!new_rel)
 		{
-			/*
-			 * old_rel is unmatched.  This should never happen, because we
-			 * force new rels to have TOAST tables if the old one did.
-			 */
+			/* Legacy parents may lose their TOAST tables and indexes. */
+			if (is_orphan_of_new_partitioned_parent(old_rel, old_db, new_db))
+			{
+				old_relnum++;
+				continue;
+			}
 			report_unmatched_relation(old_rel, old_db, false);
 			all_matched = false;
 			old_relnum++;
@@ -98,6 +163,11 @@ gen_db_file_maps(DbInfo *old_db, DbInfo *new_db,
 		if (old_rel->reloid < new_rel->reloid)
 		{
 			/* old_rel is unmatched, see comment above */
+			if (is_orphan_of_new_partitioned_parent(old_rel, old_db, new_db))
+			{
+				old_relnum++;
+				continue;
+			}
 			report_unmatched_relation(old_rel, old_db, false);
 			all_matched = false;
 			old_relnum++;
@@ -140,11 +210,17 @@ gen_db_file_maps(DbInfo *old_db, DbInfo *new_db,
 			continue;
 		}
 
-		/*
-		 * External tables have relfilenodes but no physical files, and aoseg
-		 * tables are handled by their AO table
-		 */
-		if (old_rel->relstorage == 'x' || strcmp(new_rel->nspname, "pg_aoseg") == 0)
+		if (old_rel->missing_ao_aux &&
+			new_rel->relkind != RELKIND_PARTITIONED_TABLE)
+			pg_fatal("Missing AO auxiliary metadata for relation %u (%s.%s) in database \"%s\": "
+					 "target is not a partitioned table\n",
+					 old_rel->reloid, old_rel->nspname, old_rel->relname,
+					 old_db->db_name);
+
+		/* Parents and foreign tables have no target storage; AO owns its aux files. */
+		if (old_rel->relstorage == 'x' || strcmp(new_rel->nspname, "pg_aoseg") == 0 ||
+			new_rel->relkind == RELKIND_FOREIGN_TABLE ||
+			new_rel->relkind == RELKIND_PARTITIONED_TABLE)
 		{
 			old_relnum++;
 			new_relnum++;
@@ -479,6 +555,9 @@ get_rel_infos(ClusterInfo *cluster, DbInfo *dbinfo)
 			 "  WHERE relkind IN (" CppAsString2(RELKIND_RELATION) ", "
 			 CppAsString2(RELKIND_AOSEGMENTS) ", "
 			 CppAsString2(RELKIND_AOBLOCKDIR) ", "
+	/* Include storage-less targets so old relations still match by OID. */
+			 CppAsString2(RELKIND_FOREIGN_TABLE) ", "
+			 CppAsString2(RELKIND_PARTITIONED_TABLE) ", "
 			 CppAsString2(RELKIND_MATVIEW) " %s) AND "
 	/* exclude possible orphaned temp tables */
 			 "    ((n.nspname !~ '^pg_temp_' AND "
@@ -491,7 +570,8 @@ get_rel_infos(ClusterInfo *cluster, DbInfo *dbinfo)
 			 "      relname IN ('pg_largeobject') ))), ",
 	/* see the comment at the top of old_8_3_create_sequence_script() */
 			 (GET_MAJOR_VERSION(old_cluster.major_version) == 803) ?
-			 "" : ", " CppAsString2(RELKIND_SEQUENCE), FirstNormalObjectId);
+			 "" : ", " CppAsString2(RELKIND_SEQUENCE),
+			 FirstNormalObjectId);
 
 	/*
 	 * Add a CTE that collects OIDs of toast tables belonging to the tables
@@ -511,17 +591,19 @@ get_rel_infos(ClusterInfo *cluster, DbInfo *dbinfo)
 			 " AND c.relstorage <> 'c'" : "");
 
 	/*
-	 * Add a CTE that collects OIDs of all valid indexes on the previously
-	 * selected tables.  We can ignore invalid indexes since pg_dump does.
-	 * Testing indisready is necessary in 9.2, and harmless in earlier/later
-	 * versions.
+	 * Collect valid, ready indexes with storage. Partitioned indexes have none
+	 * and no old-cluster counterpart -- the old parent's real index is instead
+	 * recognized as an orphan of a 'p' parent in gen_db_file_maps().  Collecting
+	 * the partitioned index here would leave it unmatched in the new cluster.
 	 */
 	snprintf(query + strlen(query), sizeof(query) - strlen(query),
 			 "  all_index (reloid, indtable, toastheap) AS ( "
-			 "  SELECT indexrelid, indrelid, 0::oid "
-			 "  FROM pg_catalog.pg_index "
-			 "  WHERE indisvalid AND indisready "
-			 "    AND indrelid IN "
+			 "  SELECT i.indexrelid, i.indrelid, 0::oid "
+			 "  FROM pg_catalog.pg_index i "
+			 "    JOIN pg_catalog.pg_class ic ON ic.oid = i.indrelid "
+			 "  WHERE i.indisvalid AND i.indisready "
+			 "    AND ic.relkind <> " CppAsString2(RELKIND_PARTITIONED_TABLE) " "
+			 "    AND i.indrelid IN "
 			 "        (SELECT reloid FROM regular_heap "
 			 "         UNION ALL "
 			 "         SELECT reloid FROM toast_heap)) ");
@@ -645,15 +727,17 @@ get_rel_infos(ClusterInfo *cluster, DbInfo *dbinfo)
 		/* Collect extra information about append-only tables */
 		relstorage = PQgetvalue(res, relnum, i_relstorage) [0];
 		curr->relstorage = relstorage;
+		curr->missing_ao_aux = false;
 
 		relkind = PQgetvalue(res, relnum, i_relkind) [0];
+		curr->relkind = relkind;
 
 		/*
 		 * The structure of append
 		 * optimized tables is similar enough for row and column oriented
 		 * tables so we can handle them both here.
 		 */
-		if (is_appendonly(relstorage))
+		if (is_appendonly(relstorage) && relkind != RELKIND_PARTITIONED_TABLE)
 		{
 			char	   *segrel;
 			char	   *visimaprel;
@@ -685,9 +769,25 @@ get_rel_infos(ClusterInfo *cluster, DbInfo *dbinfo)
 					 "WHERE  a.relid = %u::pg_catalog.oid ",
 					 curr->reloid);
 
+			/* Validate legacy parents against the restored target, also on segments. */
 			if (PQntuples(aores) == 0)
-				pg_log(PG_FATAL, "Unable to find auxiliary AO relations for %u (%s)\n",
-					   curr->reloid, curr->relname);
+			{
+				if (cluster != &old_cluster ||
+					GET_MAJOR_VERSION(cluster->major_version) >= 1200)
+					pg_log(PG_FATAL, "Unable to find auxiliary AO relations for %u (%s)\n",
+						   curr->reloid, curr->relname);
+
+				PQclear(aores);
+				curr->missing_ao_aux = true;
+				curr->aosegments = NULL;
+				curr->aocssegments = NULL;
+				curr->naosegments = 0;
+				curr->aovisimaps = NULL;
+				curr->naovisimaps = 0;
+				curr->aoblkdirs = NULL;
+				curr->naoblkdirs = 0;
+				continue;
+			}
 
 			segrel = pg_strdup(PQgetvalue(aores, 0, PQfnumber(aores, "segrel")));
 			visimaprel = pg_strdup(PQgetvalue(aores, 0, PQfnumber(aores, "visimaprel")));

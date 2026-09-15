@@ -19427,11 +19427,17 @@ make_distributedby_for_rel(Relation rel)
 
 	dist = makeNode(DistributedBy);
 
-	if (Gp_role == GP_ROLE_UTILITY)
+	if (Gp_role == GP_ROLE_UTILITY && !IsBinaryUpgrade)
 	{
 		Assert(policy->ptype == POLICYTYPE_ENTRY);
 		return NULL;
 	}
+
+	if (Gp_role == GP_ROLE_UTILITY && policy->ptype == POLICYTYPE_ENTRY)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot copy entry distribution policy for relation \"%s\" during binary upgrade",
+						RelationGetRelationName(rel))));
 
 	Assert(policy->ptype != POLICYTYPE_ENTRY);
 
