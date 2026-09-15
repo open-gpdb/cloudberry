@@ -17568,6 +17568,7 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 	int			j,
 				k;
 	bool		hasExternalPartitions = false;
+	bool		legacy_part_hierarchy = false;
 	char	   *ftoptions = NULL;
 	char	   *srvname = NULL;
 	char	   *foreign = "";
@@ -18221,6 +18222,11 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 			 */
 			appendPQExpBuffer(q, "SET allow_system_table_mods = true;\n");
 
+			/* The legacy PARTITION BY clause creates the whole hierarchy. */
+			legacy_part_hierarchy = (fout->remoteVersion < GPDB7_MAJOR_PGVERSION &&
+									 tbinfo->partclause != NULL &&
+									 tbinfo->partclause[0] != '\0');
+
 			for (j = 0; j < tbinfo->numatts; j++)
 			{
 				if (tbinfo->attisdropped[j])
@@ -18234,23 +18240,23 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 									  tbinfo->attalign[j]);
 					appendStringLiteralAH(q, tbinfo->attnames[j], fout);
 
-					/* GPDB partitioning */
-					if (fout->remoteVersion < GPDB7_MAJOR_PGVERSION)
+					if (legacy_part_hierarchy)
 					{
 						/*
-						 * Do for all descendants of a partition table.
-						 * No hurt if this is not a table with partitions.
+						 * Children inherit the integer placeholder's layout. Restore
+						 * their physical metadata before DROP COLUMN cascades.
 						 */
-						appendPQExpBufferStr(q, "\n  AND attrelid IN (SELECT ");
+						appendPQExpBufferStr(q, "\n  AND attrelid IN (\n"
+											 "    WITH RECURSIVE tree AS (\n"
+											 "        SELECT ");
 						appendStringLiteralAH(q, qualrelname, fout);
-						appendPQExpBufferStr(q, "::pg_catalog.regclass ");
-						appendPQExpBufferStr(q, "UNION SELECT pr.parchildrelid FROM "
-										  "pg_catalog.pg_partition_rule pr, "
-										  "pg_catalog.pg_partition p WHERE "
-										  "pr.parchildrelid != 0 AND "
-										  "pr.paroid = p.oid AND p.parrelid = ");
-						appendStringLiteralAH(q, qualrelname, fout);
-						appendPQExpBufferStr(q, "::pg_catalog.regclass);\n");
+						appendPQExpBufferStr(q, "::pg_catalog.regclass::pg_catalog.oid AS relid\n"
+											 "      UNION ALL\n"
+											 "        SELECT i.inhrelid\n"
+											 "        FROM pg_catalog.pg_inherits i, tree t\n"
+											 "        WHERE i.inhparent = t.relid\n"
+											 "    )\n"
+											 "    SELECT relid FROM tree);\n");
 					}
 					else
 					{
