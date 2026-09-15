@@ -58,6 +58,7 @@
 		"gp_appendonly_insert_files_tuples_range",
 		"gp_appendonly_verify_block_checksums",
 		"gp_appendonly_verify_write_block",
+		"gp_binary_upgrade_legacy_aoco",
 		"gp_blockdirectory_entry_min_range",
 		"gp_blockdirectory_minipage_size",
 		"gp_debug_linger",
