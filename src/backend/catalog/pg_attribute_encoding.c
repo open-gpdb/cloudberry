@@ -25,6 +25,7 @@
 #include "catalog/pg_compression.h"
 #include "catalog/dependency.h"
 #include "fmgr.h"
+#include "miscadmin.h"
 #include "parser/analyze.h"
 #include "utils/builtins.h"
 #include "utils/datum.h"
@@ -36,6 +37,8 @@
 #include "utils/syscache.h"
 
 #include "catalog/gp_indexing.h"
+
+bool gp_binary_upgrade_legacy_aoco = false;
 
 /*
  * Add a single attribute encoding entry.
@@ -307,7 +310,10 @@ AddRelationAttributeEncodings(Relation rel, List *attr_encodings)
 										 true,
 										 false);
 
-		add_attribute_encoding_entry(relid, attnum, lfirst_int(lc_filenum), attoptions);
+		/* GP6 column files use physical attribute numbers. */
+		add_attribute_encoding_entry(relid, attnum,
+									 IsBinaryUpgrade && gp_binary_upgrade_legacy_aoco ?
+									 attnum : lfirst_int(lc_filenum), attoptions);
 	}
 	list_free(filenums);
 }
