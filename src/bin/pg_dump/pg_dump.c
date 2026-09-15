@@ -17938,6 +17938,9 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 				k;
 	bool		hasExternalPartitions = false;
 	bool		legacy_part_hierarchy = false;
+	bool		legacy_aoco = dopt->binary_upgrade &&
+		fout->remoteVersion >= GPDB6_MAJOR_PGVERSION &&
+		fout->remoteVersion < GPDB7_MAJOR_PGVERSION;
 	char	   *ftoptions = NULL;
 	char	   *srvname = NULL;
 	char	   *foreign = "";
@@ -17952,6 +17955,9 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 	if (tbinfo->hasoids)
 		pg_log_warning("WITH OIDS is not supported anymore (table \"%s\")",
 					   qrelname);
+
+	if (legacy_aoco)
+		appendPQExpBufferStr(q, "SET gp_binary_upgrade_legacy_aoco = on;\n");
 
 	if (dopt->binary_upgrade)
 		binary_upgrade_set_type_oids_by_rel_oid(fout, q, 	tbinfo->dobj.catId.oid);
@@ -18949,6 +18955,9 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 		binary_upgrade_extension_member(q, &tbinfo->dobj,
 										reltypename, qrelname,
 										tbinfo->dobj.namespace->dobj.name);
+
+	if (legacy_aoco)
+		appendPQExpBufferStr(q, "SET gp_binary_upgrade_legacy_aoco = off;\n");
 
 	if (tbinfo->dobj.dump & DUMP_COMPONENT_DEFINITION)
 	{
