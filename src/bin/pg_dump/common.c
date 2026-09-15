@@ -163,6 +163,8 @@ getSchemaData(Archive *fout, int *numTablesPtr)
 
 	getPartitionDefs(fout, tblinfo, numTables);
 
+	getPartitionParents(fout, tblinfo, numTables);
+
 	getOwnedSeqs(fout, tblinfo, numTables);
 
 	pg_log_info("reading user-defined functions");
