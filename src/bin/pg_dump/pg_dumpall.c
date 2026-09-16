@@ -1421,12 +1421,6 @@ dumpRoles(PGconn *conn)
 		if (strcmp(PQgetvalue(res, i, i_rolconnlimit), "-1") != 0)
 			appendPQExpBuffer(buf, " CONNECTION LIMIT %s",
 							  PQgetvalue(res, i, i_rolconnlimit));
-		
-		if (!PQgetisnull(res, i, i_rolpassword))
-		{
-			appendPQExpBufferStr(buf, " PASSWORD ");
-			appendStringLiteralConn(buf, PQgetvalue(res, i, i_rolpassword), conn);
-		}
 
 		if (!no_role_passwords && !PQgetisnull(res, i, i_rolpassword))
 		{
