@@ -1215,6 +1215,49 @@ reset client_min_messages;
 
 select relid, level, pg_get_expr(template, relid) from gp_partition_template where not exists (select oid from pg_class where oid = relid);
 
+-- Preserve non-default template bounds when deparsing and recreating partitions.
+CREATE TABLE template_edges (a int, b int)
+DISTRIBUTED BY (a)
+PARTITION BY RANGE (a)
+SUBPARTITION BY RANGE (b)
+SUBPARTITION TEMPLATE
+( SUBPARTITION p_low END (0) INCLUSIVE,
+  SUBPARTITION p_mid START (0) EXCLUSIVE END (10) INCLUSIVE,
+  SUBPARTITION p_high START (10) EXCLUSIVE )
+( PARTITION p START (0) END (10) );
+
+SELECT level, pg_get_expr(template, relid) AS definition
+FROM gp_partition_template WHERE relid = 'template_edges'::regclass;
+
+DO $$
+DECLARE
+    template_sql text;
+BEGIN
+    SELECT pg_get_expr(template, relid) INTO template_sql
+    FROM gp_partition_template WHERE relid = 'template_edges'::regclass;
+    EXECUTE 'CREATE TABLE template_edges_copy (a int, b int) '
+            'DISTRIBUTED BY (a) PARTITION BY RANGE (a) '
+            'SUBPARTITION BY RANGE (b) ' || template_sql ||
+            ' (PARTITION p START (0) END (10))';
+END;
+$$;
+
+SELECT ARRAY(SELECT pg_get_expr(c.relpartbound, c.oid)
+             FROM pg_partition_tree('template_edges') p
+             JOIN pg_class c ON c.oid = p.relid
+             WHERE p.isleaf ORDER BY 1) =
+       ARRAY(SELECT pg_get_expr(c.relpartbound, c.oid)
+             FROM pg_partition_tree('template_edges_copy') p
+             JOIN pg_class c ON c.oid = p.relid
+             WHERE p.isleaf ORDER BY 1) AS same_bounds;
+
+ALTER TABLE template_edges SET SUBPARTITION TEMPLATE
+( SUBPARTITION p START (0) INCLUSIVE END (10) EXCLUSIVE );
+SELECT pg_get_expr(template, relid) AS definition
+FROM gp_partition_template WHERE relid = 'template_edges'::regclass;
+
+DROP TABLE template_edges, template_edges_copy;
+
 -- Mix-Match for Alter subpartition template
 CREATE TABLE qa147sales (trans_id int, date date, amount 
 decimal(9,2), region text)  
