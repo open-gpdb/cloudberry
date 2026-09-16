@@ -20,6 +20,7 @@
 #define RELSTORAGE_EXTERNAL	'x'
 
 static void check_external_partition(void);
+static void check_partition_layouts(void);
 static void check_covering_aoindex(void);
 static void check_partition_indexes(void);
 static void check_orphaned_toastrels(void);
@@ -47,6 +48,7 @@ check_greenplum(void)
 {
 	check_online_expansion();
 	check_external_partition();
+	check_partition_layouts();
 	check_covering_aoindex();
 	check_partition_indexes();
 	check_orphaned_toastrels();
@@ -124,6 +126,91 @@ check_online_expansion(void)
 		gp_fatal_log(
 			   "| Your installation is in progress of online expansion,\n"
 			   "| must complete that job before the upgrade.\n\n");
+	}
+	else
+		check_ok();
+}
+
+/* GP6's dump recreates every partition with the root's physical layout. */
+static void
+check_partition_layouts(void)
+{
+	char		output_path[MAXPGPATH];
+	FILE	   *report = NULL;
+	int			dbnum;
+
+	if (GET_MAJOR_VERSION(old_cluster.major_version) != 904)
+		return;
+
+	/* Legacy partition catalogs are populated only on the coordinator. */
+	if (!is_greenplum_dispatcher_mode())
+		return;
+
+	prep_status("Checking for incompatible partition column layouts");
+	snprintf(output_path, sizeof(output_path), "%s/%s", log_opts.basedir,
+			 "incompatible_partition_layouts.txt");
+
+	for (dbnum = 0; dbnum < old_cluster.dbarr.ndbs; dbnum++)
+	{
+		DbInfo	   *db = &old_cluster.dbarr.dbs[dbnum];
+		PGconn	   *conn = connectToServer(&old_cluster, db->db_name);
+		PGresult   *res;
+		int			row;
+
+		res = executeQueryOrDie(conn,
+			"SELECT DISTINCT child.oid, "
+			"       quote_ident(cn.nspname) || '.' || quote_ident(child.relname) AS partition_name, "
+			"       quote_ident(pn.nspname) || '.' || quote_ident(parent.relname) AS root_name "
+			"FROM pg_catalog.pg_partition p "
+			"JOIN pg_catalog.pg_partition_rule pr ON pr.paroid = p.oid "
+			"JOIN pg_catalog.pg_class parent ON parent.oid = p.parrelid "
+			"JOIN pg_catalog.pg_namespace pn ON pn.oid = parent.relnamespace "
+			"JOIN pg_catalog.pg_class child ON child.oid = pr.parchildrelid "
+			"JOIN pg_catalog.pg_namespace cn ON cn.oid = child.relnamespace "
+			"WHERE NOT p.paristemplate AND child.relstorage IN ('h', 'a', 'c') "
+			"  AND (parent.relnatts <> child.relnatts OR EXISTS ( "
+			"    SELECT 1 FROM pg_catalog.pg_attribute pa "
+			"    LEFT JOIN pg_catalog.pg_attribute ca "
+			"      ON ca.attrelid = child.oid AND ca.attnum = pa.attnum "
+			"    WHERE pa.attrelid = parent.oid AND pa.attnum > 0 "
+			"      AND (ca.attnum IS NULL "
+			"        OR (pa.attisdropped, pa.attlen, pa.attalign, pa.attbyval) "
+			"           IS DISTINCT FROM "
+			"           (ca.attisdropped, ca.attlen, ca.attalign, ca.attbyval) "
+			"        OR (NOT pa.attisdropped AND "
+			"            (pa.attname, pa.atttypid, pa.atttypmod, pa.attcollation) "
+			"            IS DISTINCT FROM "
+			"            (ca.attname, ca.atttypid, ca.atttypmod, ca.attcollation))))) "
+			"ORDER BY child.oid");
+
+		if (PQntuples(res) > 0)
+		{
+			if (report == NULL && (report = fopen_priv(output_path, "w")) == NULL)
+				pg_fatal("could not open file \"%s\": %s\n",
+						 output_path, strerror(errno));
+
+			fprintf(report, "In database: %s\n", db->db_name);
+			for (row = 0; row < PQntuples(res); row++)
+				fprintf(report, "  %s (OID %s): differs from root %s\n",
+						PQgetvalue(res, row, 1), PQgetvalue(res, row, 0),
+						PQgetvalue(res, row, 2));
+		}
+
+		PQclear(res);
+		PQfinish(conn);
+	}
+
+	if (report != NULL)
+	{
+		fclose(report);
+		pg_log(PG_REPORT, "fatal\n");
+		gp_fatal_log(
+			"| Your installation contains GPDB 6 partitions whose physical\n"
+			"| column layouts differ from their partition roots. Binary upgrade\n"
+			"| cannot preserve these layouts; transferring their files is unsafe.\n"
+			"| Recreate the affected partitions with matching physical layouts\n"
+			"| and reload their data, or use a logical upgrade. A list is in:\n"
+			"|   %s\n\n", output_path);
 	}
 	else
 		check_ok();
