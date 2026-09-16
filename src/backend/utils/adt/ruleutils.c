@@ -9793,21 +9793,21 @@ get_rule_expr(Node *node, deparse_context *context,
 									{
 										Node *val = transformExpr(pstate,
 												(Node *)linitial(rspec->partStart->val), EXPR_KIND_VALUES);
-										Assert(rspec->partStart->edge ==
-												PART_EDGE_INCLUSIVE);
 										appendStringInfo(buf, " START (");
 										get_rule_expr(val, context, true);
 										appendStringInfo(buf, ")");
+										if (rspec->partStart->edge == PART_EDGE_EXCLUSIVE)
+											appendStringInfoString(buf, " EXCLUSIVE");
 									}
 									if (rspec->partEnd)
 									{
 										Node *val = transformExpr(pstate,
 												(Node *)linitial(rspec->partEnd->val), EXPR_KIND_VALUES);
-										Assert(rspec->partEnd->edge ==
-												PART_EDGE_EXCLUSIVE);
 										appendStringInfo(buf, " END (");
 										get_rule_expr(val, context, true);
 										appendStringInfo(buf, ")");
+										if (rspec->partEnd->edge == PART_EDGE_INCLUSIVE)
+											appendStringInfoString(buf, " INCLUSIVE");
 									}
 									if (rspec->partEvery)
 									{
