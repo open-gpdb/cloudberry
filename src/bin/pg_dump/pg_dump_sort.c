@@ -138,11 +138,11 @@ static const int dbObjectTypePriority[] =
 	21,							/* DO_BLOB */
 	25,							/* DO_BLOB_DATA */
 	8,							/* DO_EXTPROTOCOL */
-	1,							/* DO_BINARY_UPGRADE */
 	22,							/* DO_PRE_DATA_BOUNDARY */
 	26,							/* DO_POST_DATA_BOUNDARY */
 	39,							/* DO_EVENT_TRIGGER --- next to last! */
 	40,							/* DO_REFRESH_MATVIEW --- last! */
+	1,							/* DO_BINARY_UPGRADE */
 	34,							/* DO_POLICY */
 	35,							/* DO_PUBLICATION */
 	36,							/* DO_PUBLICATION_REL */

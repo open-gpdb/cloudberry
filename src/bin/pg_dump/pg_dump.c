@@ -58,11 +58,13 @@
 #include "catalog/pg_trigger_d.h"
 #include "catalog/pg_type_d.h"
 #include "common/connect.h"
+#include "common/hashfn.h"
 #include "dumputils.h"
 #include "fe_utils/string_utils.h"
 #include "getopt_long.h"
 #include "libpq/libpq-fs.h"
 #include "lib/stringinfo.h"
+#include "mb/pg_wchar.h"
 #include "parallel.h"
 #include "pg_backup_db.h"
 #include "pg_backup_utils.h"
@@ -339,7 +341,8 @@ static void binary_upgrade_set_type_oids_for_ao(Archive *fout,
 								 char *ao_aux_typname);
 static void binary_upgrade_set_type_oids_by_rel_oid_impl(Archive *fout,
 								 PQExpBuffer upgrade_buffer, Oid pg_rel_oid,
-								 char *typname_override);
+								 char *typname_override,
+								 bool force_array_type);
 static void binary_upgrade_set_pg_class_oids_for_ao(Archive *fout,
 								 PQExpBuffer upgrade_buffer,
 								 Oid pg_class_oid, bool is_index,
@@ -5173,6 +5176,258 @@ binary_upgrade_set_namespace_oid(Archive *fout, PQExpBuffer upgrade_buffer,
 	destroyPQExpBuffer(upgrade_query);
 }
 
+/*
+ * Frontend equivalent of the backend's pg_encoding_mbcliplen(): return the
+ * byte length of the longest prefix of mbstr that fits within "limit" bytes
+ * without splitting a multibyte character.  pg_encoding_mbcliplen() lives in
+ * the backend only, so replicate it here using pg_encoding_mblen(), which is
+ * provided by libpgcommon and thus linkable into frontend programs.
+ */
+static int
+dump_mbcliplen(int encoding, const char *mbstr, int limit)
+{
+	int			clen = 0;
+	int			l;
+
+	while (*mbstr)
+	{
+		l = pg_encoding_mblen(encoding, mbstr);
+		if ((clen + l) > limit)
+			break;
+		clen += l;
+		if (clen == limit)
+			break;
+		mbstr += l;
+	}
+	return clen;
+}
+
+/*
+ * Bookkeeping for the auto-generated type names we hand out while emitting
+ * binary-upgrade OID preassignments.  Keys are "<nsoid>/<typname>" strings.
+ *
+ * Two tables share this element type: one is a plain set of array type names
+ * already handed out, the other memoizes the array type name chosen for a
+ * given element type so that a repeat visit gets the same answer.  See
+ * dump_choose_array_type_name().
+ */
+typedef struct _generatedTypeName
+{
+	char	   *name;			/* the indexed "<nsoid>/<typname>" string */
+	uint32		status;			/* hash status */
+	uint32		hashval;		/* hash code for the string */
+	char	   *chosen;			/* memoized array type name, memo table only */
+} GeneratedTypeName;
+
+#define SH_PREFIX		gentypename
+#define SH_ELEMENT_TYPE	GeneratedTypeName
+#define SH_KEY_TYPE		char *
+#define	SH_KEY			name
+#define SH_HASH_KEY(tb, key)	hash_bytes((const unsigned char *) (key), strlen(key))
+#define SH_EQUAL(tb, a, b)		(strcmp(a, b) == 0)
+#define SH_STORE_HASH
+#define SH_GET_HASH(tb, a) (a)->hashval
+#define	SH_SCOPE		static inline
+#define SH_RAW_ALLOCATOR	pg_malloc0
+#define SH_DECLARE
+#define SH_DEFINE
+#include "lib/simplehash.h"
+
+static gentypename_hash *generatedTypeNames = NULL;
+static gentypename_hash *arrayTypeNameMemo = NULL;
+
+/* Have we already handed out this auto-generated type name? */
+static bool
+generated_type_name_exists(Oid nspoid, const char *typname)
+{
+	char	   *key;
+	bool		found;
+
+	if (generatedTypeNames == NULL)
+		return false;
+
+	key = psprintf("%u/%s", nspoid, typname);
+	found = (gentypename_lookup(generatedTypeNames, key) != NULL);
+	pfree(key);
+
+	return found;
+}
+
+/* Claim an auto-generated type name, so nothing else picks it up. */
+static void
+claim_generated_type_name(Oid nspoid, const char *typname)
+{
+	char	   *key = psprintf("%u/%s", nspoid, typname);
+	bool		found;
+
+	if (generatedTypeNames == NULL)
+		generatedTypeNames = gentypename_create(1024, NULL);
+
+	gentypename_insert(generatedTypeNames, key, &found);
+	if (found)
+		pfree(key);				/* the table kept the pre-existing key */
+}
+
+/*
+ * Is "typname" taken by something in the old cluster that will still own the
+ * name at the point where the new backend generates a name for this array
+ * type?
+ *
+ * Array types don't count: the new backend derives every array type name from
+ * scratch while restoring, so an old array type never blocks a name -- and in
+ * particular the array type we're naming right now must not block itself.
+ */
+static bool
+type_name_taken_in_source(Archive *fout, Oid nspoid, const char *typname)
+{
+	PQExpBuffer query = createPQExpBuffer();
+	PGresult   *res;
+	bool		taken;
+
+	appendPQExpBufferStr(query,
+						 "SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_type t "
+						 "WHERE t.typname = ");
+	appendStringLiteralAH(query, typname, fout);
+	appendPQExpBuffer(query,
+					  " AND t.typnamespace = '%u'::pg_catalog.oid "
+					  "AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_type e "
+					  "WHERE e.typarray = t.oid))",
+					  nspoid);
+
+	res = ExecuteSqlQueryForSingleRow(fout, query->data);
+	taken = (PQgetvalue(res, 0, 0)[0] == 't');
+	PQclear(res);
+	destroyPQExpBuffer(query);
+
+	return taken;
+}
+
+/*
+ * Frontend port of the backend's makeObjectName("", name2, label), which is
+ * how makeArrayTypeName() builds array type names: an underscore, the base
+ * name truncated on the right as needed, and an optional "_label" suffix that
+ * is never truncated.
+ */
+static char *
+dump_make_array_object_name(int encoding, const char *name2, const char *label)
+{
+	int			overhead = 1;	/* the leading underscore */
+	int			availchars;
+	int			name2chars;
+	char	   *name;
+	int			ndx;
+
+	if (label)
+		overhead += strlen(label) + 1;
+	availchars = NAMEDATALEN - 1 - overhead;
+
+	name2chars = strlen(name2);
+	if (name2chars > availchars)
+		name2chars = availchars;
+	name2chars = dump_mbcliplen(encoding, name2, name2chars);
+
+	name = pg_malloc(name2chars + overhead + 1);
+	name[0] = '_';
+	memcpy(name + 1, name2, name2chars);
+	ndx = 1 + name2chars;
+	if (label)
+	{
+		name[ndx++] = '_';
+		strcpy(name + ndx, label);
+	}
+	else
+		name[ndx] = '\0';
+
+	return name;
+}
+
+/*
+ * Work out the array type name that the *new* backend will generate for the
+ * rowtype/base type "typname" living in namespace nspoid.
+ *
+ * We can't just dump the old cluster's array type name.  The name is the
+ * lookup key that binary_upgrade_set_next_array_pg_type_oid() files the
+ * preassigned OID under, and the restoring backend looks it up with whatever
+ * makeArrayTypeName() computes -- so if the two disagree by so much as one
+ * byte, the backend finds no preassigned OID and falls back to allocating a
+ * fresh one, which asserts out in GetNewOidWithIndex() on the QD and fails
+ * outright with "no pre-assigned OID for pg_type tuple" on the segments.
+ *
+ * They do disagree in practice.  In GPDB 6 neither AO tables nor partition
+ * children have a rowtype array at all, so there is no name to copy and we
+ * used to synthesize one as plain "_" || typname; that skips both the
+ * NAMEDATALEN truncation and the conflict resolution that makeArrayTypeName()
+ * performs.  Sibling partitions of a long-named parent are the worst case:
+ * their 63-byte relation names all truncate to the same array type name, and
+ * the backend hands out "_x", "_x_1", "_x_2", ... for them.
+ *
+ * Note we only have to reproduce the *set* of names the backend will generate,
+ * not the name-to-OID pairing: rowtype array types have no storage and nothing
+ * refers to them by OID across the upgrade, and GetPreassignedOid() matches
+ * purely on the name.  That's what lets us do this in dump order rather than
+ * in restore order.
+ *
+ * source_array_name, if not NULL, is what the old cluster calls this array
+ * type.  When it agrees with our first guess we take it as-is, which keeps the
+ * common case free of extra catalog lookups.
+ */
+static char *
+dump_choose_array_type_name(Archive *fout, const char *typname, Oid nspoid,
+							const char *source_array_name)
+{
+	GeneratedTypeName *memo;
+	char	   *memokey;
+	char		suffix[32];
+	bool		found;
+	int			pass = 0;
+
+	/*
+	 * An element type must always get the same answer, even if we happen to
+	 * be asked about it more than once; otherwise the second visit would
+	 * claim a conflict-resolved name that the backend is never going to
+	 * generate.
+	 */
+	if (arrayTypeNameMemo == NULL)
+		arrayTypeNameMemo = gentypename_create(1024, NULL);
+
+	memokey = psprintf("%u/%s", nspoid, typname);
+	memo = gentypename_lookup(arrayTypeNameMemo, memokey);
+	if (memo != NULL)
+	{
+		pfree(memokey);
+		return pg_strdup(memo->chosen);
+	}
+
+	for (;;)
+	{
+		char	   *candidate;
+		bool		matches_source;
+
+		candidate = dump_make_array_object_name(fout->encoding, typname,
+												pass == 0 ? NULL : suffix);
+
+		/*
+		 * If the old cluster already settled on this very name, it can't be
+		 * in use by anything else over there either, so don't ask.
+		 */
+		matches_source = (source_array_name != NULL &&
+						  strcmp(candidate, source_array_name) == 0);
+
+		if (!generated_type_name_exists(nspoid, candidate) &&
+			(matches_source ||
+			 !type_name_taken_in_source(fout, nspoid, candidate)))
+		{
+			claim_generated_type_name(nspoid, candidate);
+			memo = gentypename_insert(arrayTypeNameMemo, memokey, &found);
+			memo->chosen = pg_strdup(candidate);
+			return candidate;
+		}
+
+		pfree(candidate);
+		snprintf(suffix, sizeof(suffix), "%d", ++pass);
+	}
+}
+
 static void
 binary_upgrade_set_type_oids_by_type_oid(Archive *fout,
 										 PQExpBuffer upgrade_buffer,
@@ -5189,7 +5444,8 @@ binary_upgrade_set_type_oids_by_type_oid(Archive *fout,
 	Oid			pg_type_array_nsoid;
 	Oid			pg_type_multirange_nsoid;
 	Oid			pg_type_multirange_array_nsoid;
-	char		*pg_type_array_name;
+	char		*pg_type_array_name = NULL;
+	char		*source_array_name;
 
 	simple_oid_list_append(&preassigned_oids, pg_type_oid);
 	appendPQExpBufferStr(upgrade_buffer, "\n-- For binary upgrade, must preserve pg_type oid\n");
@@ -5211,7 +5467,7 @@ binary_upgrade_set_type_oids_by_type_oid(Archive *fout,
 
 	pg_type_array_oid = atooid(PQgetvalue(res, 0, PQfnumber(res, "typarray")));
 	pg_type_array_nsoid = atooid(PQgetvalue(res, 0, PQfnumber(res, "typnamespace")));
-	pg_type_array_name = pstrdup(PQgetvalue(res, 0, PQfnumber(res, "typname")));
+	source_array_name = pstrdup(PQgetvalue(res, 0, PQfnumber(res, "typname")));
 
 	PQclear(res);
 
@@ -5219,13 +5475,22 @@ binary_upgrade_set_type_oids_by_type_oid(Archive *fout,
 	{
 		pg_type_array_oid = get_next_possible_free_pg_type_oid(fout, upgrade_query);
 		pg_type_array_nsoid = pg_type_ns_oid;
-		pfree(pg_type_array_name);
-		pg_type_array_name = psprintf("_%s", pg_type_name);
-
+		pfree(source_array_name);
+		source_array_name = NULL;
 	}
 
 	if (OidIsValid(pg_type_array_oid))
 	{
+		/*
+		 * Don't just echo whatever the old cluster called this array type (it
+		 * may not even have one): work out the name makeArrayTypeName() will
+		 * come up with in the new cluster.  That name, not the old one, is the
+		 * key the preassigned OID has to be filed under.
+		 */
+		pg_type_array_name = dump_choose_array_type_name(fout, pg_type_name,
+														 pg_type_array_nsoid,
+														 source_array_name);
+
 		simple_oid_list_append(&preassigned_oids, pg_type_array_oid);
 		appendPQExpBufferStr(upgrade_buffer,
 							 "\n-- For binary upgrade, must preserve pg_type array oid\n");
@@ -5295,26 +5560,46 @@ binary_upgrade_set_type_oids_by_type_oid(Archive *fout,
 			pg_type_multirange_oid = get_next_possible_free_pg_type_oid(fout, upgrade_query);
 			pg_type_multirange_array_oid = get_next_possible_free_pg_type_oid(fout, upgrade_query);
 			/*
-			 * GPDB_14_MERGE_FIXEME:
-			 * namspaceoid: use param pg_type_ns_oid.
-			 * typename: replace param pg_type_name's 'range' with 'multirange' with a '_" prefix
+			 * The source predates multirange types, so there is no multirange
+			 * type in the catalog to copy the name from.  Synthesize the
+			 * multirange type name and its array type name exactly the way the
+			 * target backend will during restore (makeMultirangeTypeName() +
+			 * makeArrayTypeName()).  These strings are the name-keyed lookup
+			 * keys consumed by AssignTypeMultirangeOid() and
+			 * AssignTypeMultirangeArrayOid(); any mismatch makes the backend
+			 * fall back to auto-allocating a pg_type OID, which is forbidden
+			 * (and asserts) during binary upgrade.
 			 */
 			pg_type_multirange_array_nsoid = pg_type_multirange_nsoid = pg_type_ns_oid;
-			
-			StringInfo strinfo = makeStringInfo();
 
-			appendStringInfoString(strinfo, pg_type_name);
-			replaceStringInfoString(strinfo, "range", "multirange");
-			pg_type_multirange_typename = psprintf("_%s", strinfo->data);
+			{
+				const char *rangestr = strstr(pg_type_name, "range");
+				char	   *mrng;
 
-			resetStringInfo(strinfo);
+				/* makeMultirangeTypeName(): insert "multi" before the first  */
+				/* "range", else append "_multirange" to the truncated base.  */
+				if (rangestr)
+					mrng = psprintf("%.*smulti%s",
+									(int) (rangestr - pg_type_name),
+									pg_type_name, rangestr);
+				else
+				{
+					int			baselen = strlen(pg_type_name);
 
-			appendStringInfoString(strinfo, pg_type_name);
-			replaceStringInfoString(strinfo, "range", "multirange_array");
-			pg_type_multirange_array_typename = psprintf("_%s", strinfo->data);
+					if (baselen > NAMEDATALEN - 12)
+						baselen = NAMEDATALEN - 12;
+					mrng = psprintf("%.*s_multirange", baselen, pg_type_name);
+				}
+				/* clip to NAMEDATALEN-1 without splitting a multibyte char */
+				mrng[dump_mbcliplen(fout->encoding, mrng, NAMEDATALEN - 1)] = '\0';
+				pg_type_multirange_typename = mrng;
 
-			pfree(strinfo->data);
-			pfree(strinfo);
+				/* the multirange's own array type is named the usual way */
+				pg_type_multirange_array_typename =
+					dump_choose_array_type_name(fout, mrng,
+												pg_type_multirange_array_nsoid,
+												NULL);
+			}
 		}
 
 		appendPQExpBufferStr(upgrade_buffer,
@@ -5336,7 +5621,10 @@ binary_upgrade_set_type_oids_by_type_oid(Archive *fout,
 		pfree(pg_type_multirange_array_typename);
 	}
 
-	pfree(pg_type_array_name);
+	if (pg_type_array_name)
+		pfree(pg_type_array_name);
+	if (source_array_name)
+		pfree(source_array_name);
 	destroyPQExpBuffer(upgrade_query);
 }
 
@@ -5354,15 +5642,24 @@ binary_upgrade_set_type_oids_by_rel_oid(Archive *fout,
 										PQExpBuffer upgrade_buffer,
 										Oid pg_rel_oid)
 {
+	/*
+	 * GPDB: force array-type OID preassignment. In GPDB <= 6, AO/AOCO tables
+	 * had no rowtype array (typarray = 0), so without forcing we'd emit no
+	 * binary_upgrade_set_next_array_pg_type_oid for them. Cloudberry (PG14+)
+	 * still creates an array type during CREATE TABLE, and the auto-allocator
+	 * can land on an OID already preassigned for a later object, causing
+	 * "duplicate key value violates pg_type_oid_index" during pg_restore.
+	 */
 	binary_upgrade_set_type_oids_by_rel_oid_impl(fout, upgrade_buffer,
-														pg_rel_oid, NULL);
+														pg_rel_oid, NULL, true);
 }
 
-static void 
+static void
 binary_upgrade_set_type_oids_by_rel_oid_impl(Archive *fout,
 											 PQExpBuffer upgrade_buffer,
 											 Oid pg_rel_oid,
-											 char *typname_override)
+											 char *typname_override,
+											 bool force_array_type)
 {
 	PQExpBuffer upgrade_query = createPQExpBuffer();
 	PGresult   *upgrade_res;
@@ -5406,7 +5703,7 @@ binary_upgrade_set_type_oids_by_rel_oid_impl(Archive *fout,
 	if (OidIsValid(pg_type_oid))
 		binary_upgrade_set_type_oids_by_type_oid(fout, upgrade_buffer,
 											 	pg_type_oid, pg_type_nsoid,
-											 	pg_type_name, false, false);
+												pg_type_name, force_array_type, false);
 
 	PQclear(upgrade_res);
 	destroyPQExpBuffer(upgrade_query);
@@ -5429,8 +5726,17 @@ binary_upgrade_set_type_oids_for_ao(Archive *fout,
 	if (!ao_aux_typname)
 		fatal("binary_upgrade_set_type_oids_for_ao() requires an AO auxiliary type name");
 
+	/*
+	 * GPDB: force array-type OID preassignment for AO auxiliary tables too.
+	 * In Cloudberry, aux rowtypes (pg_aoseg/pg_aocsseg/pg_aovisimap) acquire
+	 * an array type at CREATE TABLE time. The source has none, so without
+	 * forcing, the auto-allocator can collide with a later preassigned OID.
+	 * If the destination doesn't actually create an array type for the aux
+	 * relation, the preassigned OID simply goes unused — no harm.
+	 */
 	binary_upgrade_set_type_oids_by_rel_oid_impl(fout, upgrade_buffer,
-														pg_rel_oid, ao_aux_typname);
+														pg_rel_oid, ao_aux_typname,
+														true);
 }
 
 static void
@@ -5606,6 +5912,17 @@ binary_upgrade_set_pg_class_oids_impl(Archive *fout,
 			pg_class_relkind != RELKIND_PARTITIONED_TABLE &&
 			!is_part_parent && !ao_columnstore)
 		{
+			/*
+			 * Add the toast table's OID to the global preassignment skip-list.
+			 * binary_upgrade_set_next_toast_pg_class_oid() only protects the
+			 * OID at the instant its own table is created; it does not stop an
+			 * earlier object in the restore from auto-allocating the same OID.
+			 * Without this, the toast OID can collide with a relation created
+			 * before this table (manifesting as a pg_class_oid_index unique
+			 * violation). The toast index OID below was already protected this
+			 * way; the toast table OID itself was being missed.
+			 */
+			simple_oid_list_append(&preassigned_oids, pg_class_reltoastrelid);
 			appendPQExpBuffer(upgrade_buffer,
 							  "SELECT pg_catalog.binary_upgrade_set_next_toast_pg_class_oid('%u'::pg_catalog.oid, '%u'::pg_catalog.oid, $$pg_toast_%u$$::text);\n",
 							  pg_class_reltoastrelid, pg_class_reltoastnamespace, pg_class_oid);
