@@ -310,7 +310,11 @@ AddRelationAttributeEncodings(Relation rel, List *attr_encodings)
 										 true,
 										 false);
 
-		/* GP6 column files use physical attribute numbers. */
+		/*
+		 * GP6 AOCO metadata persists filenums as physical attribute numbers.
+		 * During binary upgrade with gp_binary_upgrade_legacy_aoco enabled, keep
+		 * that legacy on-disk mapping by writing attnum as the filenum value.
+		 */
 		add_attribute_encoding_entry(relid, attnum,
 									 IsBinaryUpgrade && gp_binary_upgrade_legacy_aoco ?
 									 attnum : lfirst_int(lc_filenum), attoptions);
