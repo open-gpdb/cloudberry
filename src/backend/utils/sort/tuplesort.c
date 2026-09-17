@@ -105,6 +105,7 @@
 #include "executor/executor.h"
 #include "miscadmin.h"
 #include "pg_trace.h"
+#include "port/pg_bitutils.h"
 #include "utils/datum.h"
 #include "utils/logtape.h"
 #include "utils/lsyscache.h"
@@ -259,6 +260,7 @@ struct Tuplesortstate
 								 * space, false when it's value for in-memory
 								 * space */
 	TupSortStatus maxSpaceStatus;	/* sort status when maxSpace was reached */
+	int64		totalNumTuples;	/* GPDB: number of tuples put into the sort */
 	MemoryContext maincontext;	/* memory context for tuple sort metadata that
 								 * persists across multiple batches */
 	MemoryContext sortcontext;	/* memory context holding most sort data */
@@ -1894,6 +1896,8 @@ puttuple_common(Tuplesortstate *state, SortTuple *tuple)
 {
 	Assert(!LEADER(state));
 
+	state->totalNumTuples++;
+
 	switch (state->status)
 	{
 		case TSS_INITIAL:
@@ -3472,6 +3476,18 @@ tuplesort_get_stats(Tuplesortstate *state,
 		stats->spaceType = SORT_SPACE_TYPE_MEMORY;
 	stats->spaceUsed = (state->maxSpace + 1023) / 1024;
 	stats->workmemused = MemoryContextGetPeakSpace(state->sortcontext);
+
+	/*
+	 * GPDB: for a sort that spilled, estimate the work_mem an in-memory sort
+	 * would have needed: the state, the SortTuple array (grown in powers of
+	 * two) and the tuples themselves, approximated by their size on disk.
+	 */
+	if (state->isMaxSpaceDisk)
+		stats->workmemwanted = sizeof(Tuplesortstate) +
+			pg_nextpower2_64((uint64) Max(state->totalNumTuples, 1)) * sizeof(SortTuple) +
+			state->maxSpace;
+	else
+		stats->workmemwanted = 0;
 
 	switch (state->maxSpaceStatus)
 	{

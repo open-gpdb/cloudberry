@@ -451,6 +451,8 @@ ExecSortExplainEnd(PlanState *planstate, struct StringInfoData *buf)
 		{
 			planstate->instrument->workfileCreated = (sortstate->sortstats.spaceType == SORT_SPACE_TYPE_DISK);
 			planstate->instrument->workmemused = sortstate->sortstats.workmemused;
+			planstate->instrument->workmemwanted = Max(planstate->instrument->workmemwanted,
+													 sortstate->sortstats.workmemwanted);
 		}
 	}
 }                               /* ExecSortExplainEnd */
@@ -476,6 +478,8 @@ ExecEagerFreeSort(SortState *node)
 		{
 			node->ss.ps.instrument->workfileCreated = (node->sortstats.spaceType == SORT_SPACE_TYPE_DISK);
 			node->ss.ps.instrument->workmemused = node->sortstats.workmemused;
+			node->ss.ps.instrument->workmemwanted = Max(node->ss.ps.instrument->workmemwanted,
+													   node->sortstats.workmemwanted);
 		}
 
 		tuplesort_end((Tuplesortstate *) node->tuplesortstate);
