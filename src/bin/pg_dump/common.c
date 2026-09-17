@@ -161,6 +161,8 @@ getSchemaData(Archive *fout, int *numTablesPtr)
 	pg_log_info("reading user-defined tables");
 	tblinfo = getTables(fout, &numTables);
 
+	getLegacyExternalPartitions(fout, tblinfo, numTables);
+
 	getPartitionDefs(fout, tblinfo, numTables);
 
 	getPartitionParents(fout, tblinfo, numTables);
