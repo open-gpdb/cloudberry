@@ -11991,7 +11991,19 @@ dumpType(Archive *fout, const TypeInfo *tyinfo)
 					   tyinfo->dobj.name);
 
 	if (tyinfo->typstorage && *tyinfo->typstorage != '\0')
-		dumpTypeStorageOptions(fout, tyinfo);
+	{
+		if (tyinfo->typtype == TYPTYPE_BASE)
+			dumpTypeStorageOptions(fout, tyinfo);
+		else
+		{
+			/*
+			 * FIXME: Support restoring GP6 non-base type defaults instead of
+			 * omitting them.
+			 */
+			pg_log_warning("omitting default encoding for non-base type %s: %s",
+						   fmtQualifiedDumpable(tyinfo), tyinfo->typstorage);
+		}
+	}
 
 }
 
@@ -18133,6 +18145,9 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 	int			j,
 				k;
 	bool		legacy_part_hierarchy = false;
+	bool		legacy_aoco = dopt->binary_upgrade &&
+		fout->remoteVersion >= GPDB6_MAJOR_PGVERSION &&
+		fout->remoteVersion < GPDB7_MAJOR_PGVERSION;
 	char	   *ftoptions = NULL;
 	char	   *srvname = NULL;
 	char	   *foreign = "";
@@ -18147,6 +18162,9 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 	if (tbinfo->hasoids)
 		pg_log_warning("WITH OIDS is not supported anymore (table \"%s\")",
 					   qrelname);
+
+	if (legacy_aoco)
+		appendPQExpBufferStr(q, "SET gp_binary_upgrade_legacy_aoco = on;\n");
 
 	if (dopt->binary_upgrade)
 		binary_upgrade_set_type_oids_by_rel_oid(fout, q, 	tbinfo->dobj.catId.oid);
@@ -19063,6 +19081,8 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 
 	if (dopt->binary_upgrade && tbinfo->parrelid && tbinfo->relstorage == 'x')
 		wrapLegacyExternalPartition(fout, tbinfo, q);
+	if (legacy_aoco)
+		appendPQExpBufferStr(q, "SET gp_binary_upgrade_legacy_aoco = off;\n");
 
 	if (tbinfo->dobj.dump & DUMP_COMPONENT_DEFINITION)
 	{

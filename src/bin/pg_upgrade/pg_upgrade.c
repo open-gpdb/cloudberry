@@ -57,6 +57,7 @@ static void prepare_new_globals(void);
 static void create_new_objects(void);
 static void copy_xact_xlog_xid(void);
 static void set_frozenxids(bool minmxid_only);
+static void set_segment_frozenxids(void);
 static void make_outputdirs(char *pgdata);
 static void setup(char *argv0, bool *live_check);
 static void get_cluster_version(ClusterInfo *cluster);
@@ -260,6 +261,8 @@ main(int argc, char **argv)
 		/* freeze master data *right before* stopping */
 		freeze_master_data();
 	}
+	else
+		set_segment_frozenxids();
 
 	stop_postmaster(false);
 
@@ -808,8 +811,12 @@ create_new_objects(void)
 	/* update new_cluster info now that we have objects in the databases */
 	get_db_and_rel_infos(&new_cluster);
 
-	/* Bitmap indexes are not currently supported, so mark them as invalid. */
-	new_gpdb_invalidate_bitmap_indexes();
+	/*
+	 * Non-btree indexes (bitmap, gin, gist, spgist, hash, brin) have on-disk
+	 * formats that are incompatible between the old and new clusters, so mark
+	 * them invalid and emit a reindex script.
+	 */
+	new_gpdb_invalidate_indexes();
 }
 
 
@@ -1123,5 +1130,90 @@ set_frozenxids(bool minmxid_only)
 
 	PQfinish(conn_template1);
 
+	check_ok();
+}
+
+
+/*
+ * Replace coordinator horizons with source segment bounds after AO restore.
+ * Use per-database bounds where available, keeping invalid relation values.
+ */
+static void
+set_segment_frozenxids(void)
+{
+	PGconn	   *conn_template1 = connectToServer(&new_cluster, "template1");
+	PGresult   *dbres;
+	int			dbnum;
+	int			i_oid,
+				i_datname,
+				i_datallowconn;
+
+	prep_status("Resetting frozenxid and minmxid counters in new segment");
+
+	PQclear(executeQueryOrDie(conn_template1, "set allow_system_table_mods=true"));
+	dbres = executeQueryOrDie(conn_template1,
+							  "SELECT oid, datname, datallowconn "
+							  "FROM pg_catalog.pg_database");
+	i_oid = PQfnumber(dbres, "oid");
+	i_datname = PQfnumber(dbres, "datname");
+	i_datallowconn = PQfnumber(dbres, "datallowconn");
+
+	for (dbnum = 0; dbnum < PQntuples(dbres); dbnum++)
+	{
+		Oid			dboid = atooid(PQgetvalue(dbres, dbnum, i_oid));
+		char	   *datname = PQgetvalue(dbres, dbnum, i_datname);
+		bool		datallowconn = strcmp(PQgetvalue(dbres, dbnum, i_datallowconn), "t") == 0;
+		TransactionId frozenxid = old_cluster.controldata.chkpnt_oldstxid;
+		MultiXactId minmxid = old_cluster.controldata.chkpnt_oldstMulti;
+		PGconn	   *conn;
+		int			olddbnum;
+
+		/* Disabled databases, including template0, are absent from dbarr. */
+		for (olddbnum = 0; olddbnum < old_cluster.dbarr.ndbs; olddbnum++)
+		{
+			DbInfo	   *olddb = &old_cluster.dbarr.dbs[olddbnum];
+
+			if (strcmp(datname, olddb->db_name) == 0)
+			{
+				frozenxid = olddb->datfrozenxid;
+				minmxid = olddb->datminmxid;
+				break;
+			}
+		}
+
+		PQclear(executeQueryOrDie(conn_template1,
+								  "UPDATE pg_catalog.pg_database "
+								  "SET datfrozenxid = '%u', datminmxid = '%u' "
+								  "WHERE oid = '%u'",
+								  frozenxid, minmxid, dboid));
+
+		/* Include databases that autovacuum visits despite datallowconn. */
+		if (!datallowconn)
+			PQclear(executeQueryOrDie(conn_template1,
+									  "ALTER DATABASE %s ALLOW_CONNECTIONS = true",
+									  quote_identifier(datname)));
+
+		conn = connectToServer(&new_cluster, datname);
+		PQclear(executeQueryOrDie(conn, "set allow_system_table_mods=true"));
+		PQclear(executeQueryOrDie(conn,
+								  "UPDATE pg_catalog.pg_class "
+								  "SET relfrozenxid = '%u' "
+								  "WHERE relfrozenxid <> 0",
+								  frozenxid));
+		PQclear(executeQueryOrDie(conn,
+								  "UPDATE pg_catalog.pg_class "
+								  "SET relminmxid = '%u' "
+								  "WHERE relminmxid <> 0",
+								  minmxid));
+		PQfinish(conn);
+
+		if (!datallowconn)
+			PQclear(executeQueryOrDie(conn_template1,
+									  "ALTER DATABASE %s ALLOW_CONNECTIONS = false",
+									  quote_identifier(datname)));
+	}
+
+	PQclear(dbres);
+	PQfinish(conn_template1);
 	check_ok();
 }
