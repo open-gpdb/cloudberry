@@ -260,6 +260,48 @@ INSERT INTO vstat_vm SELECT i, i FROM generate_series(1, 5000) g(i);
 		$cleared, 'restoring flags does not increase the cleared counters');
 };
 
+subtest 'append-optimized compaction' => sub {
+	for my $am ('ao_row', 'ao_column')
+	{
+		my $table = "vstat_$am";
+		$node->safe_psql('postgres', qq{
+CREATE TABLE $table (id int, val int) USING $am;
+CREATE INDEX ${table}_idx ON $table (id);
+INSERT INTO $table SELECT i, i FROM generate_series(1, 10000) g(i);
+DELETE FROM $table WHERE id % 2 = 0;
+});
+		# Preserve the zero-freeze-age case: AO still must not count a
+		# wraparound vacuum, unlike its auxiliary heap relations.
+		my $verbose = vacuum_table($table, 'VERBOSE', 'SET vacuum_freeze_table_age = 0;');
+		is(counters($table, 'tuples_deleted, dead_tuples, pages_frozen, pages_all_visible, wraparound_vacuum_count'),
+			'5000|0|0|0|0', "$am compaction removes 5000 rows and has no heap VM or wraparound work");
+		# Compaction relocates surviving tuples, so all original index
+		# entries, including those of surviving rows, become obsolete.
+		is(index_counters("${table}_idx", 'tuples_deleted'),
+			'10000', "$am index cleanup removes the old TIDs");
+		is(counters($table, 'total_time > 0, delay_time = 0'),
+			't|t', "$am compaction takes time without cost delay");
+		my $time = sprintf('%.3f', counters($table, 'total_time'));
+		like($verbose,
+			qr/append-optimized table "\Q$table\E": vacuum statistics\nDETAIL:  0 dead tuples remain\.\nelapsed: \Q$time\E ms, cost-based delay: 0\.000 ms/,
+			"$am VERBOSE reports remaining dead tuples and accumulated phase time");
+		is(counters($table, 'pages_deleted > 0, dead_pages, rev_all_frozen_pages, rev_all_visible_pages'),
+			't|0|0|0', "$am reports freed space without heap page or VM counters");
+
+		# Without obsolete segment files, AO still runs index cleanup.
+		# Its time must be reported even if the AM returns no page statistics.
+		my $index_time = index_counters("${table}_idx", 'total_time');
+		vacuum_table($table);
+		is(index_counters("${table}_idx", "tuples_deleted, total_time > $index_time, delay_time = 0"),
+			'10000|t|t', "$am reports index cleanup without deleting more TIDs");
+
+		$node->safe_psql('postgres', "DELETE FROM $table WHERE id <= 200");
+		vacuum_table($table, '', 'SET gp_appendonly_compaction = off;');
+		is(counters($table, 'tuples_deleted, dead_tuples'),
+			'5000|100', "$am counts hidden rows left when compaction is disabled");
+	}
+};
+
 subtest 'VACUUM FULL leaves the extended counters unchanged' => sub {
 	$node->safe_psql('postgres', q{
 CREATE TABLE vstat_full (id int PRIMARY KEY) WITH (autovacuum_enabled = off);
