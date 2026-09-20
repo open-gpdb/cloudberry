@@ -126,6 +126,7 @@
  * ----------
  */
 bool		pgstat_track_counts = false;
+bool		pgstat_track_vacuum_statistics = false;
 int			pgstat_track_functions = TRACK_FUNC_OFF;
 
 bool		pgstat_collect_queuelevel = false;
@@ -1620,7 +1621,8 @@ pgstat_report_vacstats(Oid tableoid, bool shared,
 {
 	PgStat_MsgVacstats msg;
 
-	if (pgStatSock == PGINVALID_SOCKET || !pgstat_track_counts)
+	if (pgStatSock == PGINVALID_SOCKET || !pgstat_track_counts ||
+		!pgstat_track_vacuum_statistics)
 		return;
 
 	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_VACSTATS);

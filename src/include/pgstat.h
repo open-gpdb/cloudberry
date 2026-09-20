@@ -1057,6 +1057,7 @@ typedef struct PgStat_FunctionCallUsage
  * ----------
  */
 extern PGDLLIMPORT bool pgstat_track_counts;
+extern PGDLLIMPORT bool pgstat_track_vacuum_statistics;
 extern PGDLLIMPORT int pgstat_track_functions;
 extern char *pgstat_stat_directory;
 extern char *pgstat_stat_tmpname;

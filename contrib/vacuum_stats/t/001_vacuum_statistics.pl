@@ -30,7 +30,7 @@ use strict;
 use warnings;
 use PostgresNode;
 use TestLib;
-use Test::More tests => 15;
+use Test::More tests => 17;
 
 my $node = get_new_node('vacuum_stats');
 $node->init;
@@ -54,6 +54,32 @@ $node->safe_psql('postgres',
 $node->safe_psql('postgres',
 	'INSERT INTO vestat SELECT g FROM generate_series(1, 10000) g');
 $node->safe_psql('postgres', 'ANALYZE vestat');
+
+# Nothing is collected until track_vacuum_statistics is turned on.
+$node->safe_psql('postgres',
+	'CREATE TABLE vestat_off (x int) WITH (autovacuum_enabled = off)');
+$node->safe_psql('postgres',
+	'INSERT INTO vestat_off SELECT g FROM generate_series(1, 1000) g');
+$node->safe_psql('postgres', 'DELETE FROM vestat_off');
+$node->safe_psql('postgres', 'VACUUM vestat_off');
+$node->safe_psql('postgres', 'SELECT pg_sleep(1)');
+is( $node->safe_psql(
+		'postgres',
+		'SELECT tuples_deleted = 0 AND dead_tuples = 0 AND total_time = 0 '
+		  . "FROM pg_stat_vacuum_tables WHERE relname = 'vestat_off'"),
+	't',
+	'nothing is collected while track_vacuum_statistics is off');
+is( $node->safe_psql(
+		'postgres',
+		'SELECT vacuum_count = 1 '
+		  . "FROM pg_stat_all_tables WHERE relname = 'vestat_off'"),
+	't',
+	'the rest of the statistics is collected all the same');
+
+$node->safe_psql('postgres', 'ALTER SYSTEM SET track_vacuum_statistics = on');
+$node->reload;
+$node->poll_query_until('postgres', 'SHOW track_vacuum_statistics', 'on')
+  or die 'track_vacuum_statistics was not turned on';
 
 my $tab_counters =
 	'SELECT tuples_deleted, dead_tuples, pages_deleted, dead_pages, '
