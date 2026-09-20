@@ -54,6 +54,7 @@ step "s1_begin_repeatable_read" {
 step "s1_commit"                { COMMIT; }
 
 session "s2"
+setup           { SET track_vacuum_statistics = on; }
 step "s2_insert"                { INSERT INTO test_vacuum_stat_isolation(id, ival) SELECT ival, ival%10 FROM generate_series(1,1000) As ival; }
 step "s2_update"                { UPDATE test_vacuum_stat_isolation SET ival = ival + 2 where id > 900; }
 step "s2_insert_interrupt"      { INSERT INTO test_vacuum_stat_isolation values (1,1); }

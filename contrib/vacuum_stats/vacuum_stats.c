@@ -38,19 +38,14 @@
 PG_MODULE_MAGIC;
 
 /*
- * Fetch the vacuum counters for a relation (table or index), or NULL if
- * the statistics collector has no entry for it.
+ * Fetch the vacuum counters for a relation (table or index), or NULL if the
+ * statistics collector has none: the relation was never vacuumed, or the
+ * counters are not collected at all (track_vacuum_statistics is off).
  */
 static PgStat_VacuumStats *
 fetch_rel_vacuum_stats(Oid relid)
 {
-	PgStat_StatTabEntry *tabentry;
-
-	tabentry = pgstat_fetch_stat_tabentry(relid);
-	if (tabentry == NULL)
-		return NULL;
-
-	return &tabentry->vacuum_stats;
+	return pgstat_fetch_stat_vacuum_stats(relid);
 }
 
 /*
@@ -92,9 +87,9 @@ funcname(PG_FUNCTION_ARGS) \
 }
 
 /*
- * The "rev" counters live directly in the relation/database entries, not
- * in the embedded PgStat_VacuumStats, since they are fed from the regular
- * relation statistics rather than from the vacuum report.
+ * The "rev" counters live directly in the relation/database entries, rather
+ * than with the vacuum counters, since they are fed from the regular relation
+ * statistics rather than from the vacuum report.
  */
 #define DEFINE_REL_ENTRY_FUNC(funcname, field) \
 PG_FUNCTION_INFO_V1(funcname); \

@@ -67,6 +67,30 @@ Questions the counters answer:
   than its peers, which usually means unevenly distributed data rather
   than a vacuum problem.
 
+## Requirements
+
+```
+track_vacuum_statistics = on
+```
+
+This setting is off by default, superuser-settable, and synchronized to
+segments. Enable it for a session or in the configuration. While it is off,
+VACUUM sends no extended statistics reports and DML does not count cleared
+visibility-map bits. Measurements used by `VACUUM VERBOSE` still run.
+
+Per-relation vacuum counters live in a separate hash table, created when
+its database receives the first extended VACUUM report. With tracking never
+enabled, neither the collector nor a statistics snapshot allocates this
+hash table or its relation entries, and no such records are written to the
+statistics file. Reading the views does not create entries. Database totals
+and the `rev_*` counters remain embedded in the ordinary statistics structures;
+the GUC does not remove that fixed overhead.
+
+Disabling tracking preserves previously collected values and their storage.
+It stops further collection; it does not reset the counters or make existing
+values read as zero. Statistics resets release the corresponding per-relation
+entries.
+
 ## Counters
 
 For every heap relation, index and database the following counters are
@@ -121,7 +145,7 @@ cost delay are also included in autovacuum's existing log summary.
 The `rev_*` counters describe DML activity over time and
 remain in the statistics views; they are not attributed to a vacuum run.
 
-- `t/001_vacuum_statistics.pl` — one TAP suite covering heap/index counters, snapshots and VM transitions, VACUUM FULL and cost delay, index page accounting, clean restart and crash recovery.
+- `t/001_vacuum_statistics.pl` — one TAP suite covering tracking GUC, heap/index counters, snapshots and VM transitions, VACUUM FULL and cost delay, index page accounting, clean restart and crash recovery, snapshot memory lifetime.
   Shared wait helpers poll collector reports; no fixed synchronization delays
   are used.
 - `src/test/isolation/specs/vacuum-extending-in-repeatable-read.spec` —

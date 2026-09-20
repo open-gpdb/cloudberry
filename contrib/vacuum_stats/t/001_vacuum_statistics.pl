@@ -116,6 +116,38 @@ sub database_counters
 		"SELECT $columns FROM pg_stat_vacuum_database WHERE datname = 'postgres'");
 }
 
+subtest 'tracking disabled and enabled' => sub {
+	$node->safe_psql('postgres', q{
+CREATE TABLE vstat_off (id int) WITH (autovacuum_enabled = off);
+INSERT INTO vstat_off SELECT generate_series(1, 1000);
+DELETE FROM vstat_off;
+});
+	my $verbose = vacuum_table('vstat_off', 'VERBOSE');
+	like($verbose, qr/table "vstat_off": vacuum statistics.*?cost-based delay: 0\.000 ms/s,
+		'VERBOSE reports measurements even with statistics tracking disabled');
+	is(counters('vstat_off', $all_zero), 't',
+		'extended counters stay zero while tracking is disabled');
+	is($node->safe_psql('postgres',
+		"SELECT vacuum_count FROM pg_stat_all_tables WHERE relname = 'vstat_off'"),
+		'1', 'ordinary vacuum statistics are still collected');
+	# Reading zero counters must not create a vacuum statistics hash table.
+	is($node->safe_psql('postgres', q{
+BEGIN;
+DO $$
+BEGIN
+    PERFORM count(*) FROM pg_stat_vacuum_tables WHERE total_time > 0;
+END
+$$;
+SELECT count(*) FROM pg_backend_memory_contexts
+WHERE name = 'Per-database vacuum statistics';
+COMMIT;
+}), '0', 'disabled tracking does not allocate a vacuum statistics hash table');
+	$node->safe_psql('postgres', 'ALTER SYSTEM SET track_vacuum_statistics = on');
+	$node->reload;
+	wait_for_stats('SHOW track_vacuum_statistics',
+		'track_vacuum_statistics to be enabled', 'on');
+};
+
 subtest 'removed tuples and truncated pages' => sub {
 	$node->safe_psql('postgres', q{
 CREATE TABLE vstat_heap (id int PRIMARY KEY) WITH (autovacuum_enabled = off);
@@ -280,6 +312,25 @@ DELETE FROM vstat_idx WHERE id <= 90000;
 		'the next vacuum removed exactly 1000 more index entries');
 	is(index_counters('vstat_idx_pkey', "pages_deleted - $pages < $pages / 2"),
 		't', 'pages deleted by the first run are not counted again');
+};
+
+subtest 'statistics snapshots release their vacuum counters' => sub {
+	# Keep the last snapshot alive until the context count is read.
+	# Outside this transaction its context would already have been freed.
+	is($node->safe_psql('postgres', q{
+BEGIN;
+DO $$
+BEGIN
+    FOR i IN 1..50 LOOP
+        PERFORM pg_stat_clear_snapshot();
+        PERFORM count(*) FROM pg_stat_vacuum_tables WHERE tuples_deleted > 0;
+    END LOOP;
+END
+$$;
+SELECT count(*) FROM pg_backend_memory_contexts
+WHERE name = 'Per-database vacuum statistics';
+COMMIT;
+}), '1', 'only the current snapshot owns a vacuum statistics hash table');
 };
 
 subtest 'clean restart preserves statistics; crash recovery resets them' => sub {

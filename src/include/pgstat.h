@@ -786,7 +786,7 @@ typedef union PgStat_Msg
  * ------------------------------------------------------------
  */
 
-#define PGSTAT_FILE_FORMAT_ID	0x01A5BCA3
+#define PGSTAT_FILE_FORMAT_ID	0x01A5BCA4
 
 /* ----------
  * PgStat_StatDBEntry			The collector's data per database
@@ -838,6 +838,7 @@ typedef struct PgStat_StatDBEntry
 	 */
 	HTAB	   *tables;
 	HTAB	   *functions;
+	HTAB	   *vacuum_stats;	/* PgStat_StatVacuumEntry, created on demand */
 } PgStat_StatDBEntry;
 
 
@@ -877,18 +878,34 @@ typedef struct PgStat_StatTabEntry
 	TimestampTz autovac_analyze_timestamp;	/* autovacuum initiated */
 	PgStat_Counter autovac_analyze_count;
 
-	PgStat_VacuumStats vacuum_stats;
-
 	/*
 	 * "rev" counters track how quickly the work done by vacuum is undone:
-	 * pages that lost their all-frozen/all-visible status.  Unlike
-	 * vacuum_stats above, they are fed from the regular relation statistics
-	 * (PgStat_TableCounts), not from the vacuum report, since the bits are
-	 * cleared by ordinary DML.
+	 * pages that lost their all-frozen/all-visible status.  Unlike the vacuum
+	 * counters, which are kept per relation in PgStat_StatDBEntry.vacuum_stats
+	 * and only for the relations that were vacuumed, they are fed from the
+	 * regular relation statistics (PgStat_TableCounts), not from the vacuum
+	 * report, since the bits are cleared by ordinary DML.
 	 */
 	PgStat_Counter rev_all_frozen_pages;
 	PgStat_Counter rev_all_visible_pages;
 } PgStat_StatTabEntry;
+
+
+/* ----------
+ * PgStat_StatVacuumEntry		The collector's vacuum counters of one relation
+ *
+ * These live in a hash table of their own, which the collector creates when a
+ * relation of the database is vacuumed for the first time, so that a database
+ * where the vacuum statistics are not collected -- because
+ * track_vacuum_statistics is off, or simply because nothing has been vacuumed
+ * yet -- spends no memory on them.
+ * ----------
+ */
+typedef struct PgStat_StatVacuumEntry
+{
+	Oid			tableid;
+	PgStat_VacuumStats vacuum_stats;
+} PgStat_StatVacuumEntry;
 
 
 /* ----------
@@ -1058,6 +1075,7 @@ typedef struct PgStat_FunctionCallUsage
  * ----------
  */
 extern PGDLLIMPORT bool pgstat_track_counts;
+extern PGDLLIMPORT bool pgstat_track_vacuum_statistics;
 extern PGDLLIMPORT int pgstat_track_functions;
 extern char *pgstat_stat_directory;
 extern char *pgstat_stat_tmpname;
@@ -1357,6 +1375,7 @@ extern void pgstat_combine_from_qe(struct CdbDispatchResults *results,	/* GPDB *
  */
 extern PgStat_StatDBEntry *pgstat_fetch_stat_dbentry(Oid dbid);
 extern PgStat_StatTabEntry *pgstat_fetch_stat_tabentry(Oid relid);
+extern PgStat_VacuumStats *pgstat_fetch_stat_vacuum_stats(Oid relid);
 
 extern PgStat_StatQueueEntry *pgstat_fetch_stat_queueentry(Oid queueid);  /* GPDB */
 extern PgBackendStatus *pgstat_fetch_stat_beentry(int beid);

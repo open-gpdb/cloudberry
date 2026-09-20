@@ -174,10 +174,13 @@ visibilitymap_clear(Relation rel, BlockNumber heapBlk, Buffer buf, uint8 flags)
 		 * nothing is counted during recovery, where rel is a fake relcache
 		 * entry without a pgstat entry.
 		 */
-		if (cleared_bits & VISIBILITYMAP_ALL_VISIBLE)
-			pgstat_count_rev_all_visible(rel);
-		if (cleared_bits & VISIBILITYMAP_ALL_FROZEN)
-			pgstat_count_rev_all_frozen(rel);
+		if (pgstat_track_vacuum_statistics)
+		{
+			if (cleared_bits & VISIBILITYMAP_ALL_VISIBLE)
+				pgstat_count_rev_all_visible(rel);
+			if (cleared_bits & VISIBILITYMAP_ALL_FROZEN)
+				pgstat_count_rev_all_frozen(rel);
+		}
 	}
 
 	LockBuffer(buf, BUFFER_LOCK_UNLOCK);
