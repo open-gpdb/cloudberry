@@ -68,6 +68,18 @@ Questions the counters answer:
   than its peers, which usually means unevenly distributed data rather
   than a vacuum problem.
 
+## Requirements
+
+```
+track_vacuum_statistics = on
+```
+
+The counters are collected only with this on (`gpconfig -c
+track_vacuum_statistics -v on; gpstop -u`).  It is superuser-settable and
+reaches the segments, where vacuum does its work, so it can also be turned
+on for a single session.  While it is off, vacuum reports nothing and the
+views read as zeroes.
+
 ## Counters
 
 For every heap relation, index and database the following counters are
@@ -92,10 +104,30 @@ meaningful; the dead-tuple counter, the visibility-map counters and
 `wraparound_vacuum_count` stay zero, since those describe the heap
 relation the index belongs to.
 
-The counters come from the heap vacuum code (`heap_vacuum_rel()` and the
-index vacuuming it drives), so append-optimized (AO/CO) relations, which
-are vacuumed by a separate code path, report nothing here; their auxiliary
-heap relations and indexes do.
+Append-optimized (AO/CO) relations are vacuumed by a code path of their
+own, which reports the same counters with the meanings that apply there:
+
+- `tuples_deleted` — tuples compaction dropped while moving the live rows
+  of a segment file elsewhere;
+- `dead_tuples` — tuples it could not drop yet, i.e. the rows the
+  visibility map of the AO relation still hides at the end of the run;
+- `pages_deleted` — the space compaction freed, in blocks of the segment
+  files it dropped or truncated;
+- `wraparound_vacuum_count` — runs driven by the freeze table age; vacuum
+  advances the `relfrozenxid` of an AO relation as well;
+- `total_time` — the time of all the phases of the run this worker did.
+
+`pages_frozen` and `pages_all_visible` stay zero: an AO relation has
+nothing to freeze and no visibility map pages to keep up to date.  Its
+auxiliary heap relations (`pg_aoseg`, the block directory, the visimap)
+are vacuumed as ordinary heap relations and report on their own.
+
+The indexes of an AO table are reported as well, but their
+`tuples_deleted` counts every index entry that pointed into a dropped
+segment file — including the entries of the live rows compaction moved,
+which are re-inserted under new TIDs.  It is what the index vacuuming
+actually did, and it is normally close to the whole size of the index
+rather than to the number of dead tuples.
 
 Like the rest of the collected statistics, the counters are written to
 the permanent statistics files when the statistics collector exits,
