@@ -183,6 +183,7 @@
 		"test_print_prefetch_joinqual",
 		"timezone_abbreviations",
 		"trace_syncscan",
+		"track_vacuum_statistics",
 		"track_wal_io_timing",
 		"TimeZone",
 		"vacuum_cleanup_index_scale_factor",

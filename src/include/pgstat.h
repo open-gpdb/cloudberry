@@ -85,6 +85,8 @@ typedef enum StatMsgType
 	PGSTAT_MTYPE_REPLSLOT,
 	PGSTAT_MTYPE_CONNECT,
 	PGSTAT_MTYPE_DISCONNECT,
+	PGSTAT_MTYPE_VACSTATS,
+	PGSTAT_MTYPE_RESETVACSTATS,
 } StatMsgType;
 
 /* ----------
@@ -133,6 +135,9 @@ typedef struct PgStat_TableCounts
 
 	PgStat_Counter t_blocks_fetched;
 	PgStat_Counter t_blocks_hit;
+
+	PgStat_Counter t_rev_all_frozen_pages;
+	PgStat_Counter t_rev_all_visible_pages;
 } PgStat_TableCounts;
 
 /* Possible targets for resetting cluster-wide shared values */
@@ -420,6 +425,56 @@ typedef struct PgStat_MsgVacuum
 
 
 /* ----------
+ * PgStat_VacuumStats			Counters accumulated by (auto)vacuum for a
+ *								single relation.  Tuple counters cover heap
+ *								relations, page counters both heap relations
+ *								and indexes.
+ * ----------
+ */
+typedef struct PgStat_VacuumStats
+{
+	PgStat_Counter tuples_deleted;	/* tuples removed by vacuum */
+	PgStat_Counter dead_tuples; /* dead tuples left unremoved */
+	PgStat_Counter pages_deleted;	/* pages removed/deleted by vacuum */
+	PgStat_Counter dead_pages;	/* pages with unremoved dead tuples */
+	PgStat_Counter pages_frozen;	/* pages where vacuum froze tuples */
+	PgStat_Counter pages_all_visible;	/* pages marked all-visible by vacuum */
+
+	/*
+	 * Number of vacuum runs that had to scan the whole relation because its
+	 * relfrozenxid/relminmxid reached the freeze table age.  Such a run
+	 * cannot skip pages using the visibility map, so it is much more
+	 * expensive than an ordinary one.
+	 */
+	PgStat_Counter wraparound_vacuum_count;
+
+	PgStat_Counter total_time;	/* total vacuum time, in microseconds */
+
+	/*
+	 * Of that time, what went into the cost-based vacuum delay rather than
+	 * into work.  Without it a slow run cannot be told from a throttled one;
+	 * it is mostly autovacuum that sleeps, since vacuum_cost_delay is 0 by
+	 * default while autovacuum_vacuum_cost_delay is not.
+	 */
+	PgStat_Counter delay_time;
+} PgStat_VacuumStats;
+
+/* ----------
+ * PgStat_MsgVacstats			Sent by the backend or autovacuum daemon
+ *								after vacuuming a heap relation or an index
+ *								to report per-relation vacuum counters.
+ * ----------
+ */
+typedef struct PgStat_MsgVacstats
+{
+	PgStat_MsgHdr m_hdr;
+	Oid			m_databaseid;
+	Oid			m_tableoid;
+	PgStat_VacuumStats m_stats;
+} PgStat_MsgVacstats;
+
+
+/* ----------
  * PgStat_MsgAnalyze			Sent by the backend or autovacuum daemon
  *								after ANALYZE
  * ----------
@@ -686,6 +741,19 @@ typedef struct PgStat_MsgDisconnect
 } PgStat_MsgDisconnect;
 
 /* ----------
+ * PgStat_MsgResetVacstats		Sent by the backend to throw away the vacuum
+ *								counters of one relation, or of the whole
+ *								database when m_objectid is InvalidOid.
+ * ----------
+ */
+typedef struct PgStat_MsgResetVacstats
+{
+	PgStat_MsgHdr m_hdr;
+	Oid			m_databaseid;
+	Oid			m_objectid;
+} PgStat_MsgResetVacstats;
+
+/* ----------
  * PgStat_Msg					Union over all possible messages.
  * ----------
  */
@@ -704,6 +772,8 @@ typedef union PgStat_Msg
 	PgStat_MsgResetreplslotcounter msg_resetreplslotcounter;
 	PgStat_MsgAutovacStart msg_autovacuum_start;
 	PgStat_MsgVacuum msg_vacuum;
+	PgStat_MsgVacstats msg_vacstats;
+	PgStat_MsgResetVacstats msg_resetvacstats;
 	PgStat_MsgAnalyze msg_analyze;
 	PgStat_MsgArchiver msg_archiver;
 	PgStat_MsgQueuestat msg_queuestat;  /* GPDB */
@@ -730,7 +800,7 @@ typedef union PgStat_Msg
  * ------------------------------------------------------------
  */
 
-#define PGSTAT_FILE_FORMAT_ID	0x01A5BCA2
+#define PGSTAT_FILE_FORMAT_ID	0x01A5BCA4
 
 /* ----------
  * PgStat_StatDBEntry			The collector's data per database
@@ -768,6 +838,10 @@ typedef struct PgStat_StatDBEntry
 	PgStat_Counter n_sessions_abandoned;
 	PgStat_Counter n_sessions_fatal;
 	PgStat_Counter n_sessions_killed;
+	PgStat_VacuumStats n_vacuum_stats;	/* summed over the db's relations */
+	/* likewise; fed from the relation statistics, see PgStat_StatTabEntry */
+	PgStat_Counter n_rev_all_frozen_pages;
+	PgStat_Counter n_rev_all_visible_pages;
 
 	TimestampTz stat_reset_timestamp;
 	TimestampTz stats_timestamp;	/* time of db stats file update */
@@ -778,6 +852,7 @@ typedef struct PgStat_StatDBEntry
 	 */
 	HTAB	   *tables;
 	HTAB	   *functions;
+	HTAB	   *vacuum_stats;	/* PgStat_StatVacuumEntry, created on demand */
 } PgStat_StatDBEntry;
 
 
@@ -816,7 +891,35 @@ typedef struct PgStat_StatTabEntry
 	PgStat_Counter analyze_count;
 	TimestampTz autovac_analyze_timestamp;	/* autovacuum initiated */
 	PgStat_Counter autovac_analyze_count;
+
+	/*
+	 * "rev" counters track how quickly the work done by vacuum is undone:
+	 * pages that lost their all-frozen/all-visible status.  Unlike the vacuum
+	 * counters, which are kept per relation in PgStat_StatDBEntry.vacuum_stats
+	 * and only for the relations that were vacuumed, they are fed from the
+	 * regular relation statistics (PgStat_TableCounts), not from the vacuum
+	 * report, since the bits are cleared by ordinary DML.
+	 */
+	PgStat_Counter rev_all_frozen_pages;
+	PgStat_Counter rev_all_visible_pages;
 } PgStat_StatTabEntry;
+
+
+/* ----------
+ * PgStat_StatVacuumEntry		The collector's vacuum counters of one relation
+ *
+ * These live in a hash table of their own, which the collector creates when a
+ * relation of the database is vacuumed for the first time, so that a database
+ * where the vacuum statistics are not collected -- because
+ * track_vacuum_statistics is off, or simply because nothing has been vacuumed
+ * yet -- spends no memory on them.
+ * ----------
+ */
+typedef struct PgStat_StatVacuumEntry
+{
+	Oid			tableid;
+	PgStat_VacuumStats vacuum_stats;
+} PgStat_StatVacuumEntry;
 
 
 /* ----------
@@ -986,6 +1089,7 @@ typedef struct PgStat_FunctionCallUsage
  * ----------
  */
 extern PGDLLIMPORT bool pgstat_track_counts;
+extern PGDLLIMPORT bool pgstat_track_vacuum_statistics;
 extern PGDLLIMPORT int pgstat_track_functions;
 extern char *pgstat_stat_directory;
 extern char *pgstat_stat_tmpname;
@@ -1060,6 +1164,22 @@ extern void pgstat_report_connect(Oid dboid);
 extern void pgstat_report_autovac(Oid dboid);
 extern void pgstat_report_vacuum(Oid tableoid, bool shared,
 								 PgStat_Counter livetuples, PgStat_Counter deadtuples);
+extern void pgstat_report_vacstats(Oid tableoid, bool shared,
+								   const PgStat_VacuumStats *stats);
+extern void pgstat_reset_vacuum_stats(Oid relid);
+
+/* count a page whose all-visible bit is being cleared */
+#define pgstat_count_rev_all_visible(rel)							\
+	do {															\
+		if ((rel)->pgstat_info != NULL)								\
+			(rel)->pgstat_info->t_counts.t_rev_all_visible_pages++;	\
+	} while (0)
+/* count a page whose all-frozen bit is being cleared */
+#define pgstat_count_rev_all_frozen(rel)							\
+	do {															\
+		if ((rel)->pgstat_info != NULL)								\
+			(rel)->pgstat_info->t_counts.t_rev_all_frozen_pages++;	\
+	} while (0)
 extern void pgstat_report_analyze(Relation rel,
 								  PgStat_Counter livetuples, PgStat_Counter deadtuples,
 								  bool resetcounter);
@@ -1270,6 +1390,7 @@ extern void pgstat_combine_from_qe(struct CdbDispatchResults *results,	/* GPDB *
  */
 extern PgStat_StatDBEntry *pgstat_fetch_stat_dbentry(Oid dbid);
 extern PgStat_StatTabEntry *pgstat_fetch_stat_tabentry(Oid relid);
+extern PgStat_VacuumStats *pgstat_fetch_stat_vacuum_stats(Oid relid);
 
 extern PgStat_StatQueueEntry *pgstat_fetch_stat_queueentry(Oid queueid);  /* GPDB */
 extern PgBackendStatus *pgstat_fetch_stat_beentry(int beid);
