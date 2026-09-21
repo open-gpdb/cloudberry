@@ -138,6 +138,21 @@ FROM gp_stat_vacuum_indexes WHERE indexrelname IN ('vstat_heap_idx', 'vstat_ao_i
 SELECT bool_and(delay_time >= 0 AND delay_time <= total_time) AS delay_ok
 FROM gp_stat_vacuum_database WHERE datname = current_database();
 
+-- resetting only these counters, on the coordinator and on the segments
+SELECT vacuum_stats_reset();
+SELECT * FROM gp_vacuum_stats_reset();
+
+SELECT wait_for_vacuum_stats($$
+    SELECT sum(tuples_deleted) = 0 AND sum(total_time) = 0
+    FROM gp_stat_vacuum_tables WHERE relname = 'vstat_heap' $$);
+
+SELECT sum(tuples_deleted) = 0 AS db_reset_ok
+FROM gp_stat_vacuum_database WHERE datname = current_database();
+
+-- the rest of the statistics is untouched
+SELECT sum(vacuum_count) > 0 AS vacuum_count_kept
+FROM gp_stat_all_tables WHERE relname = 'vstat_heap';
+
 DROP FUNCTION wait_for_vacuum_stats(text);
 DROP FUNCTION vstat_clear_segment_snapshots();
 DROP TABLE vstat_heap;

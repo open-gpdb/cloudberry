@@ -207,6 +207,41 @@ FROM gp_stat_vacuum_database WHERE datname = current_database();
  t
 (1 row)
 
+-- resetting only these counters, on the coordinator and on the segments
+SELECT vacuum_stats_reset();
+ vacuum_stats_reset 
+--------------------
+ 
+(1 row)
+
+SELECT * FROM gp_vacuum_stats_reset();
+ gp_vacuum_stats_reset 
+-----------------------
+(0 rows)
+
+SELECT wait_for_vacuum_stats($$
+    SELECT sum(tuples_deleted) = 0 AND sum(total_time) = 0
+    FROM gp_stat_vacuum_tables WHERE relname = 'vstat_heap' $$);
+ wait_for_vacuum_stats 
+-----------------------
+ t
+(1 row)
+
+SELECT sum(tuples_deleted) = 0 AS db_reset_ok
+FROM gp_stat_vacuum_database WHERE datname = current_database();
+ db_reset_ok 
+-------------
+ t
+(1 row)
+
+-- the rest of the statistics is untouched
+SELECT sum(vacuum_count) > 0 AS vacuum_count_kept
+FROM gp_stat_all_tables WHERE relname = 'vstat_heap';
+ vacuum_count_kept 
+-------------------
+ t
+(1 row)
+
 DROP FUNCTION wait_for_vacuum_stats(text);
 DROP FUNCTION vstat_clear_segment_snapshots();
 DROP TABLE vstat_heap;

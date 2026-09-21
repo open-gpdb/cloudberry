@@ -30,7 +30,7 @@ use strict;
 use warnings;
 use PostgresNode;
 use TestLib;
-use Test::More tests => 17;
+use Test::More tests => 23;
 
 my $node = get_new_node('vacuum_stats');
 $node->init;
@@ -243,6 +243,67 @@ ok( $node->poll_query_until(
 		'SELECT delay_time > 0 AND delay_time <= total_time '
 		  . "FROM pg_stat_vacuum_tables WHERE relname = 'vestat'"),
 	'the cost-based delay is counted, and is part of the total time');
+
+# vacuum_stats_reset(relid) throws away the counters of one relation and
+# leaves everything else alone.
+$node->safe_psql('postgres',
+	'CREATE TABLE vestat2 (x int) WITH (autovacuum_enabled = off)');
+$node->safe_psql('postgres',
+	'INSERT INTO vestat2 SELECT g FROM generate_series(1, 1000) g');
+$node->safe_psql('postgres', 'DELETE FROM vestat2');
+$node->safe_psql('postgres', 'VACUUM vestat2');
+ok( $node->poll_query_until(
+		'postgres',
+		'SELECT tuples_deleted > 0 '
+		  . "FROM pg_stat_vacuum_tables WHERE relname = 'vestat2'"),
+	'the second table has statistics of its own');
+
+my $vacuum_count = $node->safe_psql('postgres',
+	"SELECT vacuum_count FROM pg_stat_all_tables WHERE relname = 'vestat2'");
+
+$node->safe_psql('postgres',
+	"SELECT vacuum_stats_reset('vestat2'::regclass::oid)");
+ok( $node->poll_query_until(
+		'postgres',
+		'SELECT tuples_deleted = 0 AND total_time = 0 '
+		  . "FROM pg_stat_vacuum_tables WHERE relname = 'vestat2'"),
+	'vacuum_stats_reset(relid) resets that relation');
+is( $node->safe_psql(
+		'postgres',
+		"SELECT vacuum_count FROM pg_stat_all_tables WHERE relname = 'vestat2'"),
+	$vacuum_count,
+	'vacuum_stats_reset(relid) leaves the other statistics alone');
+is( $node->safe_psql(
+		'postgres',
+		'SELECT tuples_deleted > 0 '
+		  . "FROM pg_stat_vacuum_tables WHERE relname = 'vestat'"),
+	't',
+	'vacuum_stats_reset(relid) leaves the other relations alone');
+
+# vacuum_stats_reset() throws away the counters of the whole database,
+# the per-database totals included.
+$node->safe_psql('postgres', 'SELECT vacuum_stats_reset()');
+ok( $node->poll_query_until(
+		'postgres',
+		'SELECT s.tuples_deleted = 0 AND s.total_time = 0 '
+		  . 'AND d.tuples_deleted = 0 AND d.total_time = 0 '
+		  . 'FROM pg_stat_vacuum_tables s, pg_stat_vacuum_database d '
+		  . "WHERE s.relname = 'vestat' AND d.datname = 'postgres'"),
+	'vacuum_stats_reset() resets the whole database');
+is( $node->safe_psql(
+		'postgres',
+		"SELECT vacuum_count FROM pg_stat_all_tables WHERE relname = 'vestat2'"),
+	$vacuum_count,
+	'vacuum_stats_reset() leaves the other statistics alone');
+
+# Refill the counters for the checks below.
+$node->safe_psql('postgres',
+	'INSERT INTO vestat SELECT g FROM generate_series(1, 1000) g');
+$node->safe_psql('postgres', 'DELETE FROM vestat');
+$node->safe_psql('postgres', 'VACUUM vestat');
+$node->poll_query_until('postgres',
+	'SELECT total_time > 0 '
+	  . "FROM pg_stat_vacuum_tables WHERE relname = 'vestat'");
 
 # Like the rest of the collected statistics, they are reset by crash
 # recovery.

@@ -75,10 +75,18 @@ track_vacuum_statistics = on
 ```
 
 The counters are collected only with this on (`gpconfig -c
-track_vacuum_statistics -v on; gpstop -u`).  It is superuser-settable and
-reaches the segments, where vacuum does its work, so it can also be turned
-on for a single session.  While it is off, vacuum reports nothing and the
-views read as zeroes.
+track_vacuum_statistics -v on; gpstop -u`; no restart needed).  It is
+superuser-settable and reaches the segments, where vacuum does its work, so it
+can also be turned on for a single session.  While it is off, vacuum reports
+nothing and the views read as zeroes.
+
+Nothing is allocated for these statistics until they are collected: the
+collector keeps them in a hash table of their own, created when the first
+relation of a database is vacuumed, so a database where nothing has been
+vacuumed -- or where the GUC has never been on -- spends no memory and no
+space in its statistics file on them.  Turning the GUC off again stops the
+collection but leaves what was collected in place; the resetting functions
+below free it.
 
 ## Counters
 
@@ -203,4 +211,23 @@ LIMIT 10;
 ```
 
 The counters are reset together with the rest of the collected statistics
-(`pg_stat_reset()`, `pg_stat_reset_single_table_counters()`).
+(`pg_stat_reset()`, `pg_stat_reset_single_table_counters()`), and can also be
+reset on their own, leaving everything else alone:
+
+```sql
+SELECT vacuum_stats_reset();                        -- this database
+SELECT vacuum_stats_reset('my_table'::regclass);    -- one relation
+```
+
+Like every other resetting function these act on the node they run on, so on a
+cluster the segments have to be told as well:
+
+```sql
+SELECT vacuum_stats_reset();
+SELECT * FROM gp_vacuum_stats_reset();
+
+SELECT vacuum_stats_reset('my_table'::regclass::oid);
+SELECT * FROM gp_vacuum_stats_reset('my_table'::regclass::oid);
+```
+
+They are revoked from `PUBLIC`, like the server's own resetting functions.
