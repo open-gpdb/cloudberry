@@ -165,9 +165,14 @@ AO reports remaining dead tuples and accumulated phase time for the
 current worker.  The `rev_*` counters describe DML activity over time and
 remain in the statistics views; they are not attributed to a vacuum run.
 
-- `t/001_vacuum_statistics.pl` — one TAP suite covering tracking GUC, heap/index counters, snapshots and VM transitions, VACUUM FULL and cost delay, index page accounting, clean restart and crash recovery, AO row and column counters, snapshot memory lifetime.
-  Shared wait helpers poll collector reports; no fixed synchronization delays
-  are used.
+- `t/001_vacuum_statistics.pl` — one TAP suite with separate subtests for
+  exact heap/index/AO counters, repeatable-read snapshots, VM transitions,
+  GUCs, VACUUM FULL, cost delay, resets, database totals, memory lifetime,
+  clean restart and crash recovery.  The snapshot and VM scenarios are
+  adapted from upstream v44.  A shared wait helper polls an ANALYZE report
+  sent after VACUUM/reset in the same session; DML checks wait for the
+  affected table's update report.  No fixed delays are used to synchronize
+  statistics collection.
 - `src/test/isolation/specs/vacuum-extending-in-repeatable-read.spec` —
   an isolation test checking that dead tuples held back by a repeatable
   read snapshot show up in `dead_tuples` and move to `tuples_deleted`
@@ -233,4 +238,32 @@ LIMIT 10;
 ```
 
 The counters are reset together with the rest of the collected statistics
-(`pg_stat_reset()`, `pg_stat_reset_single_table_counters()`).
+(`pg_stat_reset()`, `pg_stat_reset_single_table_counters()`), and can also be
+reset on their own, the `rev_*` counters included, leaving everything else
+alone:
+
+```sql
+SELECT vacuum_stats_reset();                        -- this database
+SELECT vacuum_stats_reset('my_table'::regclass);    -- one relation
+```
+
+Like every other resetting function these act on the node they run on, so on a
+cluster the segments have to be told as well:
+
+```sql
+SELECT vacuum_stats_reset();
+SELECT * FROM gp_vacuum_stats_reset();
+
+SELECT vacuum_stats_reset('my_table'::regclass::oid);
+SELECT * FROM gp_vacuum_stats_reset('my_table'::regclass::oid);
+```
+
+The relation overload clears only that relation's counters; its indexes and
+the database totals are independent reset targets. A NULL argument does
+nothing, and OID zero is rejected rather than interpreted as a database
+reset. Use the no-argument overload to reset the current database.
+
+They are revoked from `PUBLIC`, like the server's own resetting functions.
+Like `pg_stat_reset()`, `vacuum_stats_reset()` leaves the shared catalogs
+alone, since they do not belong to the current database; reset one of them
+by its OID.

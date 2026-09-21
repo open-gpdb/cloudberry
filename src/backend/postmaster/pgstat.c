@@ -39,6 +39,7 @@
 #include "access/twophase_rmgr.h"
 #include "access/xact.h"
 #include "access/xlog.h"
+#include "catalog/catalog.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_proc.h"
 #include "executor/instrument.h"
@@ -374,6 +375,7 @@ static void pgstat_recv_resetreplslotcounter(PgStat_MsgResetreplslotcounter *msg
 static void pgstat_recv_autovac(PgStat_MsgAutovacStart *msg, int len);
 static void pgstat_recv_vacuum(PgStat_MsgVacuum *msg, int len);
 static void pgstat_recv_vacstats(PgStat_MsgVacstats *msg, int len);
+static void pgstat_recv_resetvacstats(PgStat_MsgResetVacstats *msg, int len);
 static PgStat_VacuumStats *pgstat_get_vacstats_entry(PgStat_StatDBEntry *dbentry,
 													 Oid tableoid, bool create);
 static void pgstat_recv_analyze(PgStat_MsgAnalyze *msg, int len);
@@ -1670,6 +1672,36 @@ pgstat_report_vacstats(Oid tableoid, bool shared, bool isindex,
 	msg.m_tableoid = tableoid;
 	msg.m_isindex = isindex;
 	msg.m_stats = *stats;
+	pgstat_send(&msg, sizeof(msg));
+}
+
+/* ----------
+ * pgstat_reset_vacuum_stats() -
+ *
+ *	Tell the collector to throw away the vacuum counters of one relation of
+ *	this database, or of all of them when resetall is true.
+ * ----------
+ */
+void
+pgstat_reset_vacuum_stats(Oid relid, bool resetall)
+{
+	PgStat_MsgResetVacstats msg;
+
+	/* An invalid relation OID must never turn into a database-wide reset. */
+	if (!resetall && !OidIsValid(relid))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("invalid relation OID: %u", relid)));
+	Assert(!resetall || !OidIsValid(relid));
+
+	if (pgStatSock == PGINVALID_SOCKET)
+		return;
+
+	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_RESETVACSTATS);
+	msg.m_databaseid = !resetall && IsSharedRelation(relid) ?
+		InvalidOid : MyDatabaseId;
+	msg.m_objectid = relid;
+	msg.m_resetall = resetall;
 	pgstat_send(&msg, sizeof(msg));
 }
 
@@ -3785,6 +3817,10 @@ PgstatCollectorMain(int argc, char *argv[])
 
 				case PGSTAT_MTYPE_VACSTATS:
 					pgstat_recv_vacstats(&msg.msg_vacstats, len);
+					break;
+
+				case PGSTAT_MTYPE_RESETVACSTATS:
+					pgstat_recv_resetvacstats(&msg.msg_resetvacstats, len);
 					break;
 
 				case PGSTAT_MTYPE_ANALYZE:
@@ -5927,6 +5963,64 @@ pgstat_recv_vacstats(PgStat_MsgVacstats *msg, int len)
 		msg->m_stats.wraparound_vacuum_count;
 	dbentry->n_vacuum_stats.total_time += msg->m_stats.total_time;
 	dbentry->n_vacuum_stats.delay_time += msg->m_stats.delay_time;
+}
+
+/* ----------
+ * pgstat_recv_resetvacstats() -
+ *
+ *	Throw away the vacuum counters of one relation, or of the whole database
+ *	when no relation is given, together with the "rev" counters kept in the
+ *	table entries.  The other statistics are left alone.
+ * ----------
+ */
+static void
+pgstat_recv_resetvacstats(PgStat_MsgResetVacstats *msg, int len)
+{
+	PgStat_StatDBEntry *dbentry;
+	PgStat_StatTabEntry *tabentry;
+	HASH_SEQ_STATUS hstat;
+
+	dbentry = pgstat_get_db_entry(msg->m_databaseid, false);
+
+	if (!dbentry)
+		return;
+
+	if (!msg->m_resetall)
+	{
+		if (dbentry->vacuum_stats != NULL)
+			(void) hash_search(dbentry->vacuum_stats,
+							   (void *) &(msg->m_objectid),
+							   HASH_REMOVE, NULL);
+
+		/* the "rev" counters live in the table entry */
+		tabentry = (PgStat_StatTabEntry *) hash_search(dbentry->tables,
+													   (void *) &(msg->m_objectid),
+													   HASH_FIND, NULL);
+		if (tabentry != NULL)
+		{
+			tabentry->rev_all_frozen_pages = 0;
+			tabentry->rev_all_visible_pages = 0;
+		}
+		return;
+	}
+
+	/* the whole database: the per-relation counters and their totals */
+	if (dbentry->vacuum_stats != NULL)
+	{
+		hash_destroy(dbentry->vacuum_stats);
+		dbentry->vacuum_stats = NULL;
+	}
+
+	hash_seq_init(&hstat, dbentry->tables);
+	while ((tabentry = (PgStat_StatTabEntry *) hash_seq_search(&hstat)) != NULL)
+	{
+		tabentry->rev_all_frozen_pages = 0;
+		tabentry->rev_all_visible_pages = 0;
+	}
+
+	MemSet(&dbentry->n_vacuum_stats, 0, sizeof(dbentry->n_vacuum_stats));
+	dbentry->n_rev_all_frozen_pages = 0;
+	dbentry->n_rev_all_visible_pages = 0;
 }
 
 /* ----------
