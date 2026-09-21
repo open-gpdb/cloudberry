@@ -38,19 +38,14 @@
 PG_MODULE_MAGIC;
 
 /*
- * Fetch the vacuum counters for a relation (table or index), or NULL if
- * the statistics collector has no entry for it.
+ * Fetch the vacuum counters for a relation (table or index), or NULL if the
+ * statistics collector has none: the relation was never vacuumed, or the
+ * counters are not collected at all (track_vacuum_statistics is off).
  */
 static PgStat_VacuumStats *
 fetch_rel_vacuum_stats(Oid relid)
 {
-	PgStat_StatTabEntry *tabentry;
-
-	tabentry = pgstat_fetch_stat_tabentry(relid);
-	if (tabentry == NULL)
-		return NULL;
-
-	return &tabentry->vacuum_stats;
+	return pgstat_fetch_stat_vacuum_stats(relid);
 }
 
 /*
@@ -92,9 +87,9 @@ funcname(PG_FUNCTION_ARGS) \
 }
 
 /*
- * The "rev" counters live directly in the relation/database entries, not
- * in the embedded PgStat_VacuumStats, since they are fed from the regular
- * relation statistics rather than from the vacuum report.
+ * The "rev" counters live directly in the relation/database entries, rather
+ * than with the vacuum counters, since they are fed from the regular relation
+ * statistics rather than from the vacuum report.
  */
 #define DEFINE_REL_ENTRY_FUNC(funcname, field) \
 PG_FUNCTION_INFO_V1(funcname); \
@@ -141,3 +136,32 @@ DEFINE_DB_ENTRY_FUNC(pg_stat_get_db_vacuum_rev_all_frozen_pages, n_rev_all_froze
 DEFINE_DB_ENTRY_FUNC(pg_stat_get_db_vacuum_rev_all_visible_pages, n_rev_all_visible_pages)
 DEFINE_DB_VACSTAT_FUNC(pg_stat_get_db_vacuum_total_time, total_time)
 DEFINE_DB_VACSTAT_FUNC(pg_stat_get_db_vacuum_delay_time, delay_time)
+
+/*
+ * Throw away the vacuum counters of one relation, or of the whole database,
+ * without touching the rest of the statistics -- which is what
+ * pg_stat_reset() and pg_stat_reset_single_table_counters() would do.
+ *
+ * Like the other resetting functions this acts on the node it runs on, so on
+ * a cluster it has to be dispatched to the segments as well; see
+ * gp_vacuum_stats_reset() in the extension script.
+ */
+PG_FUNCTION_INFO_V1(vacuum_stats_reset);
+Datum
+vacuum_stats_reset(PG_FUNCTION_ARGS)
+{
+	pgstat_reset_vacuum_stats(InvalidOid);
+
+	PG_RETURN_VOID();
+}
+
+PG_FUNCTION_INFO_V1(vacuum_stats_reset_relation);
+Datum
+vacuum_stats_reset_relation(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+
+	pgstat_reset_vacuum_stats(relid);
+
+	PG_RETURN_VOID();
+}
