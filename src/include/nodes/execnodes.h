@@ -458,6 +458,14 @@ typedef struct ResultRelInfo
 	/* Have the projection and the slots above been initialized? */
 	bool		ri_projectNewInfoValid;
 
+	/*
+	 * Does ri_projectNew read any column from the old tuple?  It does not when
+	 * the subplan assigns every live column of the relation, which is what
+	 * ORCA emits for a non-split UPDATE.  Append-optimized tables cannot fetch
+	 * a tuple by tid at all, so this is what lets them run such a plan.
+	 */
+	bool		ri_projectNewNeedsOldTuple;
+
 	/* triggers to be fired, if any */
 	TriggerDesc *ri_TrigDesc;
 

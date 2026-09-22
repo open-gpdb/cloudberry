@@ -14435,12 +14435,13 @@ where t.j = tt.j;
                                   QUERY PLAN                                  
 ------------------------------------------------------------------------------
  Update on window_agg_test t
-   ->  Explicit Redistribute Motion 3:3  (slice1; segments: 3)
-         ->  Hash Join
-               Hash Cond: (tt.j = t.j)
-               ->  Redistribute Motion 1:3  (slice2; segments: 1)
-                     Hash Key: tt.j
-                     ->  Subquery Scan on tt
+   ->  Result
+         ->  Explicit Redistribute Motion 1:3  (slice1; segments: 1)
+               ->  Hash Join
+                     Hash Cond: (t.j = window_agg_test.j)
+                     ->  Gather Motion 3:1  (slice2; segments: 3)
+                           ->  Seq Scan on window_agg_test t
+                     ->  Hash
                            ->  WindowAgg
                                  Order By: window_agg_test.j
                                  ->  Gather Motion 3:1  (slice3; segments: 3)
@@ -14448,12 +14449,8 @@ where t.j = tt.j;
                                        ->  Sort
                                              Sort Key: window_agg_test.j
                                              ->  Seq Scan on window_agg_test
-               ->  Hash
-                     ->  Redistribute Motion 3:3  (slice4; segments: 3)
-                           Hash Key: t.j
-                           ->  Seq Scan on window_agg_test t
- Optimizer: Postgres query optimizer
-(19 rows)
+ Optimizer: GPORCA
+(16 rows)
 
 ----------------------------------
 -- Test ORCA support for const TVF
