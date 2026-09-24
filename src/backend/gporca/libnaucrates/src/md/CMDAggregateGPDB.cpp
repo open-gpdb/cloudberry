@@ -33,8 +33,7 @@ CMDAggregateGPDB::CMDAggregateGPDB(CMemoryPool *mp, IMDId *mdid,
 								   CMDName *mdname, IMDId *result_type_mdid,
 								   IMDId *intermediate_result_type_mdid,
 								   BOOL fOrdered, BOOL is_splittable,
-								   BOOL is_hash_agg_capable, BOOL is_repsafe,
-								   BOOL is_empty_input_null)
+								   BOOL is_hash_agg_capable, BOOL is_repsafe)
 	: m_mp(mp),
 	  m_mdid(mdid),
 	  m_mdname(mdname),
@@ -43,8 +42,7 @@ CMDAggregateGPDB::CMDAggregateGPDB(CMemoryPool *mp, IMDId *mdid,
 	  m_is_ordered(fOrdered),
 	  m_is_splittable(is_splittable),
 	  m_hash_agg_capable(is_hash_agg_capable),
-	  m_is_repsafe(is_repsafe),
-	  m_is_empty_input_null(is_empty_input_null)
+	  m_is_repsafe(is_repsafe)
 {
 	GPOS_ASSERT(mdid->IsValid());
 }
@@ -168,12 +166,6 @@ CMDAggregateGPDB::Serialize(CXMLSerializer *xml_serializer) const
 		xml_serializer->AddAttribute(
 			CDXLTokens::GetDXLTokenStr(EdxltokenGPDBIsAggRepSafe),
 			m_is_repsafe);
-	}
-	if (!m_is_empty_input_null)
-	{
-		xml_serializer->AddAttribute(
-			CDXLTokens::GetDXLTokenStr(EdxltokenGPDBIsAggEmptyInputNull),
-			m_is_empty_input_null);
 	}
 
 	xml_serializer->AddAttribute(
