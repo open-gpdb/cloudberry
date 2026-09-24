@@ -835,6 +835,97 @@ PexprScalarAggApply(CMemoryPool *mp, CExpression *pexprOuter,
 
 //---------------------------------------------------------------------------
 //	@function:
+//		PexprReplaceScalarSubqueriesWithNull
+//
+//	@doc:
+//		Return a copy of the scalar expression with every scalar subquery
+//		replaced by a NULL of its type
+//
+//---------------------------------------------------------------------------
+static CExpression *
+PexprReplaceScalarSubqueriesWithNull(CMemoryPool *mp, CExpression *pexpr)
+{
+	GPOS_CHECK_STACK_SIZE;
+
+	COperator *pop = pexpr->Pop();
+	if (COperator::EopScalarSubquery == pop->Eopid())
+	{
+		CMDAccessor *md_accessor = COptCtxt::PoctxtFromTLS()->Pmda();
+		CScalarSubquery *popSubquery = CScalarSubquery::PopConvert(pop);
+		return CUtils::PexprScalarConstNull(
+			mp, md_accessor->RetrieveType(popSubquery->MdidType()),
+			popSubquery->Pcr()->TypeModifier());
+	}
+
+	const ULONG arity = pexpr->Arity();
+	if (0 == arity)
+	{
+		pexpr->AddRef();
+		return pexpr;
+	}
+
+	CExpressionArray *pdrgpexprChildren = GPOS_NEW(mp) CExpressionArray(mp);
+	for (ULONG ul = 0; ul < arity; ul++)
+	{
+		CExpression *pexprChild = (*pexpr)[ul];
+		if (pexprChild->Pop()->FScalar())
+		{
+			pdrgpexprChildren->Append(
+				PexprReplaceScalarSubqueriesWithNull(mp, pexprChild));
+		}
+		else
+		{
+			pexprChild->AddRef();
+			pdrgpexprChildren->Append(pexprChild);
+		}
+	}
+	pop->AddRef();
+	return GPOS_NEW(mp) CExpression(mp, pop, pdrgpexprChildren);
+}
+
+
+//---------------------------------------------------------------------------
+//	@function:
+//		FNullRejectingOnSubqueries
+//
+//	@doc:
+//		Return true if the boolean scalar expression cannot be true when its
+//		scalar subqueries return NULL, e.g. "a > (SELECT ...)", but not
+//		"(SELECT ...) IS NULL" or "coalesce((SELECT ...), 0) = 0"
+//
+//---------------------------------------------------------------------------
+static BOOL
+FNullRejectingOnSubqueries(CMemoryPool *mp, CExpression *pexprScalar)
+{
+	COperator::EOperatorId eopid = pexprScalar->Pop()->Eopid();
+	if (COperator::EopScalarProjectList == eopid ||
+		COperator::EopScalarProjectElement == eopid)
+	{
+		return false;
+	}
+
+	// only a boolean expression can be the predicate, its operands are
+	// covered by the check on the predicate itself
+	CMDAccessor *md_accessor = COptCtxt::PoctxtFromTLS()->Pmda();
+	IMDId *mdid_type = CScalar::PopConvert(pexprScalar->Pop())->MdidType();
+	if (nullptr == mdid_type ||
+		!mdid_type->Equals(md_accessor->PtMDType<IMDTypeBool>()->MDId()))
+	{
+		return true;
+	}
+
+	CExpression *pexprNulls =
+		PexprReplaceScalarSubqueriesWithNull(mp, pexprScalar);
+	CScalar::EBoolEvalResult eber = CScalar::EberEvaluate(mp, pexprNulls);
+	pexprNulls->Release();
+
+	return CScalar::EberNull == eber || CScalar::EberFalse == eber ||
+		   CScalar::EberNotTrue == eber;
+}
+
+
+//---------------------------------------------------------------------------
+//	@function:
 //		CSubqueryHandler::SSubqueryDesc::SetCorrelatedExecution
 //
 //	@doc:
@@ -2705,6 +2796,17 @@ CSubqueryHandler::FRecursiveHandler(CExpression *pexprOuter,
 		COperator::EopScalarProjectElement == popScalar->Eopid())
 	{
 		// set subquery context to Value
+		esqctxt = EsqctxtValue;
+	}
+
+	// In a filter a scalar subquery is unnested into an inner apply, which
+	// drops the outer rows the subquery returns no row for. That is right
+	// only if the predicate cannot be true when the subquery is NULL, like
+	// "a > (SELECT ...)"; for "(SELECT ...) IS NULL" or
+	// "coalesce((SELECT ...), 0) = 0" those rows must be kept.
+	if (EsqctxtFilter == esqctxt && !CPredicateUtils::FAnd(pexprScalar) &&
+		!FNullRejectingOnSubqueries(mp, pexprScalar))
+	{
 		esqctxt = EsqctxtValue;
 	}
 

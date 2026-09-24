@@ -1720,6 +1720,14 @@ select a, b, d from empty_agg_outer o
 select a, d from empty_agg_outer o
   where o.a in (select sum_from_zero(i.a) from empty_agg_inner i where i.a = o.d)
   order by 1, 2;
+-- a filter that can be true for a NULL subquery keeps the rows the subquery
+-- returns no row for
+select a, d from empty_agg_outer o
+  where coalesce((select sum(i.b) from empty_agg_inner i where i.a = o.d), 0) = 0
+  order by 1, 2;
+select a, d from empty_agg_outer o
+  where (select i.b from empty_agg_inner i where i.a = o.d and i.b = 10) is null
+  order by 1, 2;
 set optimizer to on;
 explain (costs off) select a, b, d from empty_agg_outer o
   where o.a > (select regr_count(i.a, i.b) from empty_agg_inner i where i.a = o.d);
@@ -1741,6 +1749,14 @@ select a, b, d from empty_agg_outer o
   order by 1, 2, 3;
 select a, d from empty_agg_outer o
   where o.a in (select sum_from_zero(i.a) from empty_agg_inner i where i.a = o.d)
+  order by 1, 2;
+-- a filter that can be true for a NULL subquery keeps the rows the subquery
+-- returns no row for
+select a, d from empty_agg_outer o
+  where coalesce((select sum(i.b) from empty_agg_inner i where i.a = o.d), 0) = 0
+  order by 1, 2;
+select a, d from empty_agg_outer o
+  where (select i.b from empty_agg_inner i where i.a = o.d and i.b = 10) is null
   order by 1, 2;
 
 -- The value over empty input is computed for the rows without a match only:

@@ -4545,6 +4545,28 @@ select a, d from empty_agg_outer o
  0 | 7
 (1 row)
 
+-- a filter that can be true for a NULL subquery keeps the rows the subquery
+-- returns no row for
+select a, d from empty_agg_outer o
+  where coalesce((select sum(i.b) from empty_agg_inner i where i.a = o.d), 0) = 0
+  order by 1, 2;
+ a | d 
+---+---
+ 0 | 7
+ 1 | 5
+ 2 | 9
+(3 rows)
+
+select a, d from empty_agg_outer o
+  where (select i.b from empty_agg_inner i where i.a = o.d and i.b = 10) is null
+  order by 1, 2;
+ a | d 
+---+---
+ 0 | 7
+ 1 | 5
+ 2 | 9
+(3 rows)
+
 set optimizer to on;
 explain (costs off) select a, b, d from empty_agg_outer o
   where o.a > (select regr_count(i.a, i.b) from empty_agg_inner i where i.a = o.d);
@@ -4647,13 +4669,35 @@ select a, d from empty_agg_outer o
  0 | 7
 (1 row)
 
+-- a filter that can be true for a NULL subquery keeps the rows the subquery
+-- returns no row for
+select a, d from empty_agg_outer o
+  where coalesce((select sum(i.b) from empty_agg_inner i where i.a = o.d), 0) = 0
+  order by 1, 2;
+ a | d 
+---+---
+ 0 | 7
+ 1 | 5
+ 2 | 9
+(3 rows)
+
+select a, d from empty_agg_outer o
+  where (select i.b from empty_agg_inner i where i.a = o.d and i.b = 10) is null
+  order by 1, 2;
+ a | d 
+---+---
+ 0 | 7
+ 1 | 5
+ 2 | 9
+(3 rows)
+
 -- The value over empty input is computed for the rows without a match only:
 -- "10 / count(*)" divides by zero there, as the correlated subquery does, but
 -- must not fail when every outer row has a match.
 set optimizer to off;
 select a, b, d from empty_agg_outer o
   where o.a > (select 10 / count(*) from empty_agg_inner i where i.a = o.d);
-ERROR:  division by zero  (seg0 slice1 127.0.0.1:6102 pid=72089)
+ERROR:  division by zero  (seg2 slice1 127.0.0.1:6104 pid=78793)
 select a, b, d from empty_agg_outer o
   where o.d = 1
     and o.a > (select 10 / count(*) from empty_agg_inner i where i.a = o.d)
@@ -4665,7 +4709,7 @@ select a, b, d from empty_agg_outer o
 set optimizer to on;
 select a, b, d from empty_agg_outer o
   where o.a > (select 10 / count(*) from empty_agg_inner i where i.a = o.d);
-ERROR:  division by zero  (seg0 slice1 127.0.0.1:6102 pid=72089)
+ERROR:  division by zero  (seg0 slice1 127.0.0.1:6102 pid=78791)
 select a, b, d from empty_agg_outer o
   where o.d = 1
     and o.a > (select 10 / count(*) from empty_agg_inner i where i.a = o.d)
