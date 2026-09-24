@@ -1809,6 +1809,14 @@ select a, b, d from empty_agg_outer o
 select a, d from empty_agg_outer o
   where o.a in (select sum_from_zero(i.a) from empty_agg_inner i where i.a = o.d)
   order by 1, 2;
+-- a filter that can be true for a NULL subquery keeps the rows the subquery
+-- returns no row for
+select a, d from empty_agg_outer o
+  where coalesce((select sum(i.b) from empty_agg_inner i where i.a = o.d), 0) = 0
+  order by 1, 2;
+select a, d from empty_agg_outer o
+  where (select i.b from empty_agg_inner i where i.a = o.d and i.b = 10) is null
+  order by 1, 2;
 set optimizer to on;
 explain (costs off) select a, b, d from empty_agg_outer o
   where o.a > (select regr_count(i.a, i.b) from empty_agg_inner i where i.a = o.d);
@@ -1830,6 +1838,14 @@ select a, b, d from empty_agg_outer o
   order by 1, 2, 3;
 select a, d from empty_agg_outer o
   where o.a in (select sum_from_zero(i.a) from empty_agg_inner i where i.a = o.d)
+  order by 1, 2;
+-- a filter that can be true for a NULL subquery keeps the rows the subquery
+-- returns no row for
+select a, d from empty_agg_outer o
+  where coalesce((select sum(i.b) from empty_agg_inner i where i.a = o.d), 0) = 0
+  order by 1, 2;
+select a, d from empty_agg_outer o
+  where (select i.b from empty_agg_inner i where i.a = o.d and i.b = 10) is null
   order by 1, 2;
 
 -- The value over empty input is computed for the rows without a match only:
@@ -1987,6 +2003,55 @@ drop function empty_agg_divide_stable_final(int);
 drop table empty_agg_matched;
 drop aggregate empty_agg_divide(int);
 drop function empty_agg_divide_final(int);
+
+-- NULL rejection must hold for each subquery individually, not just when
+-- both are NULL. Each matching outer row has input in only one subquery.
+set optimizer to off;
+select a from empty_agg_outer o
+  where coalesce((select sum(i.b) from empty_agg_inner i
+                   where i.a = o.a and i.b = 10),
+                 (select sum(i.b) from empty_agg_inner i
+                   where i.a = o.a and i.b = 20)) > 0 order by 1;
+set optimizer to on;
+explain (costs off) select a from empty_agg_outer o
+  where coalesce((select sum(i.b) from empty_agg_inner i
+                   where i.a = o.a and i.b = 10),
+                 (select sum(i.b) from empty_agg_inner i
+                   where i.a = o.a and i.b = 20)) > 0;
+select a from empty_agg_outer o
+  where coalesce((select sum(i.b) from empty_agg_inner i
+                   where i.a = o.a and i.b = 10),
+                 (select sum(i.b) from empty_agg_inner i
+                   where i.a = o.a and i.b = 20)) > 0 order by 1;
+
+-- Array index lists and CASE arms are structural nodes without a result
+-- type. NULL-rejection checks must not call MdidType() on those nodes.
+set optimizer to off;
+select a from empty_agg_outer o
+  where (array[30,20])[(select max(i.a) from empty_agg_inner i where i.a = o.a)]
+      = (select max(i.b) from empty_agg_inner i where i.a = o.a) order by 1;
+select a from empty_agg_outer o
+  where case o.a
+          when 1 then (select max(i.b) from empty_agg_inner i where i.a = o.a)
+          else 20
+        end = (select max(i.b) from empty_agg_inner i where i.a = o.a) order by 1;
+set optimizer to on;
+explain (costs off) select a from empty_agg_outer o
+  where (array[30,20])[(select max(i.a) from empty_agg_inner i where i.a = o.a)]
+      = (select max(i.b) from empty_agg_inner i where i.a = o.a);
+select a from empty_agg_outer o
+  where (array[30,20])[(select max(i.a) from empty_agg_inner i where i.a = o.a)]
+      = (select max(i.b) from empty_agg_inner i where i.a = o.a) order by 1;
+explain (costs off) select a from empty_agg_outer o
+  where case o.a
+          when 1 then (select max(i.b) from empty_agg_inner i where i.a = o.a)
+          else 20
+        end = (select max(i.b) from empty_agg_inner i where i.a = o.a);
+select a from empty_agg_outer o
+  where case o.a
+          when 1 then (select max(i.b) from empty_agg_inner i where i.a = o.a)
+          else 20
+        end = (select max(i.b) from empty_agg_inner i where i.a = o.a) order by 1;
 
 reset optimizer;
 drop aggregate sum_from_zero(int);
