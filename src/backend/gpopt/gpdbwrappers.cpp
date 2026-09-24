@@ -41,6 +41,7 @@ extern "C" {
 #include "access/parallel.h"
 #include "catalog/pg_aggregate.h"
 #include "catalog/pg_inherits.h"
+#include "cdb/cdbsubselect.h"
 #include "cdb/cdbvars.h"
 #include "foreign/fdwapi.h"
 #include "nodes/nodeFuncs.h"
@@ -601,6 +602,18 @@ gpdb::IsAggPartialCapable(Oid aggid)
 	{
 		/* catalog tables: pg_aggregate */
 		return is_agg_partial_capable(aggid);
+	}
+	GP_WRAP_END;
+	return false;
+}
+
+bool
+gpdb::IsAggEmptyInputNull(Oid aggid)
+{
+	GP_WRAP_START;
+	{
+		/* catalog tables: pg_aggregate, pg_proc */
+		return agg_empty_input_is_null(aggid);
 	}
 	GP_WRAP_END;
 	return false;
