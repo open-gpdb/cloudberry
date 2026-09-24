@@ -16,7 +16,9 @@
 
 #include "access/htup_details.h"
 #include "access/skey.h"
+#include "catalog/pg_aggregate.h"
 #include "catalog/pg_operator.h"
+#include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
 #include "nodes/makefuncs.h"
 #include "optimizer/clauses.h"
@@ -29,7 +31,7 @@
 #include "parser/parse_relation.h"	/* addRangeTableEntryForSubquery() */
 #include "parser/parsetree.h"	/* rt_fetch() */
 #include "rewrite/rewriteManip.h"
-#include "utils/fmgroids.h"		/* F_COUNT_ANY, F_COUNT_ */
+#include "utils/builtins.h"		/* TextDatumGetCString() */
 #include "utils/lsyscache.h"	/* get_op_btree_interpretation() */
 #include "utils/syscache.h"
 #include "cdb/cdbsubselect.h"	/* me */
@@ -46,16 +48,19 @@ static Node *add_null_match_clause(Node *clause);
 static Expr *build_match_flag_case_expr(Var *flagVar, Var *aggVar, Expr *defaultExpr);
 
 /*
- * State of replace_agg_with_empty_default_mutator().
+ * State of replace_agg_with_empty_input_mutator().
  */
-typedef struct EmptyInputDefaultContext
+typedef struct EmptyInputContext
 {
-	bool		sawNonNullDefault;	/* has a COUNT been replaced by 0? */
-} EmptyInputDefaultContext;
+	Query	   *subselect;		/* the original, correlated subquery */
+	bool		bareAggref;		/* is the whole expression a single Aggref? */
+	bool		allConst;		/* has every Aggref been replaced by a Const? */
+} EmptyInputContext;
 
-static Expr *build_empty_input_default_expr(Node *expr,
-											EmptyInputDefaultContext *ctx);
-static Node *replace_agg_with_empty_default_mutator(Node *node, void *context);
+static Const *make_init_value_const(Oid type, Oid collation, Datum textInitVal);
+static Node *make_empty_input_agg_sublink(Query *subselect, Aggref *aggref);
+static Node *replace_agg_with_empty_input_mutator(Node *node,
+												  EmptyInputContext *ctx);
 static bool no_match_row_survives(PlannerInfo *root, OpExpr *opexp,
 								  Expr *defaultExpr);
 
@@ -668,42 +673,40 @@ convert_EXPR_to_join(PlannerInfo *root, OpExpr *opexp)
 
 		/*
 		 * An INNER join drops outer rows that have no matching inner
-		 * rows.  Without the pull-up they are kept: the subquery
-		 * computes its expression over empty input (COUNT = 0, other
-		 * aggregates NULL) and the comparison may still pass.
+		 * rows.  Without the pull-up they are kept: the subquery computes
+		 * its expression over empty input, and the comparison may pass.
+		 * COUNT is 0 there, rank() of a hypothetical row is 1, an
+		 * aggregate with a non-NULL initial state returns that state.
 		 *
-		 * So plug the empty-input value into the comparison and run
-		 * eval_const_expressions() on it.  FALSE or NULL means no-match
-		 * rows cannot pass and the INNER join is correct; otherwise use
-		 * a LEFT join to keep them.
+		 * So build the expression's value over empty input, see
+		 * replace_agg_with_empty_input_mutator().  If it is known at plan
+		 * time, plug it into the comparison and constant-fold: FALSE or
+		 * NULL means no-match rows cannot pass and the INNER join is
+		 * correct.  Otherwise use a LEFT join to keep them, and compute
+		 * the comparison for them against that value.
 		 */
 		Expr	   *defaultExpr;
 		TargetEntry *flagTLE = NULL;
 		bool		use_left_join;
-		EmptyInputDefaultContext defaultCtx;
+		EmptyInputContext emptyCtx;
 
-		defaultExpr = build_empty_input_default_expr((Node *) origSubqueryTLE->expr,
-													&defaultCtx);
+		emptyCtx.subselect = (Query *) sublink->subselect;
+		emptyCtx.bareAggref = IsA(origSubqueryTLE->expr, Aggref);
+		emptyCtx.allConst = true;
+		defaultExpr = (Expr *)
+			replace_agg_with_empty_input_mutator((Node *) origSubqueryTLE->expr,
+												 &emptyCtx);
 
 		/*
-		 * defaultExpr ends up in a qual of the outer query, where the planner
-		 * folds constant expressions at plan time.  Substituting 0 for a COUNT
-		 * can turn a subexpression the original query only ever evaluated per
-		 * row into a constant one: "1/count(*)" becomes "1/0" and raises
-		 * "division by zero" while planning, even for a query that returns no
-		 * rows at all.  A NULL default cannot do that -- it only propagates
-		 * through strict functions, which the planner folds without calling
-		 * them, and anything it does evaluate was already constant in the
-		 * original expression.
-		 *
-		 * So take the LEFT-join path only when the invented value is a plain
-		 * constant; otherwise leave the sublink to be planned as a SubPlan,
-		 * which keeps the original semantics.
+		 * An aggregate of the subquery used inside a sub-select of its
+		 * targetlist is out of the mutator's reach; leave such a sublink
+		 * to be planned as a SubPlan.
 		 */
-		if (defaultCtx.sawNonNullDefault && !IsA(defaultExpr, Const))
+		if (contain_aggs_of_level((Node *) defaultExpr, 0))
 			return NULL;
 
-		use_left_join = no_match_row_survives(root, opexp, defaultExpr);
+		use_left_join = !emptyCtx.allConst ||
+			no_match_row_survives(root, opexp, defaultExpr);
 
 		if (use_left_join)
 		{
@@ -723,7 +726,7 @@ convert_EXPR_to_join(PlannerInfo *root, OpExpr *opexp)
 
 			flagTLE = makeTargetEntry((Expr *) makeBoolConst(true, false),
 									  aggTLE->resno,
-									  pstrdup("csq_count_flag"),
+									  pstrdup("csq_match_flag"),
 									  false);
 			aggTLE->resno++;
 			subselect->targetList = list_truncate(subselect->targetList,
@@ -820,69 +823,237 @@ build_match_flag_case_expr(Var *flagVar, Var *aggVar, Expr *defaultExpr)
 }
 
 /*
- * Build the value the subquery's expression takes over empty input, by
- * replacing every aggregate with its own empty-input value.
- *
- * ctx->sawNonNullDefault reports whether the result rests on a value this
- * code invented, rather than on a NULL the original expression would have
- * produced anyway.  Only COUNT does that; the caller uses it to decide
- * whether the result is safe to plant in a qual of the outer query.
+ * Build a Const of the given type from an aggregate's initial value text,
+ * as GetAggInitVal() does for the executor.
  */
-static Expr *
-build_empty_input_default_expr(Node *expr, EmptyInputDefaultContext *ctx)
+static Const *
+make_init_value_const(Oid type, Oid collation, Datum textInitVal)
 {
-	ctx->sawNonNullDefault = false;
-
-	return (Expr *) replace_agg_with_empty_default_mutator(copyObject(expr),
-														   ctx);
-}
-
-static Node *
-replace_agg_with_empty_default_mutator(Node *node, void *context)
-{
-	EmptyInputDefaultContext *ctx = (EmptyInputDefaultContext *) context;
-	Aggref	   *aggref;
-	Oid			default_type;
-	Oid			default_collation;
+	Oid			typinput;
+	Oid			typioparam;
 	int16		typlen;
 	bool		typbyval;
+	char	   *strInitVal;
+	Datum		value;
 
+	getTypeInputInfo(type, &typinput, &typioparam);
+	get_typlenbyval(type, &typlen, &typbyval);
+	strInitVal = TextDatumGetCString(textInitVal);
+	value = OidInputFunctionCall(typinput, strInitVal, typioparam, -1);
+	pfree(strInitVal);
+
+	return makeConst(type, -1, collation, typlen, value, false, typbyval);
+}
+
+/*
+ * get_agg_empty_input_const
+ *
+ * If the value the aggregate returns over empty input follows from its
+ * pg_aggregate entry alone, store it in *result and return true.  aggtype is
+ * the aggregate's result type and argtypes the types of its aggregated
+ * arguments, as resolved for the call.
+ *
+ * Over empty input the result is the initial transition value, passed
+ * through the final function if there is one (see finalize_aggregate()).
+ * Without a final function that is the initial value itself, like 0 for
+ * count(); with a strict one and no initial value it is NULL, like for
+ * sum() and min().  Otherwise it is the final function applied to the
+ * initial value, e.g. NULL for avg() and its initial state {0,0}: a call of
+ * an immutable function on constants, which constant folding evaluates like
+ * any other.  A final function over an internal state expects to run inside
+ * an aggregate, and one of an ordered-set aggregate also takes the direct
+ * arguments; those are not called here.
+ */
+bool
+get_agg_empty_input_const(Oid aggfnoid, Oid aggtype, Oid aggcollid,
+						  Oid inputcollid, List *argtypes, Const **result)
+{
+	HeapTuple	aggTuple;
+	Form_pg_aggregate aggform;
+	Datum		textInitVal;
+	bool		initValueIsNull;
+	bool		derived = false;
+
+	aggTuple = SearchSysCache1(AGGFNOID, ObjectIdGetDatum(aggfnoid));
+	if (!HeapTupleIsValid(aggTuple))
+		elog(ERROR, "cache lookup failed for aggregate %u", aggfnoid);
+	aggform = (Form_pg_aggregate) GETSTRUCT(aggTuple);
+
+	textInitVal = SysCacheGetAttr(AGGFNOID, aggTuple,
+								  Anum_pg_aggregate_agginitval,
+								  &initValueIsNull);
+
+	if (initValueIsNull &&
+		(!OidIsValid(aggform->aggfinalfn) || func_strict(aggform->aggfinalfn)))
+	{
+		*result = makeNullConst(aggtype, -1, aggcollid);
+		derived = true;
+	}
+	else if (IsPolymorphicType(aggtype))
+	{
+		/* cannot build a value of an unresolved type */
+	}
+	else if (!OidIsValid(aggform->aggfinalfn))
+	{
+		/* The transition type is the result type then. */
+		*result = make_init_value_const(aggtype, aggcollid, textInitVal);
+		derived = true;
+	}
+	else if (aggform->aggkind == AGGKIND_NORMAL &&
+			 aggform->aggtranstype != INTERNALOID &&
+			 !IsPolymorphicType(aggform->aggtranstype))
+	{
+		List	   *args;
+		ListCell   *lc;
+		bool		argsResolved = true;
+		Node	   *folded;
+
+		if (initValueIsNull)
+			args = list_make1(makeNullConst(aggform->aggtranstype, -1,
+											InvalidOid));
+		else
+			args = list_make1(make_init_value_const(aggform->aggtranstype,
+													InvalidOid, textInitVal));
+
+		/* the extra arguments of the final function are NULLs */
+		if (aggform->aggfinalextra)
+		{
+			foreach(lc, argtypes)
+			{
+				Oid			argtype = lfirst_oid(lc);
+
+				if (IsPolymorphicType(argtype) || argtype == ANYOID)
+					argsResolved = false;
+				args = lappend(args, makeNullConst(argtype, -1, InvalidOid));
+			}
+		}
+
+		if (argsResolved)
+		{
+			folded = eval_const_expressions(NULL, (Node *)
+											makeFuncExpr(aggform->aggfinalfn,
+														 aggtype, args,
+														 aggcollid,
+														 inputcollid,
+														 COERCE_EXPLICIT_CALL));
+			if (IsA(folded, Const))
+			{
+				*result = (Const *) folded;
+				derived = true;
+			}
+		}
+	}
+
+	ReleaseSysCache(aggTuple);
+
+	return derived;
+}
+
+/*
+ * agg_empty_input_is_null
+ *		Is the aggregate known to return NULL over empty input, whatever
+ *		the types it is called with?
+ */
+bool
+agg_empty_input_is_null(Oid aggfnoid)
+{
+	HeapTuple	procTuple;
+	Form_pg_proc procform;
+	List	   *argtypes = NIL;
+	Const	   *emptyConst;
+	int			i;
+
+	procTuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(aggfnoid));
+	if (!HeapTupleIsValid(procTuple))
+		elog(ERROR, "cache lookup failed for function %u", aggfnoid);
+	procform = (Form_pg_proc) GETSTRUCT(procTuple);
+
+	for (i = 0; i < procform->pronargs; i++)
+		argtypes = lappend_oid(argtypes, procform->proargtypes.values[i]);
+
+	/* The empty-input value does not depend on the collation. */
+	if (!get_agg_empty_input_const(aggfnoid, procform->prorettype,
+								   InvalidOid, InvalidOid, argtypes,
+								   &emptyConst))
+		emptyConst = NULL;
+
+	ReleaseSysCache(procTuple);
+
+	return emptyConst != NULL && emptyConst->constisnull;
+}
+
+/*
+ * make_empty_input_agg_sublink
+ *
+ * Build "(SELECT aggref FROM <subquery's FROM> WHERE false)": the
+ * aggregate computed by the executor over empty input.  It is not
+ * correlated through the WHERE clause any more, so it becomes an InitPlan
+ * and runs once.
+ */
+static Node *
+make_empty_input_agg_sublink(Query *subselect, Aggref *aggref)
+{
+	Query	   *emptyQuery = copyObject(subselect);
+	SubLink    *emptySublink;
+
+	emptyQuery->targetList =
+		list_make1(makeTargetEntry((Expr *) copyObject(aggref), 1,
+								   pstrdup("csq_empty_input"), false));
+	emptyQuery->jointree->quals = (Node *) makeBoolConst(false, false);
+	emptyQuery->sortClause = NIL;
+	emptyQuery->distinctClause = NIL;
+
+	emptySublink = makeNode(SubLink);
+	emptySublink->subLinkType = EXPR_SUBLINK;
+	emptySublink->subLinkId = 0;
+	emptySublink->testexpr = NULL;
+	emptySublink->operName = NIL;
+	emptySublink->subselect = (Node *) emptyQuery;
+	emptySublink->location = -1;
+
+	return (Node *) emptySublink;
+}
+
+/*
+ * Build the value the subquery's expression takes over empty input, by
+ * replacing every aggregate of the subquery with its own empty-input value.
+ *
+ * That value is a Const where agg_empty_input_const() knows it.  A non-NULL
+ * Const is used only when it is the whole expression, though: the result
+ * ends up in a qual of the outer query, where the planner folds constant
+ * expressions, and "10 / count(*)" would turn into "10 / 0" and raise
+ * "division by zero" while planning -- even when every outer row has a
+ * match and the original query never divides by zero.  A NULL cannot do
+ * that: it only propagates through strict functions, which the planner
+ * folds without calling them.
+ *
+ * Everywhere else the aggregate becomes a sublink computing it over empty
+ * input.  Its value is a Param at plan time, so the expression around it
+ * is evaluated at run time, and only for the outer rows without a match.
+ */
+static Node *
+replace_agg_with_empty_input_mutator(Node *node, EmptyInputContext *ctx)
+{
 	if (node == NULL)
 		return NULL;
 
-	if (IsA(node, Aggref))
+	if (IsA(node, Aggref) && ((Aggref *) node)->agglevelsup == 0)
 	{
-		bool		is_count;
+		Aggref	   *aggref = (Aggref *) node;
+		Const	   *emptyConst;
 
-		aggref = (Aggref *) node;
-		is_count = (aggref->aggfnoid == F_COUNT_ANY ||
-					aggref->aggfnoid == F_COUNT_);
-		if (is_count)
-		{
-			default_type = INT8OID;
-			default_collation = InvalidOid;
-		}
-		else
-		{
-			default_type = aggref->aggtype;
-			default_collation = exprCollation((Node *) aggref);
-		}
+		if (get_agg_empty_input_const(aggref->aggfnoid, aggref->aggtype,
+									  aggref->aggcollid, aggref->inputcollid,
+									  aggref->aggargtypes, &emptyConst) &&
+			(emptyConst->constisnull || ctx->bareAggref))
+			return (Node *) emptyConst;
 
-		/*
-		 * COUNT is 0 over empty input; every other aggregate is NULL.  The
-		 * choice must follow the aggregate, not its result type: sum(int4)
-		 * also returns int8 but its empty-input value is NULL.
-		 */
-		get_typlenbyval(default_type, &typlen, &typbyval);
-		if (is_count)
-			ctx->sawNonNullDefault = true;
-		return (Node *) makeConst(default_type, -1, default_collation, typlen,
-								  is_count ? Int64GetDatum(0) : (Datum) 0,
-								  !is_count, typbyval);
+		ctx->allConst = false;
+		return make_empty_input_agg_sublink(ctx->subselect, aggref);
 	}
 
-	return expression_tree_mutator(node, replace_agg_with_empty_default_mutator,
-								   context);
+	return expression_tree_mutator(node, replace_agg_with_empty_input_mutator,
+								   (void *) ctx);
 }
 
 /*

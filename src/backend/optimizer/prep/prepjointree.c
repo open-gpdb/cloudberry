@@ -778,7 +778,7 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 					if (j->jointype == JOIN_LEFT)
 					{
 						/*
-						 * COUNT-preserving pull-up (see convert_EXPR_to_join).
+						 * No-match-preserving pull-up (see convert_EXPR_to_join).
 						 * opexp must run ABOVE the LEFT JOIN, not as its join
 						 * condition: as a join qual a matched row that fails it
 						 * would be treated as unmatched, null-extended, and let
