@@ -33,6 +33,7 @@
 #include "gpopt/operators/CLogicalConstTableGet.h"
 #include "gpopt/operators/CLogicalGbAgg.h"
 #include "gpopt/operators/CLogicalInnerApply.h"
+#include "gpopt/operators/CLogicalInnerJoin.h"
 #include "gpopt/operators/CLogicalInnerCorrelatedApply.h"
 #include "gpopt/operators/CLogicalLeftAntiSemiCorrelatedApply.h"
 #include "gpopt/operators/CLogicalLeftAntiSemiCorrelatedApplyNotIn.h"
@@ -41,6 +42,7 @@
 #include "gpopt/operators/CLogicalLeftSemiCorrelatedApply.h"
 #include "gpopt/operators/CLogicalLeftSemiCorrelatedApplyIn.h"
 #include "gpopt/operators/CLogicalMaxOneRow.h"
+#include "gpopt/operators/CScalarAggFunc.h"
 #include "gpopt/operators/CScalarBooleanTest.h"
 #include "gpopt/operators/CScalarCmp.h"
 #include "gpopt/operators/CScalarCoalesce.h"
@@ -53,6 +55,7 @@
 #include "gpopt/operators/CScalarSubqueryAny.h"
 #include "gpopt/operators/CScalarSubqueryQuantified.h"
 #include "gpopt/xforms/CXformUtils.h"
+#include "naucrates/md/IMDAggregate.h"
 #include "naucrates/md/IMDScalarOp.h"
 #include "naucrates/md/IMDTypeBool.h"
 #include "naucrates/md/IMDTypeInt8.h"
@@ -397,6 +400,441 @@ FHasCorrelatedSelectAboveGbAgg(CExpression *pexpr)
 
 //---------------------------------------------------------------------------
 //	@function:
+//		FAggFuncsEmptyInputNull
+//
+//	@doc:
+//		Return true if every aggregate the scalar expression computes is known
+//		to return NULL on empty input, like sum() or avg(), unlike count()
+//
+//---------------------------------------------------------------------------
+static BOOL
+FAggFuncsEmptyInputNull(CExpression *pexprScalar)
+{
+	GPOS_CHECK_STACK_SIZE;
+
+	if (COperator::EopScalarAggFunc == pexprScalar->Pop()->Eopid())
+	{
+		CScalarAggFunc *popAggFunc =
+			CScalarAggFunc::PopConvert(pexprScalar->Pop());
+		if (popAggFunc->FCountStar() || popAggFunc->FCountAny())
+		{
+			return false;
+		}
+
+		CMDAccessor *md_accessor = COptCtxt::PoctxtFromTLS()->Pmda();
+		return md_accessor->RetrieveAgg(popAggFunc->MDId())
+			->IsAggEmptyInputNull();
+	}
+
+	const ULONG arity = pexprScalar->Arity();
+	for (ULONG ul = 0; ul < arity; ul++)
+	{
+		CExpression *pexprChild = (*pexprScalar)[ul];
+		if (pexprChild->Pop()->FScalar() &&
+			!FAggFuncsEmptyInputNull(pexprChild))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+
+//---------------------------------------------------------------------------
+//	@function:
+//		FHasCorrelatedScalarAggNotNullOnEmpty
+//
+//	@doc:
+//		Return true if pexpr has a GROUP BY () aggregate over correlated
+//		input that computes an aggregate not known to return NULL on empty
+//		input, like count() or regr_count().
+//
+//		Decorrelation groups such an aggregate by the correlated columns and
+//		joins it to the outer side, so an outer row with no matching inner
+//		rows gets no group at all instead of the aggregate's value on empty
+//		input (the "count bug").
+//
+//---------------------------------------------------------------------------
+static BOOL
+FHasCorrelatedScalarAggNotNullOnEmpty(CExpression *pexpr)
+{
+	GPOS_CHECK_STACK_SIZE;
+
+	COperator *pop = pexpr->Pop();
+	if (COperator::EopLogicalGbAgg == pop->Eopid() &&
+		0 == CLogicalGbAgg::PopConvert(pop)->Pdrgpcr()->Size() &&
+		(*pexpr)[0]->HasOuterRefs() && !FAggFuncsEmptyInputNull((*pexpr)[1]))
+	{
+		return true;
+	}
+
+	// Recurse into logical children only.
+	const ULONG arity = pexpr->Arity();
+	for (ULONG ul = 0; ul < arity; ul++)
+	{
+		CExpression *pexprChild = (*pexpr)[ul];
+		if (pexprChild->Pop()->FLogical() &&
+			FHasCorrelatedScalarAggNotNullOnEmpty(pexprChild))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+
+//---------------------------------------------------------------------------
+//	@function:
+//		PexprSkipProjects
+//
+//	@doc:
+//		Return the first descendant of pexpr that is not a projection
+//
+//---------------------------------------------------------------------------
+static CExpression *
+PexprSkipProjects(CExpression *pexpr)
+{
+	while (COperator::EopLogicalProject == pexpr->Pop()->Eopid())
+	{
+		pexpr = (*pexpr)[0];
+	}
+	return pexpr;
+}
+
+
+//---------------------------------------------------------------------------
+//	@function:
+//		FIsEmptyGbAggCountOutput
+//
+//	@doc:
+//		Return true if pexpr is a GROUP BY () aggregate, possibly under
+//		projections, that computes colref as count(*)/count(Any). Such a
+//		subquery produces exactly one row, and colref is 0 when the aggregate
+//		sees no input rows.
+//
+//---------------------------------------------------------------------------
+static BOOL
+FIsEmptyGbAggCountOutput(CExpression *pexpr, const CColRef *colref)
+{
+	pexpr = PexprSkipProjects(pexpr);
+
+	if (COperator::EopLogicalGbAgg != pexpr->Pop()->Eopid() ||
+		0 != CLogicalGbAgg::PopConvert(pexpr->Pop())->Pdrgpcr()->Size())
+	{
+		return false;
+	}
+
+	CExpression *pexprPrjList = (*pexpr)[1];
+	const ULONG arity = pexprPrjList->Arity();
+	for (ULONG ul = 0; ul < arity; ul++)
+	{
+		CExpression *pexprPrjElem = (*pexprPrjList)[ul];
+		CColRef *pcrCount = nullptr;
+		if (COperator::EopScalarAggFunc == (*pexprPrjElem)[0]->Pop()->Eopid() &&
+			CUtils::FCountAggProjElem(pexprPrjElem, &pcrCount) &&
+			colref == pcrCount)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+
+//---------------------------------------------------------------------------
+//	@function:
+//		PexprCorrelatedScalarAgg
+//
+//	@doc:
+//		If the relational child of a subquery is a GROUP BY () aggregate over
+//		correlated input, possibly under projections, return the aggregate.
+//		Such a subquery produces exactly one row for every outer row.
+//
+//---------------------------------------------------------------------------
+static CExpression *
+PexprCorrelatedScalarAgg(CExpression *pexprInner)
+{
+	CExpression *pexpr = PexprSkipProjects(pexprInner);
+
+	if (COperator::EopLogicalGbAgg == pexpr->Pop()->Eopid() &&
+		0 == CLogicalGbAgg::PopConvert(pexpr->Pop())->Pdrgpcr()->Size() &&
+		(*pexpr)[0]->HasOuterRefs())
+	{
+		return pexpr;
+	}
+	return nullptr;
+}
+
+
+//---------------------------------------------------------------------------
+//	@function:
+//		FNeedsEmptyInputValue
+//
+//	@doc:
+//		Return true if the subquery with relational child pexprInner may
+//		return a non-NULL value for an outer row without matching inner rows,
+//		which decorrelation into an outer join would turn into NULL. See
+//		PexprScalarAggApply().
+//
+//---------------------------------------------------------------------------
+static BOOL
+FNeedsEmptyInputValue(CExpression *pexprInner)
+{
+	CExpression *pexprGbAgg = PexprCorrelatedScalarAgg(pexprInner);
+
+	// projections can compute a non-NULL value from NULL aggregates, like
+	// coalesce(sum(x), 0)
+	return nullptr != pexprGbAgg &&
+		   (pexprGbAgg != pexprInner ||
+			!FAggFuncsEmptyInputNull((*pexprGbAgg)[1]));
+}
+
+
+//---------------------------------------------------------------------------
+//	@function:
+//		PexprSubstituteColRefs
+//
+//	@doc:
+//		Return a copy of the scalar expression with the columns in colrefs
+//		replaced by the matching expressions in pdrgpexpr
+//
+//---------------------------------------------------------------------------
+static CExpression *
+PexprSubstituteColRefs(CMemoryPool *mp, CExpression *pexpr,
+					   CColRefArray *colrefs, CExpressionArray *pdrgpexpr)
+{
+	GPOS_CHECK_STACK_SIZE;
+
+	COperator *pop = pexpr->Pop();
+	if (COperator::EopScalarIdent == pop->Eopid())
+	{
+		const CColRef *colref = CScalarIdent::PopConvert(pop)->Pcr();
+		for (ULONG ul = 0; ul < colrefs->Size(); ul++)
+		{
+			if ((*colrefs)[ul] == colref)
+			{
+				(*pdrgpexpr)[ul]->AddRef();
+				return (*pdrgpexpr)[ul];
+			}
+		}
+	}
+
+	const ULONG arity = pexpr->Arity();
+	if (0 == arity)
+	{
+		pexpr->AddRef();
+		return pexpr;
+	}
+
+	CExpressionArray *pdrgpexprChildren = GPOS_NEW(mp) CExpressionArray(mp);
+	for (ULONG ul = 0; ul < arity; ul++)
+	{
+		CExpression *pexprChild = (*pexpr)[ul];
+		if (pexprChild->Pop()->FScalar())
+		{
+			pdrgpexprChildren->Append(
+				PexprSubstituteColRefs(mp, pexprChild, colrefs, pdrgpexpr));
+		}
+		else
+		{
+			pexprChild->AddRef();
+			pdrgpexprChildren->Append(pexprChild);
+		}
+	}
+	pop->AddRef();
+	return GPOS_NEW(mp) CExpression(mp, pop, pdrgpexprChildren);
+}
+
+
+//---------------------------------------------------------------------------
+//	@function:
+//		PexprScalarAggApply
+//
+//	@doc:
+//		Unnest a subquery whose relational child pexprInner is a GROUP BY ()
+//		aggregate over correlated input, possibly under projections, and that
+//		returns colref. Return the new outer expression, and in *ppexprValue
+//		the subquery's value for every outer row. Takes over the references
+//		to pexprOuter and pexprInner.
+//
+//		The subquery returns one row for every outer row. Decorrelation
+//		groups the aggregate by the correlated columns and joins it to the
+//		outer side, so an outer row without matching inner rows gets no group,
+//		and an outer join gives it NULL instead of the subquery's value over
+//		empty input: 0 for count(), 1 for rank() of a hypothetical row, the
+//		initial state of an aggregate without a final function, and whatever
+//		the projections compute from such values.
+//
+//		So build a LEFT outer apply with a match flag on the inner side, and
+//		use
+//			CASE WHEN flag THEN colref ELSE <colref over empty input> END
+//		The value over empty input is the projections' expression for colref
+//		with every aggregate replaced by its own value over empty input: a
+//		constant for count() and for the aggregates known to return NULL, and
+//		otherwise the aggregate computed once over an empty table, joined to
+//		the outer side. The expression around the aggregates is evaluated per
+//		row, and only for the outer rows without a match, so "10 / count(*)"
+//		raises "division by zero" only if there is such a row, as the
+//		correlated subquery does.
+//
+//---------------------------------------------------------------------------
+static CExpression *
+PexprScalarAggApply(CMemoryPool *mp, CExpression *pexprOuter,
+					CExpression *pexprInner, const CColRef *colref,
+					COperator::EOperatorId eopidSubq, CExpression **ppexprValue)
+{
+	CMDAccessor *md_accessor = COptCtxt::PoctxtFromTLS()->Pmda();
+	CColumnFactory *col_factory = COptCtxt::PoctxtFromTLS()->Pcf();
+
+	CExpression *pexprGbAgg = PexprCorrelatedScalarAgg(pexprInner);
+	GPOS_ASSERT(nullptr != pexprGbAgg);
+
+	// columns computed by the aggregate and the projections, and their
+	// values over empty input
+	CColRefArray *pdrgpcrDefined = GPOS_NEW(mp) CColRefArray(mp);
+	CExpressionArray *pdrgpexprEmpty = GPOS_NEW(mp) CExpressionArray(mp);
+
+	// the aggregates to compute over an empty table
+	CExpressionArray *pdrgpexprEmptyAggs = GPOS_NEW(mp) CExpressionArray(mp);
+	CColRefArray *pdrgpcrEmptyTable = GPOS_NEW(mp) CColRefArray(mp);
+	UlongToColRefMap *colref_mapping = GPOS_NEW(mp) UlongToColRefMap(mp);
+
+	CExpression *pexprAggPrjList = (*pexprGbAgg)[1];
+	for (ULONG ul = 0; ul < pexprAggPrjList->Arity(); ul++)
+	{
+		CExpression *pexprPrjElem = (*pexprAggPrjList)[ul];
+		CColRef *pcrAgg =
+			CScalarProjectElement::PopConvert(pexprPrjElem->Pop())->Pcr();
+		CExpression *pexprAgg = (*pexprPrjElem)[0];
+		CExpression *pexprEmpty = nullptr;
+		CColRef *pcrCount = nullptr;
+
+		if (CUtils::FCountAggProjElem(pexprPrjElem, &pcrCount) &&
+			COperator::EopScalarAggFunc == pexprAgg->Pop()->Eopid())
+		{
+			pexprEmpty = CUtils::PexprScalarConstInt8(mp, 0 /*val*/);
+		}
+		else if (FAggFuncsEmptyInputNull(pexprAgg))
+		{
+			pexprEmpty = CUtils::PexprScalarConstNull(
+				mp, pcrAgg->RetrieveType(), pcrAgg->TypeModifier());
+		}
+		else
+		{
+			// compute the aggregate over an empty table with fresh columns
+			CColRefSetIter crsi(*pexprAgg->DeriveUsedColumns());
+			while (crsi.Advance())
+			{
+				CColRef *pcr = crsi.Pcr();
+				ULONG id = pcr->Id();
+				if (nullptr == colref_mapping->Find(&id))
+				{
+					CColRef *pcrNew = col_factory->PcrCreate(pcr);
+					colref_mapping->Insert(GPOS_NEW(mp) ULONG(id), pcrNew);
+					pdrgpcrEmptyTable->Append(pcrNew);
+				}
+			}
+			CColRef *pcrEmpty = col_factory->PcrCreate(pcrAgg);
+			pdrgpexprEmptyAggs->Append(CUtils::PexprScalarProjectElement(
+				mp, pcrEmpty,
+				pexprAgg->PexprCopyWithRemappedColumns(mp, colref_mapping,
+													   true /*must_exist*/)));
+			pexprEmpty = CUtils::PexprScalarIdent(mp, pcrEmpty);
+		}
+
+		pdrgpcrDefined->Append(pcrAgg);
+		pdrgpexprEmpty->Append(pexprEmpty);
+	}
+
+	// the projections, from the aggregate up
+	CExpressionArray *pdrgpexprProjects = GPOS_NEW(mp) CExpressionArray(mp);
+	for (CExpression *pexpr = pexprInner; pexpr != pexprGbAgg;
+		 pexpr = (*pexpr)[0])
+	{
+		pexpr->AddRef();
+		pdrgpexprProjects->Append(pexpr);
+	}
+	for (ULONG ul = pdrgpexprProjects->Size(); 0 < ul; ul--)
+	{
+		CExpression *pexprPrjList = (*(*pdrgpexprProjects)[ul - 1])[1];
+		for (ULONG ulElem = 0; ulElem < pexprPrjList->Arity(); ulElem++)
+		{
+			CExpression *pexprPrjElem = (*pexprPrjList)[ulElem];
+			pdrgpcrDefined->Append(
+				CScalarProjectElement::PopConvert(pexprPrjElem->Pop())->Pcr());
+			pdrgpexprEmpty->Append(PexprSubstituteColRefs(
+				mp, (*pexprPrjElem)[0], pdrgpcrDefined, pdrgpexprEmpty));
+		}
+	}
+	pdrgpexprProjects->Release();
+
+	CExpression *pexprEmptyValue = nullptr;
+	for (ULONG ul = pdrgpcrDefined->Size();
+		 0 < ul && nullptr == pexprEmptyValue; ul--)
+	{
+		if ((*pdrgpcrDefined)[ul - 1] == colref)
+		{
+			pexprEmptyValue = (*pdrgpexprEmpty)[ul - 1];
+			pexprEmptyValue->AddRef();
+		}
+	}
+	GPOS_ASSERT(nullptr != pexprEmptyValue);
+
+	// LEFT outer apply with a match flag on the inner side
+	CExpression *pexprInnerWithFlag = CUtils::PexprAddProjection(
+		mp, pexprInner, CUtils::PexprScalarConstBool(mp, true /*value*/));
+	const CColRef *pcrFlag =
+		CScalarProjectElement::PopConvert((*(*pexprInnerWithFlag)[1])[0]->Pop())
+			->Pcr();
+	CExpression *pexprNewOuter =
+		CUtils::PexprLogicalApply<CLogicalLeftOuterApply>(
+			mp, pexprOuter, pexprInnerWithFlag, colref, eopidSubq);
+
+	if (0 < pdrgpexprEmptyAggs->Size())
+	{
+		if (0 == pdrgpcrEmptyTable->Size())
+		{
+			// the aggregates use no columns, the table still needs one
+			pdrgpcrEmptyTable->Append(col_factory->PcrCreate(
+				md_accessor->PtMDType<IMDTypeBool>(), default_type_modifier));
+		}
+		CExpression *pexprEmptyTable = GPOS_NEW(mp)
+			CExpression(mp, GPOS_NEW(mp) CLogicalConstTableGet(
+								mp, pdrgpcrEmptyTable,
+								GPOS_NEW(mp) IDatum2dArray(mp)));
+		CExpression *pexprEmptyAgg = CUtils::PexprLogicalGbAggGlobal(
+			mp, GPOS_NEW(mp) CColRefArray(mp), pexprEmptyTable,
+			GPOS_NEW(mp) CExpression(mp, GPOS_NEW(mp) CScalarProjectList(mp),
+									 pdrgpexprEmptyAggs));
+
+		// the aggregate returns one row, so this keeps every outer row
+		pexprNewOuter = CUtils::PexprLogicalJoin<CLogicalInnerJoin>(
+			mp, pexprNewOuter, pexprEmptyAgg,
+			CUtils::PexprScalarConstBool(mp, true /*value*/));
+	}
+	else
+	{
+		pdrgpexprEmptyAggs->Release();
+		pdrgpcrEmptyTable->Release();
+	}
+
+	IMDId *mdid_type = colref->RetrieveType()->MDId();
+	mdid_type->AddRef();
+	*ppexprValue = GPOS_NEW(mp)
+		CExpression(mp, GPOS_NEW(mp) CScalarIf(mp, mdid_type),
+					CUtils::PexprScalarIdent(mp, pcrFlag),
+					CUtils::PexprScalarIdent(mp, colref), pexprEmptyValue);
+
+	colref_mapping->Release();
+	pdrgpcrDefined->Release();
+	pdrgpexprEmpty->Release();
+
+	return pexprNewOuter;
+}
+
+
+//---------------------------------------------------------------------------
+//	@function:
 //		CSubqueryHandler::SSubqueryDesc::SetCorrelatedExecution
 //
 //	@doc:
@@ -463,8 +901,18 @@ CSubqueryHandler::Psd(CMemoryPool *mp, CExpression *pexprSubquery,
 	}
 
 	// set flag for using subquery in a value context
-	psd->m_fValueSubquery = EsqctxtValue == esqctxt ||
-							(psd->m_fHasCountAgg && psd->m_fHasOuterRefs);
+	// a subquery generated from a quantified one has its own handling of
+	// empty input, see FCreateOuterApplyForScalarSubquery()
+	BOOL fGeneratedByQuantified =
+		COperator::EopScalarSubquery == pexprSubquery->Pop()->Eopid() &&
+		CScalarSubquery::PopConvert(pexprSubquery->Pop())
+			->FGeneratedByQuantified();
+
+	psd->m_fValueSubquery =
+		EsqctxtValue == esqctxt ||
+		(psd->m_fHasCountAgg && psd->m_fHasOuterRefs) ||
+		(psd->m_fHasOuterRefs && !fGeneratedByQuantified &&
+		 FNeedsEmptyInputValue(pexprInner));
 
 	// set flag of correlated execution
 	psd->SetCorrelatedExecution();
@@ -482,6 +930,27 @@ CSubqueryHandler::Psd(CMemoryPool *mp, CExpression *pexprSubquery,
 		FHasCorrelatedSelectAboveGbAgg(pexprInner))
 	{
 		psd->m_fCorrelatedExecution = true;
+	}
+
+	// A GROUP BY () aggregate over correlated input returns its value on
+	// empty input for an outer row without matching inner rows, e.g. 0 for
+	// count(). Decorrelation groups it by the correlated columns and joins it
+	// to the outer side, so such a row gets no group. At the top of the
+	// subquery, under projections, PexprScalarAggApply() computes the value
+	// for such rows; deeper down, e.g. under another aggregate or a HAVING
+	// clause, it cannot, so keep the correlated execution unless all the
+	// aggregates there return NULL on empty input anyway.
+	if (!psd->m_fCorrelatedExecution && psd->m_fHasOuterRefs &&
+		!fGeneratedByQuantified)
+	{
+		CExpression *pexprGbAgg = PexprCorrelatedScalarAgg(pexprInner);
+		CExpression *pexprToCheck =
+			(nullptr != pexprGbAgg) ? (*pexprGbAgg)[0] : pexprInner;
+
+		if (FHasCorrelatedScalarAggNotNullOnEmpty(pexprToCheck))
+		{
+			psd->m_fCorrelatedExecution = true;
+		}
 	}
 
 	return psd;
@@ -829,6 +1298,19 @@ CSubqueryHandler::FCreateOuterApplyForScalarSubquery(
 		CScalarSubquery::PopConvert(pexprSubquery->Pop());
 	const CColRef *colref = popSubquery->Pcr();
 	BOOL fSuccess = true;
+
+	// a GROUP BY () aggregate over correlated input: keep the subquery's value
+	// over empty input for the outer rows without a match; a bare count() is
+	// fixed up with COALESCE(count, 0) below
+	if (!popSubquery->FGeneratedByQuantified() &&
+		!FIsEmptyGbAggCountOutput(pexprInner, colref) &&
+		FNeedsEmptyInputValue(pexprInner))
+	{
+		*ppexprNewOuter =
+			PexprScalarAggApply(mp, pexprOuter, pexprInner, colref,
+								popSubquery->Eopid(), ppexprResidualScalar);
+		return fSuccess;
+	}
 
 	// generate an outer apply between outer expression and the relational child of scalar subquery
 	CExpression *pexprLeftOuterApply =
@@ -1600,60 +2082,56 @@ CSubqueryHandler::FRemoveAnySubquery(CExpression *pexprOuter,
 	BOOL fUseCorrelated = false;
 	BOOL fUseNotNullableInnerOpt = false;
 
-	// "a IN (SELECT count(*) ... WHERE y = a)": a correlated scalar count() is
-	// single-valued, so IN is equivalent to "a = (SELECT count(*) ...)". A plain
-	// semi-join would drop outer rows whose correlated group is empty, losing
-	// the count()=0 match (the "count bug"). Instead build a LEFT outer apply
-	// that keeps every outer row and compare the outer value against
-	// coalesce(count, 0), so the empty-group count of 0 survives decorrelation
-	// into a LEFT outer join.
+	// "a IN (SELECT count(*) ... WHERE y = a)": the subquery is a GROUP BY ()
+	// aggregate over correlated input, so it returns exactly one row, and IN
+	// is equivalent to "a = (SELECT count(*) ...)". A semi-join would drop the
+	// outer rows without matching inner rows, for which the subquery returns
+	// the aggregate's value on empty input, losing the count() = 0 match (the
+	// "count bug"). Instead unnest it like a scalar subquery, which keeps
+	// every outer row, and compare against its value, see
+	// PexprScalarAggApply(). This is needed in both contexts.
 	//
-	// This is needed in both contexts. In a value context -- the subquery sits
-	// under OR, say -- the generic quantified rewrite reads the subquery column
-	// directly, so the NULL that the outer join produces for an empty group
-	// makes the comparison NULL instead of true.
-	//
-	// Only correlated subqueries need it: an uncorrelated count() always yields
-	// exactly one row, so the semi-join stays correct there and costs far less.
-	CColRef *pcrCount = nullptr;
-	if (fOuterRefsUnderInner && CUtils::FHasCountAgg(pexprInner, &pcrCount) &&
-		1 >= pexprInner->DeriveMaxCard().Ull())
+	// An uncorrelated aggregate always yields exactly one row, so the
+	// semi-join stays correct there and costs far less.
+	if (fOuterRefsUnderInner && FNeedsEmptyInputValue(pexprInner) &&
+		!FHasCorrelatedScalarAggNotNullOnEmpty(
+			(*PexprCorrelatedScalarAgg(pexprInner))[0]))
 	{
 		pexprSelect->Release();
 
 		pexprInner->AddRef();
-		CExpression *pexprLeftOuterApply =
-			CUtils::PexprLogicalApply<CLogicalLeftOuterApply>(
-				mp, pexprOuter, pexprInner, colref, eopidSubq);
+		CExpression *pexprValue = nullptr;
+		*ppexprNewOuter = PexprScalarAggApply(mp, pexprOuter, pexprInner,
+											  colref, eopidSubq, &pexprValue);
 
-		// project the count column so it can be referenced in coalesce
-		CExpression *pexprPrj = CUtils::PexprAddProjection(
-			mp, pexprLeftOuterApply, CUtils::PexprScalarIdent(mp, colref));
-		const CColRef *pcrComputed =
-			CScalarProjectElement::PopConvert((*(*pexprPrj)[1])[0]->Pop())->Pcr();
-		*ppexprNewOuter = pexprPrj;
-
-		// coalesce(count, 0): a no-match outer row gets a NULL count from the
-		// LEFT join, which must read back as 0
-		CMDAccessor *md_accessor = COptCtxt::PoctxtFromTLS()->Pmda();
-		const IMDTypeInt8 *pmdtypeint8 = md_accessor->PtMDType<IMDTypeInt8>();
-		IMDId *pmdidInt8 = pmdtypeint8->MDId();
-		pmdidInt8->AddRef();
-		CExpression *pexprCoalesce = GPOS_NEW(mp)
-			CExpression(mp, GPOS_NEW(mp) CScalarCoalesce(mp, pmdidInt8),
-						CUtils::PexprScalarIdent(mp, pcrComputed),
-						CUtils::PexprScalarConstInt8(mp, 0 /*val*/));
-
-		// residual: outer_expr <op> coalesce(count, 0)
+		// residual: outer_expr <op> subquery value
 		IMDId *mdid_op = pScalarSubqAny->MdIdOp();
 		mdid_op->AddRef();
 		CExpression *pexprOuterScalar = (*pexprSubquery)[1];
 		pexprOuterScalar->AddRef();
 		*ppexprResidualScalar =
-			CUtils::PexprScalarCmp(mp, pexprOuterScalar, pexprCoalesce,
+			CUtils::PexprScalarCmp(mp, pexprOuterScalar, pexprValue,
 								   *pScalarSubqAny->PstrOp(), mdid_op);
 
 		return true;
+	}
+
+	// The same aggregate deeper down in the subquery, e.g. under another
+	// aggregate or a HAVING clause, has no such fix-up, so keep the
+	// correlated execution there.
+	if (fOuterRefsUnderInner)
+	{
+		CExpression *pexprGbAgg = PexprCorrelatedScalarAgg(pexprInner);
+		CExpression *pexprToCheck =
+			(nullptr != pexprGbAgg) ? (*pexprGbAgg)[0] : pexprInner;
+
+		if (FHasCorrelatedScalarAggNotNullOnEmpty(pexprToCheck))
+		{
+			pexprSelect->Release();
+			return FCreateCorrelatedApplyForExistOrQuant(
+				mp, pexprOuter, pexprSubquery, esqctxt, ppexprNewOuter,
+				ppexprResidualScalar);
+		}
 	}
 
 	if (EsqctxtValue == esqctxt)
