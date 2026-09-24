@@ -1000,6 +1000,39 @@ get_agg_empty_input_const(Oid aggfnoid, Oid aggtype, Oid aggcollid,
 }
 
 /*
+ * agg_empty_input_is_null
+ *		Is the aggregate known to return NULL over empty input, whatever
+ *		the types it is called with?
+ */
+bool
+agg_empty_input_is_null(Oid aggfnoid)
+{
+	HeapTuple	procTuple;
+	Form_pg_proc procform;
+	List	   *argtypes = NIL;
+	Const	   *emptyConst;
+	int			i;
+
+	procTuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(aggfnoid));
+	if (!HeapTupleIsValid(procTuple))
+		elog(ERROR, "cache lookup failed for function %u", aggfnoid);
+	procform = (Form_pg_proc) GETSTRUCT(procTuple);
+
+	for (i = 0; i < procform->pronargs; i++)
+		argtypes = lappend_oid(argtypes, procform->proargtypes.values[i]);
+
+	/* The empty-input value does not depend on the collation. */
+	if (!get_agg_empty_input_const(aggfnoid, procform->prorettype,
+								   InvalidOid, InvalidOid, argtypes,
+								   &emptyConst))
+		emptyConst = NULL;
+
+	ReleaseSysCache(procTuple);
+
+	return emptyConst != NULL && emptyConst->constisnull;
+}
+
+/*
  * Is it safe to evaluate the aggregate over empty input speculatively?
  * Built-in aggregates support this.  For user-defined aggregates, a final
  * function may throw on the initial state or have observable side effects;

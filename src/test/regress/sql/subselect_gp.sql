@@ -1604,3 +1604,390 @@ select a from pullup_agg_div_outer o
 drop table pullup_agg_div_outer, pullup_agg_outer, pullup_agg_inner;
 drop aggregate pullup_sum_from_five(int);
 reset optimizer;
+
+--
+-- Test the COUNT bug for a correlated count() subquery under IN.
+--
+-- An outer row whose correlated group is empty must still match count() = 0.
+-- Decorrelating IN into a semi-join drops such rows, so ORCA turns the subquery
+-- into a LEFT join and compares against the count, 0 for the rows without a
+-- match. That is needed both when the subquery is a plain filter and when it
+-- sits inside an OR, which puts it in a value context.
+--
+-- Each case is run under both optimizers. The plans differ -- ORCA decorrelates
+-- into a join, the Postgres planner keeps a SubPlan -- but the rows must not.
+--
+drop table if exists count_bug_outer, count_bug_inner;
+create table count_bug_outer (a int) distributed by (a);
+create table count_bug_inner (x int, y int) distributed by (x);
+insert into count_bug_outer values (0), (1), (2);
+insert into count_bug_inner values (1, 1), (5, 2), (6, 2);
+analyze count_bug_outer;
+analyze count_bug_inner;
+
+-- filter context: a = 0 must match the empty group
+set optimizer to off;
+explain (costs off) select a from count_bug_outer o
+  where a in (select count(*) from count_bug_inner i where i.y = o.a);
+select a from count_bug_outer o
+  where a in (select count(*) from count_bug_inner i where i.y = o.a) order by 1;
+set optimizer to on;
+explain (costs off) select a from count_bug_outer o
+  where a in (select count(*) from count_bug_inner i where i.y = o.a);
+select a from count_bug_outer o
+  where a in (select count(*) from count_bug_inner i where i.y = o.a) order by 1;
+
+-- value context: the same subquery under OR
+set optimizer to off;
+explain (costs off) select a from count_bug_outer o
+  where a in (select count(*) from count_bug_inner i where i.y = o.a) or a = 99;
+select a from count_bug_outer o
+  where a in (select count(*) from count_bug_inner i where i.y = o.a) or a = 99
+  order by 1;
+set optimizer to on;
+explain (costs off) select a from count_bug_outer o
+  where a in (select count(*) from count_bug_inner i where i.y = o.a) or a = 99;
+select a from count_bug_outer o
+  where a in (select count(*) from count_bug_inner i where i.y = o.a) or a = 99
+  order by 1;
+
+-- count(attr) behaves the same way
+set optimizer to off;
+select a from count_bug_outer o
+  where a in (select count(i.x) from count_bug_inner i where i.y = o.a) order by 1;
+set optimizer to on;
+select a from count_bug_outer o
+  where a in (select count(i.x) from count_bug_inner i where i.y = o.a) order by 1;
+
+-- an uncorrelated count() always returns exactly one row, so no outer row can
+-- be lost and the cheaper semi-join plan must be kept
+set optimizer to off;
+explain (costs off) select a from count_bug_outer o
+  where a in (select count(*) from count_bug_inner);
+select a from count_bug_outer o
+  where a in (select count(*) from count_bug_inner) order by 1;
+set optimizer to on;
+explain (costs off) select a from count_bug_outer o
+  where a in (select count(*) from count_bug_inner);
+select a from count_bug_outer o
+  where a in (select count(*) from count_bug_inner) order by 1;
+
+-- other forms of the count() subquery: under an expression, under HAVING,
+-- under another aggregate. coalesce(count, 0) would be wrong for the first
+-- two: count(*) + 1 is 1 over empty input, and HAVING count(*) > 0 returns no
+-- row there.
+set optimizer to off;
+select a from count_bug_outer o
+  where a in (select count(*) + 1 from count_bug_inner i where i.y = o.a) order by 1;
+select a from count_bug_outer o
+  where a in (select count(*) from count_bug_inner i where i.y = o.a
+              having count(*) > 0) order by 1;
+select a from count_bug_outer o
+  where a in (select count(*) * 0 from count_bug_inner i where i.y = o.a) order by 1;
+select a from count_bug_outer o
+  where a in (select count(*) from count_bug_inner i where i.y = o.a
+              having count(*) < 2) order by 1;
+select a, (select max(c) from (select count(*) c from count_bug_inner i
+                               where i.y = o.a) q) from count_bug_outer o order by 1;
+set optimizer to on;
+select a from count_bug_outer o
+  where a in (select count(*) + 1 from count_bug_inner i where i.y = o.a) order by 1;
+select a from count_bug_outer o
+  where a in (select count(*) from count_bug_inner i where i.y = o.a
+              having count(*) > 0) order by 1;
+select a from count_bug_outer o
+  where a in (select count(*) * 0 from count_bug_inner i where i.y = o.a) order by 1;
+select a from count_bug_outer o
+  where a in (select count(*) from count_bug_inner i where i.y = o.a
+              having count(*) < 2) order by 1;
+select a, (select max(c) from (select count(*) c from count_bug_inner i
+                               where i.y = o.a) q) from count_bug_outer o order by 1;
+
+reset optimizer;
+drop table count_bug_outer, count_bug_inner;
+
+-- cases from Greengage #1658, which disabled decorrelation for count() instead
+create table count_bug_empty (a int, b int) distributed by (a);
+create table count_bug_one (a int, b int) distributed by (a);
+insert into count_bug_one values (0, 0);
+create table count_bug_foo (a int, b int) distributed by (a);
+insert into count_bug_foo values (1, 1);
+create table count_bug_bar (c int, d int) distributed by (c);
+create table count_bug_jazz (e int, f int) distributed by (e);
+set optimizer to off;
+select * from count_bug_one
+  where count_bug_one.a in (select count(*) from count_bug_empty
+                            where count_bug_one.b = count_bug_empty.b);
+select * from count_bug_one
+  where count_bug_one.a in (select count(*) from count_bug_empty
+                            where count_bug_one.b = count_bug_empty.b
+                            group by count_bug_empty.a);
+select (select jazz.count
+          from (select count(*) from count_bug_bar group by c limit 1) as bar,
+               (select count(*) from count_bug_jazz where e = a) as jazz)
+  from count_bug_foo;
+set optimizer to on;
+select * from count_bug_one
+  where count_bug_one.a in (select count(*) from count_bug_empty
+                            where count_bug_one.b = count_bug_empty.b);
+select * from count_bug_one
+  where count_bug_one.a in (select count(*) from count_bug_empty
+                            where count_bug_one.b = count_bug_empty.b
+                            group by count_bug_empty.a);
+select (select jazz.count
+          from (select count(*) from count_bug_bar group by c limit 1) as bar,
+               (select count(*) from count_bug_jazz where e = a) as jazz)
+  from count_bug_foo;
+reset optimizer;
+drop table count_bug_empty, count_bug_one, count_bug_foo, count_bug_bar,
+  count_bug_jazz;
+
+--
+-- Test the COUNT bug for aggregates other than count() that return a non-NULL
+-- value on empty input: regr_count(), hypothetical-set aggregates and
+-- aggregates with a non-NULL initial state, and for expressions over
+-- aggregates. A correlated subquery must return its value over empty input
+-- for an outer row without matching inner rows, not NULL, and must not lose
+-- such a row in WHERE. Both optimizers decorrelate these subqueries into an
+-- outer join and compute that value for the rows without a match.
+--
+create table empty_agg_outer (a int, b int, d int) distributed by (a);
+create table empty_agg_inner (a int, b int) distributed by (a);
+insert into empty_agg_outer values (3,1,1), (1,9,5), (0,2,7), (5,5,1), (2,4,9);
+insert into empty_agg_inner values (1,10), (2,20), (1,30);
+analyze empty_agg_outer;
+analyze empty_agg_inner;
+create aggregate sum_from_zero(int) (sfunc = int4pl, stype = int4, initcond = '0');
+
+-- values on empty input
+select regr_count(a, b), rank(5) within group (order by b),
+       cume_dist(5) within group (order by b), sum_from_zero(a), avg(a),
+       coalesce(sum(b), 0), sum(b) is null
+  from empty_agg_inner where false;
+
+set optimizer to off;
+select a, d,
+       (select regr_count(i.a, i.b) from empty_agg_inner i where i.a = o.d) as regr,
+       (select rank(5) within group (order by i.b)
+          from empty_agg_inner i where i.a = o.d) as rnk,
+       (select sum_from_zero(i.a) from empty_agg_inner i where i.a = o.d) as sfz,
+       (select coalesce(sum(i.b), 0) from empty_agg_inner i where i.a = o.d) as cs,
+       (select sum(i.b) is null from empty_agg_inner i where i.a = o.d) as sn,
+       (select avg(i.b) from empty_agg_inner i where i.a = o.d) as avg
+  from empty_agg_outer o order by 1, 2;
+set optimizer to on;
+select a, d,
+       (select regr_count(i.a, i.b) from empty_agg_inner i where i.a = o.d) as regr,
+       (select rank(5) within group (order by i.b)
+          from empty_agg_inner i where i.a = o.d) as rnk,
+       (select sum_from_zero(i.a) from empty_agg_inner i where i.a = o.d) as sfz,
+       (select coalesce(sum(i.b), 0) from empty_agg_inner i where i.a = o.d) as cs,
+       (select sum(i.b) is null from empty_agg_inner i where i.a = o.d) as sn,
+       (select avg(i.b) from empty_agg_inner i where i.a = o.d) as avg
+  from empty_agg_outer o order by 1, 2;
+
+-- the same in WHERE: the rows without a match must be kept
+set optimizer to off;
+explain (costs off) select a, b, d from empty_agg_outer o
+  where o.a > (select regr_count(i.a, i.b) from empty_agg_inner i where i.a = o.d);
+select a, b, d from empty_agg_outer o
+  where o.a > (select regr_count(i.a, i.b) from empty_agg_inner i where i.a = o.d)
+  order by 1, 2, 3;
+select a, b, d from empty_agg_outer o
+  where o.a > (select count(*) from empty_agg_inner i where i.a = o.d)
+  order by 1, 2, 3;
+select a, b, d from empty_agg_outer o
+  where o.a > (select count(*) + 1 from empty_agg_inner i where i.a = o.d)
+  order by 1, 2, 3;
+explain (costs off) select a, b, d from empty_agg_outer o
+  where o.a > (select rank(5) within group (order by i.b)
+                 from empty_agg_inner i where i.a = o.d);
+select a, b, d from empty_agg_outer o
+  where o.a > (select rank(5) within group (order by i.b)
+                 from empty_agg_inner i where i.a = o.d)
+  order by 1, 2, 3;
+select a, d from empty_agg_outer o
+  where o.a in (select sum_from_zero(i.a) from empty_agg_inner i where i.a = o.d)
+  order by 1, 2;
+set optimizer to on;
+explain (costs off) select a, b, d from empty_agg_outer o
+  where o.a > (select regr_count(i.a, i.b) from empty_agg_inner i where i.a = o.d);
+select a, b, d from empty_agg_outer o
+  where o.a > (select regr_count(i.a, i.b) from empty_agg_inner i where i.a = o.d)
+  order by 1, 2, 3;
+select a, b, d from empty_agg_outer o
+  where o.a > (select count(*) from empty_agg_inner i where i.a = o.d)
+  order by 1, 2, 3;
+select a, b, d from empty_agg_outer o
+  where o.a > (select count(*) + 1 from empty_agg_inner i where i.a = o.d)
+  order by 1, 2, 3;
+explain (costs off) select a, b, d from empty_agg_outer o
+  where o.a > (select rank(5) within group (order by i.b)
+                 from empty_agg_inner i where i.a = o.d);
+select a, b, d from empty_agg_outer o
+  where o.a > (select rank(5) within group (order by i.b)
+                 from empty_agg_inner i where i.a = o.d)
+  order by 1, 2, 3;
+select a, d from empty_agg_outer o
+  where o.a in (select sum_from_zero(i.a) from empty_agg_inner i where i.a = o.d)
+  order by 1, 2;
+
+-- The value over empty input is computed for the rows without a match only:
+-- "10 / count(*)" divides by zero there, as the correlated subquery does, but
+-- must not fail when every outer row has a match.
+set optimizer to off;
+select a, b, d from empty_agg_outer o
+  where o.a > (select 10 / count(*) from empty_agg_inner i where i.a = o.d);
+select a, b, d from empty_agg_outer o
+  where o.d = 1
+    and o.a > (select 10 / count(*) from empty_agg_inner i where i.a = o.d)
+  order by 1;
+set optimizer to on;
+select a, b, d from empty_agg_outer o
+  where o.a > (select 10 / count(*) from empty_agg_inner i where i.a = o.d);
+select a, b, d from empty_agg_outer o
+  where o.d = 1
+    and o.a > (select 10 / count(*) from empty_agg_inner i where i.a = o.d)
+  order by 1;
+
+-- A NULL empty-input value is not safe to fold inside an expression either:
+-- COALESCE can turn it into a zero divisor. Do not evaluate the expression
+-- when the outer table is empty or every outer row has matching inner rows.
+create table empty_agg_null_outer (a int) distributed by (a);
+set optimizer to off;
+select a from empty_agg_null_outer o
+  where a < (select 10 / coalesce(sum(i.a), 0)
+             from empty_agg_inner i where i.a = o.a) order by 1;
+-- An existing InitPlan for count() must not hide an unsafe NULL substitution.
+select a from empty_agg_null_outer o
+  where a < (select count(*) + 10 / coalesce(sum(i.a), 0)
+             from empty_agg_inner i where i.a = o.a) order by 1;
+set optimizer to on;
+select a from empty_agg_null_outer o
+  where a < (select 10 / coalesce(sum(i.a), 0)
+             from empty_agg_inner i where i.a = o.a) order by 1;
+insert into empty_agg_null_outer values (1);
+set optimizer to off;
+select a from empty_agg_null_outer o
+  where a < (select 10 / coalesce(sum(i.a), 0)
+             from empty_agg_inner i where i.a = o.a) order by 1;
+set optimizer to on;
+select a from empty_agg_null_outer o
+  where a < (select 10 / coalesce(sum(i.a), 0)
+             from empty_agg_inner i where i.a = o.a) order by 1;
+-- A row without a match must still raise the error at execution time.
+insert into empty_agg_null_outer values (9);
+set optimizer to off;
+select a from empty_agg_null_outer o
+  where a < (select 10 / coalesce(sum(i.a), 0)
+             from empty_agg_inner i where i.a = o.a) order by 1;
+set optimizer to on;
+select a from empty_agg_null_outer o
+  where a < (select 10 / coalesce(sum(i.a), 0)
+             from empty_agg_inner i where i.a = o.a) order by 1;
+drop table empty_agg_null_outer;
+
+-- avg() and sum() return NULL on empty input, and a comparison with NULL is
+-- not true, so the rows without a match can still be dropped by an inner join
+set optimizer to off;
+explain (costs off) select a, b, d from empty_agg_outer o
+  where o.a > (select avg(i.b) from empty_agg_inner i where i.a = o.d);
+set optimizer to on;
+explain (costs off) select a, d,
+       (select avg(i.b) from empty_agg_inner i where i.a = o.d) as avg
+  from empty_agg_outer o;
+
+-- A final function may fail on empty input even when the actual input is
+-- nonempty. Neither metadata lookup nor decorrelation may call it early.
+create function empty_agg_divide_final(int) returns int
+  language sql immutable strict as 'select 10 / $1';
+create aggregate empty_agg_divide(int)
+  (sfunc = int4pl, stype = int4, initcond = '0',
+   finalfunc = empty_agg_divide_final);
+
+-- Keep all rows in this table matched, independently of qual evaluation order.
+create table empty_agg_matched as
+  select * from empty_agg_outer where d = 1 distributed by (a);
+
+set optimizer to off;
+select empty_agg_divide(a) from empty_agg_inner;
+select a, (select empty_agg_divide(i.a) from empty_agg_inner i where i.a = o.d)
+  from empty_agg_matched o order by 1;
+select a from empty_agg_matched o
+  where a < (select empty_agg_divide(i.a) from empty_agg_inner i where i.a = o.d)
+  order by 1;
+select a from empty_agg_matched o
+  where a in (select empty_agg_divide(i.a) from empty_agg_inner i where i.a = o.d)
+  order by 1;
+-- Empty input must still raise the original error at execution time.
+select a from empty_agg_outer o where d = 9
+  and a < (select empty_agg_divide(i.a) from empty_agg_inner i where i.a = o.d);
+set optimizer to on;
+explain (costs off) select empty_agg_divide(a) from empty_agg_inner;
+select empty_agg_divide(a) from empty_agg_inner;
+select a, (select empty_agg_divide(i.a) from empty_agg_inner i where i.a = o.d)
+  from empty_agg_matched o order by 1;
+select a from empty_agg_matched o
+  where a < (select empty_agg_divide(i.a) from empty_agg_inner i where i.a = o.d)
+  order by 1;
+select a from empty_agg_matched o
+  where a in (select empty_agg_divide(i.a) from empty_agg_inner i where i.a = o.d)
+  order by 1;
+select a from empty_agg_outer o where d = 9
+  and a < (select empty_agg_divide(i.a) from empty_agg_inner i where i.a = o.d);
+
+-- A STABLE PL/pgSQL final function is not folded while loading metadata.
+-- It still must not run on empty input unless the correlated input is empty.
+create function empty_agg_divide_stable_final(int) returns int
+  language plpgsql stable strict as $$
+begin
+  return 10 / $1;
+end;
+$$;
+create aggregate empty_agg_divide_stable(int)
+  (sfunc = int4pl, stype = int4, initcond = '0',
+   finalfunc = empty_agg_divide_stable_final);
+
+set optimizer to off;
+select empty_agg_divide_stable(a) from empty_agg_inner;
+select a, (select empty_agg_divide_stable(i.a) from empty_agg_inner i
+            where i.a = o.d)
+  from empty_agg_matched o order by 1;
+select a from empty_agg_matched o
+  where a < (select empty_agg_divide_stable(i.a) from empty_agg_inner i
+              where i.a = o.d) order by 1;
+select a from empty_agg_matched o
+  where a in (select empty_agg_divide_stable(i.a) from empty_agg_inner i
+               where i.a = o.d) order by 1;
+-- A genuinely empty input still invokes the final function and fails.
+select a from empty_agg_outer o where d = 9
+  and a < (select empty_agg_divide_stable(i.a) from empty_agg_inner i
+            where i.a = o.d);
+set optimizer to on;
+select empty_agg_divide_stable(a) from empty_agg_inner;
+explain (costs off)
+select a, (select empty_agg_divide_stable(i.a) from empty_agg_inner i
+            where i.a = o.d)
+  from empty_agg_matched o;
+select a, (select empty_agg_divide_stable(i.a) from empty_agg_inner i
+            where i.a = o.d)
+  from empty_agg_matched o order by 1;
+select a from empty_agg_matched o
+  where a < (select empty_agg_divide_stable(i.a) from empty_agg_inner i
+              where i.a = o.d) order by 1;
+select a from empty_agg_matched o
+  where a in (select empty_agg_divide_stable(i.a) from empty_agg_inner i
+               where i.a = o.d) order by 1;
+select a from empty_agg_outer o where d = 9
+  and a < (select empty_agg_divide_stable(i.a) from empty_agg_inner i
+            where i.a = o.d);
+
+drop aggregate empty_agg_divide_stable(int);
+drop function empty_agg_divide_stable_final(int);
+drop table empty_agg_matched;
+drop aggregate empty_agg_divide(int);
+drop function empty_agg_divide_final(int);
+
+reset optimizer;
+drop aggregate sum_from_zero(int);
+drop table empty_agg_outer, empty_agg_inner;
