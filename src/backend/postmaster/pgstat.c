@@ -39,6 +39,7 @@
 #include "access/twophase_rmgr.h"
 #include "access/xact.h"
 #include "access/xlog.h"
+#include "catalog/catalog.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_proc.h"
 #include "executor/instrument.h"
@@ -126,6 +127,7 @@
  * ----------
  */
 bool		pgstat_track_counts = false;
+bool		pgstat_track_vacuum_statistics = false;
 int			pgstat_track_functions = TRACK_FUNC_OFF;
 
 bool		pgstat_collect_queuelevel = false;
@@ -338,7 +340,7 @@ static PgStat_StatQueueEntry *pgstat_get_queue_entry(Oid queueid, bool create); 
 static void pgstat_write_statsfiles(bool permanent, bool allDbs);
 static void pgstat_write_db_statsfile(PgStat_StatDBEntry *dbentry, bool permanent);
 static HTAB *pgstat_read_statsfiles(Oid onlydb, bool permanent, bool deep);
-static void pgstat_read_db_statsfile(Oid databaseid, HTAB *tabhash, HTAB *funchash, bool permanent);
+static void pgstat_read_db_statsfile(PgStat_StatDBEntry *dbentry, HTAB *tabhash, HTAB *funchash, bool permanent);
 static void backend_read_statsfile(void);
 
 static bool pgstat_write_statsfile_needed(void);
@@ -372,6 +374,10 @@ static void pgstat_recv_resetslrucounter(PgStat_MsgResetslrucounter *msg, int le
 static void pgstat_recv_resetreplslotcounter(PgStat_MsgResetreplslotcounter *msg, int len);
 static void pgstat_recv_autovac(PgStat_MsgAutovacStart *msg, int len);
 static void pgstat_recv_vacuum(PgStat_MsgVacuum *msg, int len);
+static void pgstat_recv_vacstats(PgStat_MsgVacstats *msg, int len);
+static void pgstat_recv_resetvacstats(PgStat_MsgResetVacstats *msg, int len);
+static PgStat_VacuumStats *pgstat_get_vacstats_entry(PgStat_StatDBEntry *dbentry,
+													 Oid tableoid, bool create);
 static void pgstat_recv_analyze(PgStat_MsgAnalyze *msg, int len);
 static void pgstat_recv_archiver(PgStat_MsgArchiver *msg, int len);
 static void pgstat_recv_queuestat(PgStat_MsgQueuestat *msg, int len); /* GPDB */
@@ -1245,6 +1251,43 @@ pgstat_vacuum_stat(void)
 	}
 
 	/*
+	 * The vacuum counters are kept apart from the table entries, so check
+	 * them too: a relation may have vacuum counters without having a table
+	 * entry, and those would never be purged otherwise.  The ones with a
+	 * table entry have been dealt with above.
+	 */
+	if (dbentry->vacuum_stats != NULL)
+	{
+		PgStat_StatVacuumEntry *vacentry;
+
+		hash_seq_init(&hstat, dbentry->vacuum_stats);
+		while ((vacentry = (PgStat_StatVacuumEntry *) hash_seq_search(&hstat)) != NULL)
+		{
+			Oid			tabid = vacentry->tableid;
+
+			CHECK_FOR_INTERRUPTS();
+
+			if (hash_search(htab, (void *) &tabid, HASH_FIND, NULL) != NULL ||
+				hash_search(dbentry->tables, (void *) &tabid, HASH_FIND, NULL) != NULL)
+				continue;
+
+			msg.m_tableid[msg.m_nentries++] = tabid;
+
+			if (msg.m_nentries >= PGSTAT_NUM_TABPURGE)
+			{
+				len = offsetof(PgStat_MsgTabpurge, m_tableid[0])
+					+ msg.m_nentries * sizeof(Oid);
+
+				pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_TABPURGE);
+				msg.m_databaseid = MyDatabaseId;
+				pgstat_send(&msg, len);
+
+				msg.m_nentries = 0;
+			}
+		}
+	}
+
+	/*
 	 * Send the rest
 	 */
 	if (msg.m_nentries > 0)
@@ -1603,6 +1646,62 @@ pgstat_report_vacuum(Oid tableoid, bool shared,
 	msg.m_vacuumtime = GetCurrentTimestamp();
 	msg.m_live_tuples = livetuples;
 	msg.m_dead_tuples = deadtuples;
+	pgstat_send(&msg, sizeof(msg));
+}
+
+/* ---------
+ * pgstat_report_vacstats() -
+ *
+ *	Tell the collector about the counters accumulated while vacuuming a
+ *	relation (a table or an index).  isindex tells which one, since only
+ *	the tables count towards the per-database totals.
+ * ---------
+ */
+void
+pgstat_report_vacstats(Oid tableoid, bool shared, bool isindex,
+					   const PgStat_VacuumStats *stats)
+{
+	PgStat_MsgVacstats msg;
+
+	if (pgStatSock == PGINVALID_SOCKET || !pgstat_track_counts ||
+		!pgstat_track_vacuum_statistics)
+		return;
+
+	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_VACSTATS);
+	msg.m_databaseid = shared ? InvalidOid : MyDatabaseId;
+	msg.m_tableoid = tableoid;
+	msg.m_isindex = isindex;
+	msg.m_stats = *stats;
+	pgstat_send(&msg, sizeof(msg));
+}
+
+/* ----------
+ * pgstat_reset_vacuum_stats() -
+ *
+ *	Tell the collector to throw away the vacuum counters of one relation of
+ *	this database, or of all of them when resetall is true.
+ * ----------
+ */
+void
+pgstat_reset_vacuum_stats(Oid relid, bool resetall)
+{
+	PgStat_MsgResetVacstats msg;
+
+	/* An invalid relation OID must never turn into a database-wide reset. */
+	if (!resetall && !OidIsValid(relid))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("invalid relation OID: %u", relid)));
+	Assert(!resetall || !OidIsValid(relid));
+
+	if (pgStatSock == PGINVALID_SOCKET)
+		return;
+
+	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_RESETVACSTATS);
+	msg.m_databaseid = !resetall && IsSharedRelation(relid) ?
+		InvalidOid : MyDatabaseId;
+	msg.m_objectid = relid;
+	msg.m_resetall = resetall;
 	pgstat_send(&msg, sizeof(msg));
 }
 
@@ -2806,6 +2905,45 @@ pgstat_fetch_stat_tabentry(Oid relid)
 
 
 /* ----------
+ * pgstat_fetch_stat_vacuum_stats() -
+ *
+ *	Support function for the SQL-callable functions of the vacuum_stats
+ *	extension.  Returns the vacuum counters of one relation, or NULL if it was
+ *	never vacuumed -- or if they are not collected at all.
+ * ----------
+ */
+PgStat_VacuumStats *
+pgstat_fetch_stat_vacuum_stats(Oid relid)
+{
+	Oid			dbid;
+	PgStat_StatDBEntry *dbentry;
+	PgStat_VacuumStats *vacstats;
+
+	backend_read_statsfile();
+
+	/* our own database first, then the shared catalogs */
+	dbid = MyDatabaseId;
+	dbentry = (PgStat_StatDBEntry *) hash_search(pgStatDBHash,
+												 (void *) &dbid,
+												 HASH_FIND, NULL);
+	if (dbentry != NULL)
+	{
+		vacstats = pgstat_get_vacstats_entry(dbentry, relid, false);
+		if (vacstats != NULL)
+			return vacstats;
+	}
+
+	dbid = InvalidOid;
+	dbentry = (PgStat_StatDBEntry *) hash_search(pgStatDBHash,
+												 (void *) &dbid,
+												 HASH_FIND, NULL);
+	if (dbentry != NULL)
+		return pgstat_get_vacstats_entry(dbentry, relid, false);
+
+	return NULL;
+}
+
+/* ----------
  * pgstat_fetch_stat_funcentry() -
  *
  *	Support function for the SQL-callable pgstat* functions. Returns
@@ -3677,6 +3815,14 @@ PgstatCollectorMain(int argc, char *argv[])
 					pgstat_recv_vacuum(&msg.msg_vacuum, len);
 					break;
 
+				case PGSTAT_MTYPE_VACSTATS:
+					pgstat_recv_vacstats(&msg.msg_vacstats, len);
+					break;
+
+				case PGSTAT_MTYPE_RESETVACSTATS:
+					pgstat_recv_resetvacstats(&msg.msg_resetvacstats, len);
+					break;
+
 				case PGSTAT_MTYPE_ANALYZE:
 					pgstat_recv_analyze(&msg.msg_analyze, len);
 					break;
@@ -3820,9 +3966,19 @@ reset_dbentry_counters(PgStat_StatDBEntry *dbentry)
 	dbentry->n_sessions_abandoned = 0;
 	dbentry->n_sessions_fatal = 0;
 	dbentry->n_sessions_killed = 0;
+	MemSet(&dbentry->n_vacuum_stats, 0, sizeof(dbentry->n_vacuum_stats));
+	dbentry->n_rev_all_frozen_pages = 0;
+	dbentry->n_rev_all_visible_pages = 0;
 
 	dbentry->stat_reset_timestamp = GetCurrentTimestamp();
 	dbentry->stats_timestamp = 0;
+
+	/*
+	 * The vacuum counters are kept in a hash table of their own, which is
+	 * created when the first relation of this database is vacuumed; leave it
+	 * empty here.  The caller has destroyed the old one, if there was any.
+	 */
+	dbentry->vacuum_stats = NULL;
 
 	hash_ctl.keysize = sizeof(Oid);
 	hash_ctl.entrysize = sizeof(PgStat_StatTabEntry);
@@ -3914,6 +4070,8 @@ pgstat_get_tab_entry(PgStat_StatDBEntry *dbentry, Oid tableoid, bool create)
 		result->analyze_count = 0;
 		result->autovac_analyze_timestamp = 0;
 		result->autovac_analyze_count = 0;
+		result->rev_all_frozen_pages = 0;
+		result->rev_all_visible_pages = 0;
 	}
 
 	return result;
@@ -4172,6 +4330,23 @@ pgstat_write_db_statsfile(PgStat_StatDBEntry *dbentry, bool permanent)
 		fputc('T', fpout);
 		rc = fwrite(tabentry, sizeof(PgStat_StatTabEntry), 1, fpout);
 		(void) rc;				/* we'll check for error with ferror */
+	}
+
+	/*
+	 * Walk through the database's vacuum counters, if it has any.
+	 */
+	if (dbentry->vacuum_stats != NULL)
+	{
+		HASH_SEQ_STATUS vstat;
+		PgStat_StatVacuumEntry *vacentry;
+
+		hash_seq_init(&vstat, dbentry->vacuum_stats);
+		while ((vacentry = (PgStat_StatVacuumEntry *) hash_seq_search(&vstat)) != NULL)
+		{
+			fputc('V', fpout);
+			rc = fwrite(vacentry, sizeof(PgStat_StatVacuumEntry), 1, fpout);
+			(void) rc;			/* we'll check for error with ferror */
+		}
 	}
 
 	/*
@@ -4437,6 +4612,7 @@ pgstat_read_statsfiles(Oid onlydb, bool permanent, bool deep)
 				memcpy(dbentry, &dbbuf, sizeof(PgStat_StatDBEntry));
 				dbentry->tables = NULL;
 				dbentry->functions = NULL;
+				dbentry->vacuum_stats = NULL;
 
 				/*
 				 * In the collector, disregard the timestamp we read from the
@@ -4480,7 +4656,7 @@ pgstat_read_statsfiles(Oid onlydb, bool permanent, bool deep)
 				 * file.  Otherwise we just leave the hashtables empty.
 				 */
 				if (deep)
-					pgstat_read_db_statsfile(dbentry->databaseid,
+					pgstat_read_db_statsfile(dbentry,
 											 dbentry->tables,
 											 dbentry->functions,
 											 permanent);
@@ -4599,9 +4775,10 @@ done:
  * ----------
  */
 static void
-pgstat_read_db_statsfile(Oid databaseid, HTAB *tabhash, HTAB *funchash,
-						 bool permanent)
+pgstat_read_db_statsfile(PgStat_StatDBEntry *dbentry, HTAB *tabhash,
+						 HTAB *funchash, bool permanent)
 {
+	Oid			databaseid = dbentry->databaseid;
 	PgStat_StatTabEntry *tabentry;
 	PgStat_StatTabEntry tabbuf;
 	PgStat_StatFuncEntry funcbuf;
@@ -4684,6 +4861,29 @@ pgstat_read_db_statsfile(Oid databaseid, HTAB *tabhash, HTAB *funchash,
 
 				memcpy(tabentry, &tabbuf, sizeof(tabbuf));
 				break;
+
+				/*
+				 * 'V'	A PgStat_StatVacuumEntry follows.
+				 */
+			case 'V':
+				{
+					PgStat_StatVacuumEntry vacbuf;
+					PgStat_VacuumStats *vacstats;
+
+					if (fread(&vacbuf, 1, sizeof(PgStat_StatVacuumEntry),
+							  fpin) != sizeof(PgStat_StatVacuumEntry))
+					{
+						ereport(pgStatRunningInCollector ? LOG : WARNING,
+								(errmsg("corrupted statistics file \"%s\"",
+										statfile)));
+						goto done;
+					}
+
+					vacstats = pgstat_get_vacstats_entry(dbentry,
+														 vacbuf.tableid, true);
+					*vacstats = vacbuf.vacuum_stats;
+					break;
+				}
 
 				/*
 				 * 'F'	A PgStat_StatFuncEntry follows.
@@ -5275,6 +5475,10 @@ pgstat_recv_tabstat(PgStat_MsgTabstat *msg, int len)
 			tabentry->analyze_count = 0;
 			tabentry->autovac_analyze_timestamp = 0;
 			tabentry->autovac_analyze_count = 0;
+			tabentry->rev_all_frozen_pages =
+				tabmsg->t_counts.t_rev_all_frozen_pages;
+			tabentry->rev_all_visible_pages =
+				tabmsg->t_counts.t_rev_all_visible_pages;
 		}
 		else
 		{
@@ -5301,6 +5505,10 @@ pgstat_recv_tabstat(PgStat_MsgTabstat *msg, int len)
 			tabentry->inserts_since_vacuum += tabmsg->t_counts.t_tuples_inserted;
 			tabentry->blocks_fetched += tabmsg->t_counts.t_blocks_fetched;
 			tabentry->blocks_hit += tabmsg->t_counts.t_blocks_hit;
+			tabentry->rev_all_frozen_pages +=
+				tabmsg->t_counts.t_rev_all_frozen_pages;
+			tabentry->rev_all_visible_pages +=
+				tabmsg->t_counts.t_rev_all_visible_pages;
 		}
 
 		/* Clamp n_live_tuples in case of negative delta_live_tuples */
@@ -5318,6 +5526,10 @@ pgstat_recv_tabstat(PgStat_MsgTabstat *msg, int len)
 		dbentry->n_tuples_deleted += tabmsg->t_counts.t_tuples_deleted;
 		dbentry->n_blocks_fetched += tabmsg->t_counts.t_blocks_fetched;
 		dbentry->n_blocks_hit += tabmsg->t_counts.t_blocks_hit;
+		dbentry->n_rev_all_frozen_pages +=
+			tabmsg->t_counts.t_rev_all_frozen_pages;
+		dbentry->n_rev_all_visible_pages +=
+			tabmsg->t_counts.t_rev_all_visible_pages;
 	}
 }
 
@@ -5351,6 +5563,12 @@ pgstat_recv_tabpurge(PgStat_MsgTabpurge *msg, int len)
 		(void) hash_search(dbentry->tables,
 						   (void *) &(msg->m_tableid[i]),
 						   HASH_REMOVE, NULL);
+
+		/* The vacuum counters of the relation go as well. */
+		if (dbentry->vacuum_stats != NULL)
+			(void) hash_search(dbentry->vacuum_stats,
+							   (void *) &(msg->m_tableid[i]),
+							   HASH_REMOVE, NULL);
 	}
 }
 
@@ -5388,6 +5606,8 @@ pgstat_recv_dropdb(PgStat_MsgDropdb *msg, int len)
 			hash_destroy(dbentry->tables);
 		if (dbentry->functions != NULL)
 			hash_destroy(dbentry->functions);
+		if (dbentry->vacuum_stats != NULL)
+			hash_destroy(dbentry->vacuum_stats);
 
 		if (hash_search(pgStatDBHash,
 						(void *) &dbid,
@@ -5425,9 +5645,12 @@ pgstat_recv_resetcounter(PgStat_MsgResetcounter *msg, int len)
 		hash_destroy(dbentry->tables);
 	if (dbentry->functions != NULL)
 		hash_destroy(dbentry->functions);
+	if (dbentry->vacuum_stats != NULL)
+		hash_destroy(dbentry->vacuum_stats);
 
 	dbentry->tables = NULL;
 	dbentry->functions = NULL;
+	dbentry->vacuum_stats = NULL;
 
 	/*
 	 * Reset database-level stats, too.  This creates empty hash tables for
@@ -5491,8 +5714,14 @@ pgstat_recv_resetsinglecounter(PgStat_MsgResetsinglecounter *msg, int len)
 
 	/* Remove object if it exists, ignore it if not */
 	if (msg->m_resettype == RESET_TABLE)
+	{
 		(void) hash_search(dbentry->tables, (void *) &(msg->m_objectid),
 						   HASH_REMOVE, NULL);
+		if (dbentry->vacuum_stats != NULL)
+			(void) hash_search(dbentry->vacuum_stats,
+							   (void *) &(msg->m_objectid),
+							   HASH_REMOVE, NULL);
+	}
 	else if (msg->m_resettype == RESET_FUNCTION)
 		(void) hash_search(dbentry->functions, (void *) &(msg->m_objectid),
 						   HASH_REMOVE, NULL);
@@ -5630,6 +5859,168 @@ pgstat_recv_vacuum(PgStat_MsgVacuum *msg, int len)
 		tabentry->vacuum_timestamp = msg->m_vacuumtime;
 		tabentry->vacuum_count++;
 	}
+}
+
+/*
+ * Lookup the vacuum counters of one relation, creating them, and the hash
+ * table that holds them, if asked to.  Nothing is allocated for a database
+ * whose relations were never vacuumed.
+ */
+static PgStat_VacuumStats *
+pgstat_get_vacstats_entry(PgStat_StatDBEntry *dbentry, Oid tableoid,
+						  bool create)
+{
+	PgStat_StatVacuumEntry *result;
+	bool		found;
+
+	if (dbentry->vacuum_stats == NULL)
+	{
+		HASHCTL		hash_ctl;
+
+		if (!create)
+			return NULL;
+
+		/*
+		 * In a backend the table belongs to the statistics snapshot, like
+		 * the other hash tables read from the stats file, so that it goes
+		 * away with pgstat_clear_snapshot().  The collector keeps it for good.
+		 */
+		hash_ctl.keysize = sizeof(Oid);
+		hash_ctl.entrysize = sizeof(PgStat_StatVacuumEntry);
+		if (pgStatRunningInCollector)
+			dbentry->vacuum_stats = hash_create("Per-database vacuum statistics",
+												PGSTAT_TAB_HASH_SIZE,
+												&hash_ctl,
+												HASH_ELEM | HASH_BLOBS);
+		else
+		{
+			Assert(pgStatLocalContext != NULL);
+			hash_ctl.hcxt = pgStatLocalContext;
+			dbentry->vacuum_stats = hash_create("Per-database vacuum statistics",
+												PGSTAT_TAB_HASH_SIZE,
+												&hash_ctl,
+												HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+		}
+	}
+
+	result = (PgStat_StatVacuumEntry *) hash_search(dbentry->vacuum_stats,
+													&tableoid,
+													create ? HASH_ENTER : HASH_FIND,
+													&found);
+	if (result == NULL)
+		return NULL;
+
+	if (!found)
+		MemSet(&result->vacuum_stats, 0, sizeof(result->vacuum_stats));
+
+	return &result->vacuum_stats;
+}
+
+/* ----------
+ * pgstat_recv_vacstats() -
+ *
+ *	Process a VACSTATS message: accumulate the vacuum counters into the
+ *	relation's entry and, for a table, into the per-database totals.
+ * ----------
+ */
+static void
+pgstat_recv_vacstats(PgStat_MsgVacstats *msg, int len)
+{
+	PgStat_StatDBEntry *dbentry;
+	PgStat_VacuumStats *vacstats;
+
+	dbentry = pgstat_get_db_entry(msg->m_databaseid, true);
+
+	vacstats = pgstat_get_vacstats_entry(dbentry, msg->m_tableoid, true);
+
+	vacstats->tuples_deleted += msg->m_stats.tuples_deleted;
+	vacstats->dead_tuples += msg->m_stats.dead_tuples;
+	vacstats->pages_deleted += msg->m_stats.pages_deleted;
+	vacstats->dead_pages += msg->m_stats.dead_pages;
+	vacstats->pages_frozen += msg->m_stats.pages_frozen;
+	vacstats->pages_all_visible += msg->m_stats.pages_all_visible;
+	vacstats->wraparound_vacuum_count +=
+		msg->m_stats.wraparound_vacuum_count;
+	vacstats->total_time += msg->m_stats.total_time;
+	vacstats->delay_time += msg->m_stats.delay_time;
+
+	/*
+	 * The per-database totals describe what vacuum did to the tables.  An
+	 * index is vacuumed as a part of its table, and the time it took is
+	 * already accounted for in the table's own report, so adding the index
+	 * counters here would count that work twice.
+	 */
+	if (msg->m_isindex)
+		return;
+
+	dbentry->n_vacuum_stats.tuples_deleted += msg->m_stats.tuples_deleted;
+	dbentry->n_vacuum_stats.dead_tuples += msg->m_stats.dead_tuples;
+	dbentry->n_vacuum_stats.pages_deleted += msg->m_stats.pages_deleted;
+	dbentry->n_vacuum_stats.dead_pages += msg->m_stats.dead_pages;
+	dbentry->n_vacuum_stats.pages_frozen += msg->m_stats.pages_frozen;
+	dbentry->n_vacuum_stats.pages_all_visible += msg->m_stats.pages_all_visible;
+	dbentry->n_vacuum_stats.wraparound_vacuum_count +=
+		msg->m_stats.wraparound_vacuum_count;
+	dbentry->n_vacuum_stats.total_time += msg->m_stats.total_time;
+	dbentry->n_vacuum_stats.delay_time += msg->m_stats.delay_time;
+}
+
+/* ----------
+ * pgstat_recv_resetvacstats() -
+ *
+ *	Throw away the vacuum counters of one relation, or of the whole database
+ *	when no relation is given, together with the "rev" counters kept in the
+ *	table entries.  The other statistics are left alone.
+ * ----------
+ */
+static void
+pgstat_recv_resetvacstats(PgStat_MsgResetVacstats *msg, int len)
+{
+	PgStat_StatDBEntry *dbentry;
+	PgStat_StatTabEntry *tabentry;
+	HASH_SEQ_STATUS hstat;
+
+	dbentry = pgstat_get_db_entry(msg->m_databaseid, false);
+
+	if (!dbentry)
+		return;
+
+	if (!msg->m_resetall)
+	{
+		if (dbentry->vacuum_stats != NULL)
+			(void) hash_search(dbentry->vacuum_stats,
+							   (void *) &(msg->m_objectid),
+							   HASH_REMOVE, NULL);
+
+		/* the "rev" counters live in the table entry */
+		tabentry = (PgStat_StatTabEntry *) hash_search(dbentry->tables,
+													   (void *) &(msg->m_objectid),
+													   HASH_FIND, NULL);
+		if (tabentry != NULL)
+		{
+			tabentry->rev_all_frozen_pages = 0;
+			tabentry->rev_all_visible_pages = 0;
+		}
+		return;
+	}
+
+	/* the whole database: the per-relation counters and their totals */
+	if (dbentry->vacuum_stats != NULL)
+	{
+		hash_destroy(dbentry->vacuum_stats);
+		dbentry->vacuum_stats = NULL;
+	}
+
+	hash_seq_init(&hstat, dbentry->tables);
+	while ((tabentry = (PgStat_StatTabEntry *) hash_seq_search(&hstat)) != NULL)
+	{
+		tabentry->rev_all_frozen_pages = 0;
+		tabentry->rev_all_visible_pages = 0;
+	}
+
+	MemSet(&dbentry->n_vacuum_stats, 0, sizeof(dbentry->n_vacuum_stats));
+	dbentry->n_rev_all_frozen_pages = 0;
+	dbentry->n_rev_all_visible_pages = 0;
 }
 
 /* ----------

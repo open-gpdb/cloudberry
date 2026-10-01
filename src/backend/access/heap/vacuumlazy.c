@@ -370,6 +370,10 @@ typedef struct LVRelState
 	BlockNumber pages_removed;	/* pages remove by truncation */
 	BlockNumber lpdead_item_pages;	/* # pages with LP_DEAD items */
 	BlockNumber nonempty_pages; /* actually, last nonempty page + 1 */
+	/* Counters reported as the relation's vacuum statistics */
+	BlockNumber dead_pages;		/* pages left with unremovable dead tuples */
+	BlockNumber pages_frozen;	/* pages where we froze tuples */
+	BlockNumber pages_all_visible;	/* pages we marked all-visible */
 
 	/* Statistics output by us, for table */
 	double		new_rel_tuples; /* new estimated total # of tuples */
@@ -512,6 +516,10 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 				write_rate;
 	bool		aggressive;		/* should we scan all unfrozen pages? */
 	bool		scanned_all_unfrozen;	/* actually scanned all such pages? */
+	bool		wraparound;		/* did the freeze table age make it aggressive? */
+	instr_time	vacstart;
+	int64		startdelaytime;
+	instr_time	vacend;
 	char	  **indnames = NULL;
 	TransactionId xidFullScanLimit;
 	MultiXactId mxactFullScanLimit;
@@ -526,6 +534,10 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 	TransactionId OldestXmin;
 	TransactionId FreezeLimit;
 	MultiXactId MultiXactCutoff;
+
+	/* measure elapsed and delay time for the vacuum statistics */
+	INSTR_TIME_SET_CURRENT(vacstart);
+	startdelaytime = VacuumDelayTime;
 
 	/* measure elapsed time iff autovacuum logging requires it */
 	if (IsAutoVacuumWorkerProcess() && params->log_min_duration >= 0)
@@ -574,6 +586,14 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 											   xidFullScanLimit);
 	aggressive |= MultiXactIdPrecedesOrEquals(rel->rd_rel->relminmxid,
 											  mxactFullScanLimit);
+
+	/*
+	 * Remember whether the relation reached the freeze table age, for the
+	 * vacuum statistics; a run forced by DISABLE_PAGE_SKIPPING is aggressive
+	 * too, but it is not driven by wraparound.
+	 */
+	wraparound = aggressive;
+
 	if (params->options & VACOPT_DISABLE_PAGE_SKIPPING)
 		aggressive = true;
 
@@ -753,6 +773,40 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 						 rel->rd_rel->relisshared,
 						 Max(new_live_tuples, 0),
 						 vacrel->new_dead_tuples);
+
+	/* report the per-vacuum counters as well */
+	{
+		PgStat_VacuumStats vacstats;
+
+		MemSet(&vacstats, 0, sizeof(vacstats));
+		vacstats.tuples_deleted = (PgStat_Counter) vacrel->tuples_deleted;
+		vacstats.dead_tuples = (PgStat_Counter) vacrel->new_dead_tuples;
+		vacstats.pages_deleted = (PgStat_Counter) vacrel->pages_removed;
+		vacstats.dead_pages = (PgStat_Counter) vacrel->dead_pages;
+		vacstats.pages_frozen = (PgStat_Counter) vacrel->pages_frozen;
+		vacstats.pages_all_visible = (PgStat_Counter) vacrel->pages_all_visible;
+		vacstats.wraparound_vacuum_count = wraparound ? 1 : 0;
+
+		INSTR_TIME_SET_CURRENT(vacend);
+		INSTR_TIME_SUBTRACT(vacend, vacstart);
+		vacstats.total_time = (PgStat_Counter) INSTR_TIME_GET_MICROSEC(vacend);
+		vacstats.delay_time =
+			(PgStat_Counter) (VacuumDelayTime - startdelaytime);
+
+		ereport(elevel,
+				(errmsg("table \"%s\": vacuum statistics", vacrel->relname),
+				 errdetail("elapsed: %.3f ms, cost-based delay: %.3f ms\n"
+						   "aggressive scan required by freeze age: %s",
+						   vacstats.total_time / 1000.0,
+						   vacstats.delay_time / 1000.0,
+						   wraparound ? _("yes") : _("no"))));
+
+		pgstat_report_vacstats(RelationGetRelid(rel),
+							   rel->rd_rel->relisshared,
+							   false,
+							   &vacstats);
+	}
+
 	pgstat_progress_end_command();
 
 	/* and log the action if appropriate */
@@ -818,6 +872,14 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 							 vacrel->rel_pages,
 							 vacrel->pinskipped_pages,
 							 vacrel->frozenskipped_pages);
+			appendStringInfo(&buf, _("pages with dead tuples not yet removable: %u\n"),
+							 vacrel->dead_pages);
+			appendStringInfo(&buf, _("pages with tuples frozen: %u\n"),
+							 vacrel->pages_frozen);
+			appendStringInfo(&buf, _("pages marked all-visible: %u\n"),
+							 vacrel->pages_all_visible);
+			appendStringInfo(&buf, _("aggressive scan required by freeze age: %s\n"),
+							 wraparound ? _("yes") : _("no"));
 			appendStringInfo(&buf,
 							 _("tuples: %lld removed, %lld remain, %lld are dead but not yet removable, oldest xmin: %u\n"),
 							 (long long) vacrel->tuples_deleted,
@@ -885,6 +947,8 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 							 (long long) walusage.wal_records,
 							 (long long) walusage.wal_fpi,
 							 (unsigned long long) walusage.wal_bytes);
+			appendStringInfo(&buf, _("cost-based delay: %.3f ms\n"),
+							 (VacuumDelayTime - startdelaytime) / 1000.0);
 			appendStringInfo(&buf, _("system usage: %s"), pg_rusage_show(&ru0));
 
 			ereport(LOG,
@@ -1391,6 +1455,7 @@ lazy_scan_heap(LVRelState *vacrel, VacuumParams *params, bool aggressive)
 				visibilitymap_set(vacrel->rel, blkno, buf, InvalidXLogRecPtr,
 								  vmbuffer, InvalidTransactionId,
 								  VISIBILITYMAP_ALL_VISIBLE | VISIBILITYMAP_ALL_FROZEN);
+				vacrel->pages_all_visible++;
 				END_CRIT_SECTION();
 			}
 
@@ -1502,6 +1567,7 @@ lazy_scan_heap(LVRelState *vacrel, VacuumParams *params, bool aggressive)
 			visibilitymap_set(vacrel->rel, blkno, buf, InvalidXLogRecPtr,
 							  vmbuffer, prunestate.visibility_cutoff_xid,
 							  flags);
+			vacrel->pages_all_visible++;
 		}
 
 		/*
@@ -1685,6 +1751,12 @@ lazy_scan_heap(LVRelState *vacrel, VacuumParams *params, bool aggressive)
 	appendStringInfo(&buf,
 					 _("%lld dead row versions cannot be removed yet, oldest xmin: %u\n"),
 					 (long long) vacrel->new_dead_tuples, vacrel->OldestXmin);
+	appendStringInfo(&buf, _("pages with dead tuples not yet removable: %u\n"),
+					 vacrel->dead_pages);
+	appendStringInfo(&buf, _("pages with tuples frozen: %u\n"),
+					 vacrel->pages_frozen);
+	appendStringInfo(&buf, _("pages marked all-visible: %u\n"),
+					 vacrel->pages_all_visible);
 	appendStringInfo(&buf, ngettext("Skipped %u page due to buffer pins, ",
 									"Skipped %u pages due to buffer pins, ",
 									vacrel->pinskipped_pages),
@@ -1992,6 +2064,8 @@ retry:
 	{
 		Assert(prunestate->hastup);
 
+		vacrel->pages_frozen++;
+
 		/*
 		 * At least one tuple with storage needs to be frozen -- execute that
 		 * now.
@@ -2091,6 +2165,10 @@ retry:
 		pgstat_progress_update_param(PROGRESS_VACUUM_NUM_DEAD_TUPLES,
 									 dead_tuples->num_tuples);
 	}
+
+	/* Remember pages that keep dead tuples we could not remove yet */
+	if (new_dead_tuples > 0)
+		vacrel->dead_pages++;
 
 	/* Finally, add page-local counts to whole-VACUUM counts */
 	vacrel->tuples_deleted += tuples_deleted;
@@ -2544,8 +2622,12 @@ lazy_vacuum_heap_page(LVRelState *vacrel, BlockNumber blkno, Buffer buffer,
 
 		Assert(BufferIsValid(*vmbuffer));
 		if (flags != 0)
+		{
 			visibilitymap_set(vacrel->rel, blkno, buffer, InvalidXLogRecPtr,
 							  *vmbuffer, visibility_cutoff_xid, flags);
+			if (flags & VISIBILITYMAP_ALL_VISIBLE)
+				vacrel->pages_all_visible++;
+		}
 	}
 
 	/* Revert to the previous phase information for error traceback */
@@ -3045,6 +3127,79 @@ lazy_cleanup_all_indexes(LVRelState *vacrel)
 }
 
 /*
+ * lazy_index_vacstats_start() -- remember where an index vacuum call starts,
+ * for lazy_report_index_vacstats().
+ *
+ * The counters in istat accumulate over all the calls made for the index
+ * during one vacuum, so we report what each call added to them.  That keeps
+ * the work of the bulk deletion passes accounted for even when the cleanup
+ * is skipped, and keeps it from being counted twice when it is not.
+ */
+static IndexBulkDeleteResult
+lazy_index_vacstats_start(IndexBulkDeleteResult *istat,
+						  instr_time *starttime, int64 *startdelaytime)
+{
+	IndexBulkDeleteResult before;
+
+	if (istat)
+		before = *istat;
+	else
+		MemSet(&before, 0, sizeof(before));
+
+	INSTR_TIME_SET_CURRENT(*starttime);
+	*startdelaytime = VacuumDelayTime;
+
+	return before;
+}
+
+/*
+ * lazy_report_index_vacstats() -- report the vacuum statistics of one index
+ * vacuum call.
+ *
+ * pages_deleted and pages_free describe the whole index as the call left it,
+ * not what it did, so they are only looked at after the cleanup, which comes
+ * last: the deleted pages that are not reusable yet are the index's dead
+ * pages.
+ */
+static void
+lazy_report_index_vacstats(Relation indrel, IndexBulkDeleteResult *istat,
+						   IndexBulkDeleteResult *before, bool cleanup,
+						   instr_time starttime, int64 startdelaytime)
+{
+	PgStat_VacuumStats vacstats;
+	instr_time	endtime;
+
+	INSTR_TIME_SET_CURRENT(endtime);
+	INSTR_TIME_SUBTRACT(endtime, starttime);
+
+	MemSet(&vacstats, 0, sizeof(vacstats));
+	if (istat)
+	{
+		vacstats.tuples_deleted =
+			(PgStat_Counter) (istat->tuples_removed - before->tuples_removed);
+		/*
+		 * Most access methods accumulate pages_newly_deleted over the calls
+		 * too, but SP-GiST sets it anew on every scan.
+		 */
+		if (istat->pages_newly_deleted >= before->pages_newly_deleted)
+			vacstats.pages_deleted = (PgStat_Counter)
+				(istat->pages_newly_deleted - before->pages_newly_deleted);
+		else
+			vacstats.pages_deleted = (PgStat_Counter) istat->pages_newly_deleted;
+		if (cleanup && istat->pages_deleted > istat->pages_free)
+			vacstats.dead_pages =
+				(PgStat_Counter) (istat->pages_deleted - istat->pages_free);
+	}
+	vacstats.total_time = (PgStat_Counter) INSTR_TIME_GET_MICROSEC(endtime);
+	vacstats.delay_time = (PgStat_Counter) (VacuumDelayTime - startdelaytime);
+
+	pgstat_report_vacstats(RelationGetRelid(indrel),
+						   indrel->rd_rel->relisshared,
+						   true,
+						   &vacstats);
+}
+
+/*
  *	lazy_vacuum_one_index() -- vacuum index relation.
  *
  *		Delete all the index entries pointing to tuples listed in
@@ -3062,6 +3217,9 @@ lazy_vacuum_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 	IndexVacuumInfo ivinfo;
 	PGRUsage	ru0;
 	LVSavedErrInfo saved_err_info;
+	IndexBulkDeleteResult istat_before;
+	instr_time	starttime;
+	int64		startdelaytime;
 
 	pg_rusage_init(&ru0);
 
@@ -3086,13 +3244,19 @@ lazy_vacuum_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 							 InvalidBlockNumber, InvalidOffsetNumber);
 
 	/* Do bulk deletion */
+	istat_before = lazy_index_vacstats_start(istat, &starttime,
+											 &startdelaytime);
 	istat = index_bulk_delete(&ivinfo, istat, lazy_tid_reaped,
 							  (void *) vacrel->dead_tuples);
+	lazy_report_index_vacstats(indrel, istat, &istat_before, false,
+							   starttime, startdelaytime);
 
 	ereport(elevel,
 			(errmsg("scanned index \"%s\" to remove %d row versions",
 					vacrel->indname, vacrel->dead_tuples->num_tuples),
-			 errdetail_internal("%s", pg_rusage_show(&ru0))));
+			 errdetail("cost-based delay: %.3f ms\n%s",
+					   (VacuumDelayTime - startdelaytime) / 1000.0,
+					   pg_rusage_show(&ru0))));
 
 	/* Revert to the previous phase information for error traceback */
 	restore_vacuum_error_info(vacrel, &saved_err_info);
@@ -3118,6 +3282,9 @@ lazy_cleanup_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 	IndexVacuumInfo ivinfo;
 	PGRUsage	ru0;
 	LVSavedErrInfo saved_err_info;
+	IndexBulkDeleteResult istat_before;
+	instr_time	starttime;
+	int64		startdelaytime;
 
 	pg_rusage_init(&ru0);
 
@@ -3142,7 +3309,11 @@ lazy_cleanup_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 							 VACUUM_ERRCB_PHASE_INDEX_CLEANUP,
 							 InvalidBlockNumber, InvalidOffsetNumber);
 
+	istat_before = lazy_index_vacstats_start(istat, &starttime,
+											 &startdelaytime);
 	istat = index_vacuum_cleanup(&ivinfo, istat);
+	lazy_report_index_vacstats(indrel, istat, &istat_before, true,
+							   starttime, startdelaytime);
 
 	if (istat)
 	{
@@ -3154,10 +3325,12 @@ lazy_cleanup_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 				 errdetail("%.0f index row versions were removed.\n"
 						   "%u index pages were newly deleted.\n"
 						   "%u index pages are currently deleted, of which %u are currently reusable.\n"
+						   "cost-based delay: %.3f ms\n"
 						   "%s.",
 						   (istat)->tuples_removed,
 						   (istat)->pages_newly_deleted,
 						   (istat)->pages_deleted, (istat)->pages_free,
+						   (VacuumDelayTime - startdelaytime) / 1000.0,
 						   pg_rusage_show(&ru0))));
 	}
 
