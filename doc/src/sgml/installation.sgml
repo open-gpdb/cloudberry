@@ -983,6 +983,20 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
+      <varlistentry id="configure-without-copy-program">
+       <term><option>--without-copy-program</option></term>
+       <listitem>
+        <para>
+         Build without support for <command>COPY TO/FROM PROGRAM</command>.
+         By default, this feature is enabled.  When built with
+         <option>--without-copy-program</option>, any attempt to use
+         <command>COPY</command> with the <literal>PROGRAM</literal>
+         option will result in an error, regardless of the user's
+         privileges.
+        </para>
+       </listitem>
+      </varlistentry>
+
       <varlistentry>
        <term><option>--with-lz4</option></term>
        <listitem>
