@@ -480,6 +480,11 @@ Copyright (c) 2004-2020 VMware, Inc. or its affiliates. All Rights Reserved.
 
 All Rights Reserved.
 
+Some ORCA query optimizer files that Greenplum Database added in 2024
+carry a "Copyright (C) 2024 Broadcom" or "Copyright (C) 2024 VMware by
+Broadcom" notice instead; they are part of Greenplum Database and are
+covered by the same license.
+
 Greenplum Database is licensed under the Apache License Version 2.0
 (see LICENSE) and is based on the PostgreSQL Database Management System.
 
