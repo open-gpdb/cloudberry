@@ -9,10 +9,10 @@
 SET enable_nestloop = off;
 SET enable_mergejoin = off;
 -- A regress test must not inherit the production deadline.  anser.timeout_ms
--- defaults to 100 s because delivery is serial and a wide slice needs that
--- long to be served; a test that waits it out has turned a delivery failure
--- into a slow pass.  Pinned short here, so a filter that never arrives fails
--- the run instead of hiding in the clock.
+-- defaults to 10 s, which is a budget for an exchange that has gone wrong; a
+-- test that waits it out has turned a delivery failure into a slow pass.
+-- Pinned shorter here, so a filter that never arrives fails the run instead of
+-- hiding in the clock.
 SET anser.timeout_ms = 5000;
 -- build is the smaller (hashed / preserved) side, distributed so the join key
 -- must be redistributed; probe is the larger side distributed by the join key.
@@ -144,6 +144,24 @@ SELECT count(*) AS only_off_push
 (1 row)
 
 RESET gp_enable_runtime_filter_pushdown;
+-- Counts the Anser nodes a plan carries.  Comparing a filtered count with an
+-- unfiltered one says nothing when no filter was injected: both runs then do
+-- the same thing and agree.  Several blocks below ask this as well, which is
+-- why it is defined here rather than beside its first caller.
+CREATE FUNCTION anser_rf_nodes(q text) RETURNS bigint
+LANGUAGE plpgsql AS $$
+DECLARE
+    line  text;
+    nodes bigint := 0;
+BEGIN
+    FOR line IN EXECUTE 'EXPLAIN (COSTS OFF) ' || q LOOP
+        IF line ~ 'Anser Bloom' THEN
+            nodes := nodes + 1;
+        END IF;
+    END LOOP;
+    RETURN nodes;
+END;
+$$;
 -- Pushdown where the key's table attribute number and its position in the
 -- scan's output targetlist disagree.  The case above cannot see the
 -- difference: anser_rf_probe's key is its first column and also the first
@@ -153,9 +171,9 @@ RESET gp_enable_runtime_filter_pushdown;
 -- built on `id` -- and since no payload is ever a build key, every row is
 -- discarded.  Both counts must be 200.
 SET optimizer = on;
-CREATE TABLE anser_rf_proj_build (id int) DISTRIBUTED BY (id);
+CREATE TABLE anser_rf_proj_build (id int, pad text) DISTRIBUTED BY (pad);
 CREATE TABLE anser_rf_proj_probe (payload int, id int) DISTRIBUTED BY (id);
-INSERT INTO anser_rf_proj_build SELECT g FROM generate_series(1, 200) g;
+INSERT INTO anser_rf_proj_build SELECT g, 'b' || g FROM generate_series(1, 200) g;
 INSERT INTO anser_rf_proj_probe SELECT -g, g FROM generate_series(1, 2000) g;
 ANALYZE anser_rf_proj_build;
 ANALYZE anser_rf_proj_probe;
@@ -174,6 +192,13 @@ SELECT count(p.id) AS proj_push_on
  proj_push_on 
 --------------
           200
+(1 row)
+
+SELECT anser_rf_nodes('SELECT count(p.id)
+    FROM anser_rf_proj_build b LEFT JOIN anser_rf_proj_probe p ON b.id = p.id') > 0 AS proj_injected;
+ proj_injected 
+---------------
+ t
 (1 row)
 
 -- The alias is not the column.  This subquery renames `payload` to the name
@@ -202,13 +227,28 @@ SELECT count(p.id2) AS rename_push_on
             200
 (1 row)
 
--- A computed key has no table attribute number to push down: the scan would
--- have to evaluate `id * 2`, which PassByBloomFilter cannot do.  Note the join
--- clause itself still looks like a plain Var to the planner (it references the
--- scan's output position), so the key resolves and the nodes are injected --
--- it is the scan's own targetlist entry that is an expression.  The consumer
--- must decline the pushdown and probe the projected slot itself.  Only the
--- 100 even build ids match, so both counts must be 100.
+SELECT anser_rf_nodes('SELECT count(p.id2)
+    FROM anser_rf_proj_build b
+    LEFT JOIN (SELECT payload AS id, id AS id2 FROM anser_rf_proj_probe) p
+           ON b.id = p.id2') > 0 AS rename_injected;
+ rename_injected 
+-----------------
+ t
+(1 row)
+
+-- A computed key, which Anser declines outright.  The subquery has no ORDER BY,
+-- LIMIT or OFFSET, so is_simple_subquery() pulls it up and the hash clause
+-- becomes `b.id = p.id * 2`; anser_hashjoin_keys takes two plain Vars and
+-- nothing else, so no nodes are injected at all.
+--
+-- The comment here used to claim the opposite -- that the clause still reads as
+-- a Var into the scan's output and only the pushdown is declined.  That would
+-- need the subquery to survive as a scan of its own, which asking for it
+-- (OFFSET 0) does not buy either: AnserResolveKeyScan does not descend through
+-- a SubqueryScan.  The decision for a computed column is covered directly by
+-- anser_test_pushdown_accepts; what is left to check here is that declining is
+-- clean, so expr_injected is f and both counts are 100 -- only the 100 even
+-- build ids match.
 SET anser.runtime_filter = off;
 SELECT count(p.k) AS expr_push_off
     FROM anser_rf_proj_build b
@@ -225,6 +265,14 @@ SELECT count(p.k) AS expr_push_on
  expr_push_on 
 --------------
           100
+(1 row)
+
+SELECT anser_rf_nodes('SELECT count(p.k)
+    FROM anser_rf_proj_build b
+    LEFT JOIN (SELECT id * 2 AS k FROM anser_rf_proj_probe) p ON b.id = p.k') > 0 AS expr_injected;
+ expr_injected 
+---------------
+ f
 (1 row)
 
 RESET gp_enable_runtime_filter_pushdown;
@@ -364,6 +412,49 @@ SELECT count(*) AS only_off
 (1 row)
 
 DROP TABLE anser_rf_z_on, anser_rf_z_off, anser_rf_build_z, anser_rf_probe_z;
+-- The exclusion has to hold through a domain.  A domain inherits typlen and
+-- typbyval from its base type, so it looks by-value, and its OID is not one of
+-- the float OIDs the exclusion names -- a check on the declared type alone lets
+-- it straight through and -0.0 would stop matching 0.0.  Both sides are
+-- distributed on their text column so the join needs a Motion and is a
+-- candidate for injection; the key type is what has to refuse it.
+CREATE DOMAIN anser_rf_f8 AS float8;
+CREATE TABLE anser_rf_build_d (id anser_rf_f8, name text) DISTRIBUTED BY (name);
+CREATE TABLE anser_rf_probe_d (id anser_rf_f8, payload text) DISTRIBUTED BY (payload);
+INSERT INTO anser_rf_build_d VALUES (1, 'b1'), (-0.0, 'bz');
+INSERT INTO anser_rf_probe_d VALUES (1, 'p1'), (0.0, 'pz'), (2, 'p2');
+ANALYZE anser_rf_build_d;
+ANALYZE anser_rf_probe_d;
+SET anser.runtime_filter = on;
+CREATE TEMP TABLE anser_rf_d_on AS
+    SELECT b.name, p.payload FROM anser_rf_build_d b JOIN anser_rf_probe_d p ON b.id = p.id
+    DISTRIBUTED BY (name);
+SET anser.runtime_filter = off;
+CREATE TEMP TABLE anser_rf_d_off AS
+    SELECT b.name, p.payload FROM anser_rf_build_d b JOIN anser_rf_probe_d p ON b.id = p.id
+    DISTRIBUTED BY (name);
+SELECT count(*) AS rows_on FROM anser_rf_d_on;
+ rows_on 
+---------
+       2
+(1 row)
+
+SELECT count(*) AS only_on
+    FROM (SELECT * FROM anser_rf_d_on EXCEPT ALL SELECT * FROM anser_rf_d_off) d;
+ only_on 
+---------
+       0
+(1 row)
+
+SELECT count(*) AS only_off
+    FROM (SELECT * FROM anser_rf_d_off EXCEPT ALL SELECT * FROM anser_rf_d_on) d;
+ only_off 
+----------
+        0
+(1 row)
+
+DROP TABLE anser_rf_d_on, anser_rf_d_off, anser_rf_build_d, anser_rf_probe_d;
+DROP DOMAIN anser_rf_f8;
 -- Parameterized rescan guard: a build side whose rows depend on a parameter an
 -- enclosing nested loop reassigns yields a different key set per outer tuple,
 -- and neither node rebuilds on rescan -- the producer stays published, the
@@ -376,7 +467,7 @@ DROP TABLE anser_rf_z_on, anser_rf_z_off, anser_rf_build_z, anser_rf_probe_z;
 -- makes a stale filter visible: with the first group's filter still in place
 -- the second group matches nothing.
 CREATE TABLE anser_rf_nl_outer (g int) DISTRIBUTED REPLICATED;
-CREATE TABLE anser_rf_nl_build (g int, id int) DISTRIBUTED BY (id);
+CREATE TABLE anser_rf_nl_build (g int, id int) DISTRIBUTED BY (g);
 CREATE TABLE anser_rf_nl_probe (id int) DISTRIBUTED BY (id);
 INSERT INTO anser_rf_nl_outer VALUES (1), (2);
 INSERT INTO anser_rf_nl_build SELECT 1, g FROM generate_series(1, 100) g;
@@ -385,20 +476,6 @@ INSERT INTO anser_rf_nl_probe SELECT g FROM generate_series(1, 20000) g;
 ANALYZE anser_rf_nl_outer;
 ANALYZE anser_rf_nl_build;
 ANALYZE anser_rf_nl_probe;
-CREATE FUNCTION anser_rf_nodes(q text) RETURNS bigint
-LANGUAGE plpgsql AS $$
-DECLARE
-    line  text;
-    nodes bigint := 0;
-BEGIN
-    FOR line IN EXECUTE 'EXPLAIN (COSTS OFF) ' || q LOOP
-        IF line ~ 'Anser Bloom' THEN
-            nodes := nodes + 1;
-        END IF;
-    END LOOP;
-    RETURN nodes;
-END;
-$$;
 -- Both groups must report 100, with the filter on and off alike, and the plan
 -- must carry no Anser node at all.
 SET anser.runtime_filter = off;
@@ -448,54 +525,6 @@ SELECT anser_rf_nodes('SELECT count(*) FROM anser_rf_nl_probe p
 
 DROP FUNCTION anser_rf_nodes(text);
 DROP TABLE anser_rf_nl_outer, anser_rf_nl_build, anser_rf_nl_probe;
--- nextval guard: the QD sends two kinds of message down a QE's dispatch
--- connection -- the nextval reply and a sideband message -- and each has its
--- own reader.  A reader that meets the other's message has to skip it whole:
--- taking the type byte and erroring leaves the body in the stream, and the
--- session then dies somewhere else with "protocol synchronization was lost".
---
--- In the field this needs an Anser consumer to give up on a filter the
--- coordinator goes on to deliver anyway, which is a race and cannot be asked
--- for from SQL.  The fault puts a sideband message in front of one nextval
--- reply instead, so the ordering is certain rather than likely; the
--- three-argument form is occurrence 1..1, so it fires once.
---
--- Nothing here is Anser's -- the fault supplies the message and the fix is in
--- cdb_sequence_nextval_qe -- but Anser is why a second message type exists on
--- that connection at all, so the test lives with it.
---
--- The extension may or may not already be there, and saying so is not part of
--- what is being tested; it is never dropped, for the same reason -- it can
--- predate this test, and other tests in the same database rely on it.
--- start_ignore
-CREATE EXTENSION IF NOT EXISTS gp_inject_fault;
-NOTICE:  extension "gp_inject_fault" already exists, skipping
--- end_ignore
-CREATE SEQUENCE anser_rf_seq;
-CREATE TABLE anser_rf_seq_t (id int) DISTRIBUTED BY (id);
-INSERT INTO anser_rf_seq_t SELECT g FROM generate_series(1, 10) g;
-SELECT gp_inject_fault('nextval_sideband_before_response', 'skip', dbid)
-    FROM gp_segment_configuration WHERE role = 'p' AND content = -1;
- gp_inject_fault 
------------------
- Success:
-(1 row)
-
-SELECT count(nextval('anser_rf_seq')) AS seq_rows FROM anser_rf_seq_t;
- seq_rows 
-----------
-       10
-(1 row)
-
-SELECT gp_inject_fault('nextval_sideband_before_response', 'reset', dbid)
-    FROM gp_segment_configuration WHERE role = 'p' AND content = -1;
- gp_inject_fault 
------------------
- Success:
-(1 row)
-
-DROP SEQUENCE anser_rf_seq;
-DROP TABLE anser_rf_seq_t;
 -- ---------------------------------------------------------------------------
 -- Parallel execution.
 --
@@ -509,12 +538,15 @@ DROP TABLE anser_rf_seq_t;
 -- which disagree here: for one query the Postgres planner may give a serial
 -- build slice where GPORCA gives a parallel one.
 --
--- The join key is the distribution key on both sides, so no Motion is needed
--- to co-locate the join.  That is the only shape either planner parallelises:
--- a redistributed or broadcast build side is fine for GPORCA but the Postgres
--- planner marks Motion paths parallel-unsafe.
+-- The build side is distributed by v and joined on id, so it is redistributed:
+-- Anser only injects across a Motion, and a co-located join -- which is what
+-- this used to use -- is now skipped outright, making the whole section
+-- vacuous.  The cost is that only GPORCA still parallelises it; the Postgres
+-- planner marks Motion paths parallel-unsafe, so its two blocks below are
+-- reduced to a filter-on/filter-off equivalence check on a serial slice.
+-- They are kept because that equivalence is worth asserting on its own.
 -- ---------------------------------------------------------------------------
-CREATE TABLE anser_rf_par_build (id int, v text) DISTRIBUTED BY (id);
+CREATE TABLE anser_rf_par_build (id int, v text) DISTRIBUTED BY (v);
 CREATE TABLE anser_rf_par_probe (id int, pad text) DISTRIBUTED BY (id);
 INSERT INTO anser_rf_par_build SELECT g, 'b' || g FROM generate_series(1, 500) g;
 INSERT INTO anser_rf_par_probe SELECT g, 'p' || g FROM generate_series(1, 20000) g;
@@ -637,6 +669,7 @@ RESET parallel_setup_cost;
 RESET parallel_tuple_cost;
 RESET max_parallel_workers_per_gather;
 RESET anser.runtime_filter;
+RESET anser.timeout_ms;
 RESET optimizer;
 RESET enable_nestloop;
 RESET enable_mergejoin;

@@ -46,6 +46,7 @@
 #include "cdb/cdbdisp.h"
 #include "cdb/cdbvars.h"
 #include "executor/executor.h"
+#include "libpq/libpq.h"
 #include "miscadmin.h"
 #include "optimizer/planner.h"
 #include "utils/guc.h"
@@ -187,18 +188,28 @@ anser_define_gucs(void)
 
 	DefineCustomIntVariable("anser.max_info_size",
 							"Sets the maximum byte size of one Anser information record.",
-							"Caps the serialized payload a channel may carry, and with it the effective bloom-filter size.  The default holds a full 64 MB bitset plus its serialized-part header.",
+							"Caps the serialized payload a channel may carry, and with it the effective bloom-filter size.  The default holds a full 64 MB bitset plus its serialized-part header.  Both ends read it -- the coordinator to size the filter and to bound what it accepts, a segment to bound what it sends and receives -- so it is synced to the segments; changing it on a live session is still best avoided, because a gang busy with an open cursor does not receive the new value.",
 							&gp_anser_max_info_size,
-							64 * 1024 * 1024 + 1024 * 1024, 1, INT_MAX,
+							64 * 1024 * 1024 + 1024 * 1024, 1,
+							/*
+							 * Not INT_MAX: the payload has to arrive as one
+							 * protocol message, and pq_getmessage refuses
+							 * anything past PQ_LARGE_MESSAGE_LIMIT -- so a
+							 * larger setting buys a configuration that cannot
+							 * work, and used to overflow the cap computed from
+							 * it into a negative int.  Refusing it at SET is
+							 * the honest place to say so.
+							 */
+							(int) (PQ_LARGE_MESSAGE_LIMIT - ANSER_SIDEBAND_FRAME_ROOM),
 							PGC_USERSET,
-							0,
+							GUC_GPDB_NEED_SYNC,
 							NULL, NULL, NULL);
 
 	DefineCustomIntVariable("anser.timeout_ms",
 							"Sets how long an Anser consumer waits for its filter.",
-							"On expiry the consumer runs unfiltered.  The deadline matters because a producer that gets squelched never publishes at all.  The default is generous because delivery is serial: the coordinator writes the merged filter to one subscriber at a time, so the last of a wide slice waits for all the writes before it.",
+							"On expiry the consumer runs unfiltered.  What the wait covers depends on the plan: where the probe side also travels through a Motion the consumer sits in the probe scan's own slice and runs alongside the build, so it waits out the whole build side; where the probe side is local the hash is already built by the time the consumer runs, leaving only the coordinator's fold and delivery.  The default is a budget for an exchange that has gone wrong -- a squelched producer never publishes at all -- rather than a measurement of a healthy one.",
 							&gp_anser_timeout_ms,
-							100000, 0, INT_MAX,
+							10000, 0, INT_MAX,
 							PGC_USERSET,
 							GUC_UNIT_MS | GUC_GPDB_NEED_SYNC,
 							NULL, NULL, NULL);
@@ -210,6 +221,12 @@ anser_define_gucs(void)
  * Plan the query as usual, then hand the finished tree to the runtime-filter
  * pass.  Wrapping the hook this way covers both optimizers, because ORCA is
  * dispatched from inside standard_planner().
+ *
+ * Planning counts towards anser_exec_nesting for the same reason execution
+ * does: constant folding an immutable function can run a query through SPI,
+ * and that query would otherwise reach anser_executor_end believing it is the
+ * outermost one -- and take the wholesale reset with it.  One counter covering
+ * both phases is what PostgreSQL settled on for the same problem in 76db9cb6368.
  */
 static PlannedStmt *
 anser_planner(Query *parse, const char *query_string, int cursorOptions,
@@ -217,14 +234,23 @@ anser_planner(Query *parse, const char *query_string, int cursorOptions,
 {
 	PlannedStmt *result;
 
-	if (prev_planner_hook)
-		result = prev_planner_hook(parse, query_string, cursorOptions,
-								   boundParams, optimizer_options);
-	else
-		result = standard_planner(parse, query_string, cursorOptions,
-								  boundParams, optimizer_options);
+	anser_exec_nesting++;
+	PG_TRY();
+	{
+		if (prev_planner_hook)
+			result = prev_planner_hook(parse, query_string, cursorOptions,
+									   boundParams, optimizer_options);
+		else
+			result = standard_planner(parse, query_string, cursorOptions,
+									  boundParams, optimizer_options);
 
-	AnserApplyRuntimeFilters(result);
+		AnserApplyRuntimeFilters(result);
+	}
+	PG_FINALLY();
+	{
+		anser_exec_nesting--;
+	}
+	PG_END_TRY();
 
 	return result;
 }
@@ -292,10 +318,23 @@ anser_executor_finish(QueryDesc *queryDesc)
 }
 
 /*
- * Drop the transport's per-query state, once nothing is executing.
+ * Drop the transport's per-query state.
  *
- * See anser_exec_nesting: a query ending while another is still running is an
- * inner statement of that query, and its channels are not the ones to drop.
+ * The channel key carries gp_command_count, so a query can take its own
+ * channels with it.  That is what keeps a PL/pgSQL body from accumulating one
+ * merged filter per statement until the outermost one ends: inside SPI,
+ * anser_exec_nesting never comes back to zero, so the sweep below does not run.
+ *
+ * The global is this query's own count whenever nothing was planned or
+ * executed since CreateQueryDesc() assigned it -- true for the inner queries
+ * that do the accumulating.  Where it has moved on (a query that itself ran
+ * nested ones, a PL/pgSQL cursor whose portal outlived other statements) the
+ * count handed over belongs to somebody else, possibly to a query that is
+ * still running: AnserDispatchResetCommand() therefore takes only channels
+ * whose exchange is over, and leaves the rest to the sweep.
+ *
+ * See anser_exec_nesting for the sweep: it is wholesale, so a query ending
+ * while another is still running must not trigger it.
  */
 static void
 anser_executor_end(QueryDesc *queryDesc)
@@ -304,6 +343,8 @@ anser_executor_end(QueryDesc *queryDesc)
 		prev_ExecutorEnd_hook(queryDesc);
 	else
 		standard_ExecutorEnd(queryDesc);
+
+	AnserDispatchResetCommand(gp_command_count);
 
 	if (anser_exec_nesting == 0)
 		AnserSidebandResetAll();

@@ -46,6 +46,7 @@
 #include "utils/acl.h"
 #include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
+#include "utils/typcache.h"
 
 /* Runtime-filter bloom size bounds (realized bitset bytes). */
 #define ANSER_RF_MIN_BYTES		(1024 * 1024)		/* bloom_create's 1 MB floor */
@@ -276,6 +277,8 @@ anser_hashjoin_keys(HashJoin *hj, AttrNumber *inner_attno, AttrNumber *outer_att
 	Node	   *r;
 	Var		   *outer_var;
 	Var		   *inner_var;
+	Oid			keytype;
+	TypeCacheEntry *tce;
 
 	if (list_length(hj->hashclauses) != 1)
 		return false;
@@ -308,17 +311,36 @@ anser_hashjoin_keys(HashJoin *hj, AttrNumber *inner_attno, AttrNumber *outer_att
 	/*
 	 * Producer and consumer hash the raw Datum bytes, which is only correct
 	 * when SQL equality coincides with bitwise Datum equality of the key.
-	 * That requires the SAME by-value type on both sides: cross-type equijoins
+	 *
+	 * That requires the same by-value type on both sides: cross-type equijoins
 	 * (e.g. float4 = float8, date = timestamp) hash different bit patterns for
 	 * equal values, and floats are excluded even same-typed because -0.0 and
-	 * 0.0 compare equal but are not bitwise equal.  Anything looser could
-	 * prune rows that actually join.
+	 * 0.0 compare equal but are not bitwise equal.  Anything looser could prune
+	 * rows that actually join -- a wrong answer, not a slow one.
+	 *
+	 * The tests run on the base type, because a domain inherits typlen and
+	 * typbyval from what it is built on: without this a domain over float8
+	 * passes both the by-value test and the float exclusion, which names the
+	 * built-in OIDs and would not recognise the domain's.
 	 */
 	if (inner_var->vartype != outer_var->vartype)
 		return false;
-	if (!get_typbyval(inner_var->vartype))
+
+	keytype = getBaseType(inner_var->vartype);
+	if (!get_typbyval(keytype))
 		return false;
-	if (inner_var->vartype == FLOAT4OID || inner_var->vartype == FLOAT8OID)
+	if (keytype == FLOAT4OID || keytype == FLOAT8OID)
+		return false;
+
+	/*
+	 * Finally, the clause has to be the type's own equality rather than just
+	 * some hashable operator spelled "=".  This does not prove bitwise
+	 * equality -- float8's default equality is float8eq, which is why floats
+	 * need the exclusion above -- but it keeps an operator with semantics of
+	 * its own from being read as if it were the canonical one.
+	 */
+	tce = lookup_type_cache(keytype, TYPECACHE_EQ_OPR);
+	if (!OidIsValid(tce->eq_opr) || op->opno != tce->eq_opr)
 		return false;
 
 	*inner_attno = inner_var->varattno;
@@ -546,6 +568,7 @@ anser_try_inject(HashJoin *hj, AnserInjectCtx *ctx)
 		probe_parent = (Plan *) hj;
 		probe_scan = probe;
 		probe_attno = outer_attno;
+		probe_slice = ctx->slice_index;		/* nothing descended through */
 	}
 	else if (!AnserResolveKeyScan(probe, outer_attno, ctx->slice_index,
 								  &probe_parent, &probe_scan, &probe_attno,
@@ -557,6 +580,30 @@ anser_try_inject(HashJoin *hj, AnserInjectCtx *ctx)
 	 * producer would have to finish before the consumer under it could start.
 	 */
 	if (probe_scan == build_scan)
+		return;
+
+	/*
+	 * Only filter across a Motion.  Slices are divided by Motions and nothing
+	 * else, so two scans in one slice are a co-located join, and that is a
+	 * different proposition in both directions.
+	 *
+	 * It is what makes the exchange safe.  An Anser exchange is a
+	 * synchronisation point: the consumer stops until the coordinator has
+	 * heard from every producer.  Within one slice those are the same process,
+	 * run one after another, so the wait can be on something that has not been
+	 * reached yet -- a consumer placed under an intervening HashJoin waits for
+	 * a producer sitting in that join's inner side, which cannot start until
+	 * the outer side yields the tuple the consumer is holding.  defer_first
+	 * covers exactly one tuple of that.  Across a Motion the two are separate
+	 * processes and the question does not arise.
+	 *
+	 * And it is what makes it worth doing.  Where a Motion already carries the
+	 * rows, the barrier is paid for by work the query was doing anyway; in a
+	 * co-located join it is new cost against a join that was already local,
+	 * and whether it pays for itself is a measurement nobody has made.  Until
+	 * someone does, decline.
+	 */
+	if (build_slice == probe_slice)
 		return;
 
 	/*
@@ -698,9 +745,17 @@ anser_inject_walk(Plan *plan, AnserInjectCtx *ctx)
  * How many processes execute a slice -- which is how many producers will
  * publish a part, and therefore how many the coordinator must wait for.
  *
- * This mirrors FillSliceGangInfo (execUtils.c): a slice runs
- * numsegments * parallel_workers processes, with parallel_workers == 0 meaning
- * one.  Both optimizers are covered, and they do differ: for the same query the
+ * This mirrors FillSliceGangInfo (execUtils.c), which has a different answer
+ * per gang type: numsegments * parallel_workers for a plain reader or writer,
+ * but one process for the coordinator's own slice, parallel_workers for a
+ * singleton reader, and one set per targeted segment under direct dispatch.
+ * parallel_workers == 0 means one.  Each is handled below, because over-
+ * counting costs every consumer the full anser.timeout_ms: the channel never
+ * reaches the part count it is waiting for, so it never completes and nobody
+ * is ever told.  Under-counting would be worse -- a filter short of one
+ * segment's keys rejects rows that join -- which is why none of these guesses.
+ *
+ * Both optimizers are covered, and they do differ: for the same query the
  * Postgres planner may give a serial build slice (Broadcast Motion 2:8 over a
  * plain Seq Scan, so 2 producers) where GPORCA gives a parallel one (Broadcast
  * Motion 16:16 over a Parallel Seq Scan, so 16).  Reading it from the slice
@@ -724,6 +779,30 @@ AnserSliceProducers(PlannedStmt *stmt, int slice_index)
 		return 1;
 
 	factor = slice->parallel_workers > 0 ? slice->parallel_workers : 1;
+
+	/*
+	 * A singleton reader runs on one segment, whatever the cluster's width:
+	 * FillSliceGangInfo gives it planNumSegments = 1 * factor and fills its
+	 * segment list with factor copies of one segindex.  numsegments is not
+	 * even meaningful here -- plannodes.h scopes that field to the
+	 * PRIMARY_READER/WRITER cases.
+	 */
+	if (slice->gangType == GANGTYPE_SINGLETON_READER)
+		return factor;
+
+	/*
+	 * Direct dispatch narrows a reader gang to the segments it actually
+	 * needs, and FillSliceGangInfo builds the segment list from contentIds --
+	 * factor processes for each.  planNumSegments keeps saying
+	 * numsegments * factor, so the segment list is what to count.
+	 *
+	 * An empty list yields zero, which the caller reads as "unknown" and
+	 * declines on, and that is the right answer: a slice dispatched nowhere
+	 * publishes nothing.
+	 */
+	if (slice->directDispatch.isDirectDispatch)
+		return list_length(slice->directDispatch.contentIds) * factor;
+
 	if (slice->numsegments <= 0)
 		return 0;
 

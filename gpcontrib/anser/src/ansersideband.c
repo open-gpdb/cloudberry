@@ -217,6 +217,21 @@ AnserSidebandConsumeWait(const AnserChannelKey *channel_key, char payload_type,
 	{
 		CHECK_FOR_INTERRUPTS();
 
+		/*
+		 * The coordinator has what it needs and told us to wrap up -- a LIMIT
+		 * that filled, typically.  CHECK_FOR_INTERRUPTS does not cover this:
+		 * it is a flag the executor is expected to notice, which is why
+		 * nodeHashjoin.c tests it beside the same call.  Without that, a
+		 * finished query is held open by a consumer still waiting on a filter
+		 * nobody will use, for up to anser.timeout_ms.
+		 */
+		if (QueryFinishPending)
+		{
+			ANSER_DEBUG("anser: seg%d abandoning cond=%u: the query is finishing",
+						GpIdentity.segindex, channel_key->condition_id);
+			return false;
+		}
+
 		if (anser_inbox_take(channel_key, payload_type, payload, payload_len,
 							 cancelled))
 			return payload != NULL && *payload != NULL;
@@ -224,6 +239,25 @@ AnserSidebandConsumeWait(const AnserChannelKey *channel_key, char payload_type,
 		if (timeout_ms >= 0 &&
 			TimestampDifferenceExceeds(start, GetCurrentTimestamp(), timeout_ms))
 		{
+			/*
+			 * Withdraw the subscription on the way out.  From here on this
+			 * process is somewhere else in the plan and no longer reading for
+			 * a filter, so a delivery would put 1-64 MB on a connection whose
+			 * reader has moved on -- and whatever reads it next has to
+			 * recognise and skip it.
+			 *
+			 * Best effort, and a narrowing rather than a guarantee: the
+			 * coordinator may already be inside its delivery when this
+			 * arrives.  That is why the push never blocks and why every
+			 * reader still tolerates a message that is not its own.
+			 */
+			msg = AnserWireFormat(channel_key, ANSER_WIRE_KIND_UNSUBSCRIBE,
+								  ANSER_PAYLOAD_NONE, 0, 0, 0, NULL, 0);
+			if (!anser_sideband_send(msg))
+				ANSER_DEBUG("anser: seg%d could not unsubscribe from cond=%u",
+							GpIdentity.segindex, channel_key->condition_id);
+			pfree(msg);
+
 			/*
 			 * Report what we saw, not just that we waited: "nothing arrived"
 			 * and "something arrived for another channel" are different bugs.
@@ -258,6 +292,7 @@ anser_sideband_read_one(long timeout_ms)
 {
 	unsigned char qtype;
 	int			retval;
+	int64		maxlen;
 	StringInfoData buf;
 	AnserInboxEntry *entry;
 	MemoryContext oldcxt;
@@ -331,18 +366,42 @@ anser_sideband_read_one(long timeout_ms)
 				 errdetail("The message boundary was lost; this connection cannot be used further.")));
 	}
 
+	/*
+	 * In int64 and clamped, though anser.max_info_size is bounded so that it
+	 * cannot overflow this on its own.  The bound lives in another file; this
+	 * costs nothing and does not depend on the two staying in step.
+	 */
+	maxlen = (int64) gp_anser_max_info_size + ANSER_SIDEBAND_FRAME_ROOM;
+	if (maxlen > (int64) PQ_LARGE_MESSAGE_LIMIT)
+		maxlen = (int64) PQ_LARGE_MESSAGE_LIMIT;
+
 	initStringInfo(&buf);
-	if (pq_getmessage(&buf, gp_anser_max_info_size + ANSER_CONDITION_KEY_SIZE + 64) != 0)
+	if (pq_getmessage(&buf, (int) maxlen) != 0)
 	{
 		/*
-		 * pq_getmessage clears the reading-message flag when it succeeds, but
-		 * not on its EOF paths; clear it by hand so we do not trip the
-		 * assertion in a later pq_startmsgread.
+		 * Same reasoning as the message type above, and the same outcome.
+		 * Every path on which pq_getmessage returns EOF leaves us unable to go
+		 * on: either the peer is gone, or -- when the length word exceeds the
+		 * cap -- it has taken those four bytes and left the body in the stream
+		 * (pqcomm.c discards the body only on the paths where it already read
+		 * it).  Running unfiltered from here would hand the gang pool a
+		 * connection whose next read lands mid-message.
+		 *
+		 * The cap can be exceeded for real: gp_anser_max_info_size is USERSET,
+		 * and a gang busy with a named portal does not receive a dispatched
+		 * SET -- see cdbdisp_markNamedPortalGangsDestroyed().  So this is a
+		 * reachable disagreement, not a corrupt-stream-only case.
+		 *
+		 * pq_getmessage clears the reading-message flag when it succeeds but
+		 * not on its EOF paths; clear it by hand so the error path does not
+		 * also trip the assertion in a later pq_startmsgread.
 		 */
 		pq_endmsgread();
 		pfree(buf.data);
-		elog(LOG, "anser: could not read filter message");
-		return false;
+		ereport(FATAL,
+				(errcode(ERRCODE_PROTOCOL_VIOLATION),
+				 errmsg("anser: could not read the filter message"),
+				 errdetail("The message boundary was lost; this connection cannot be used further.")));
 	}
 
 	paytype = (char) pq_getmsgint(&buf, 4);
