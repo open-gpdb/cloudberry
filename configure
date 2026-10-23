@@ -818,6 +818,8 @@ GCOV
 enable_debug
 enable_orafce
 enable_faultinjector
+with_rpt
+with_anser
 enable_debug_extensions
 enable_gpfdist
 enable_strong_random
@@ -889,6 +891,8 @@ enable_atomics
 enable_strong_random
 enable_gpfdist
 enable_debug_extensions
+with_anser
+with_rpt
 enable_faultinjector
 enable_orafce
 enable_debug
@@ -1657,6 +1661,9 @@ Optional Packages:
   --with-libraries=DIRS   look for additional libraries in DIRS
   --with-libs=DIRS        alternative spelling of --with-libraries
   --with-pgport=PORTNUM   set default port number [5432]
+  --with-anser            build the Anser runtime-filter extension
+  --with-rpt              build the RPT+ transfer-plan extension (requires
+                          --with-anser)
   --with-blocksize=BLOCKSIZE
                           set table block size in kB [8]
   --with-segsize=SEGSIZE  set table segment size in GB [1]
@@ -3591,6 +3598,64 @@ if test "${enable_debug_extensions+set}" = set; then :
 
 else
   enable_debug_extensions=yes
+
+fi
+
+
+
+
+#
+# Anser adaptive information sharing (runtime filters)
+#
+
+
+
+# Check whether --with-anser was given.
+if test "${with_anser+set}" = set; then :
+  withval=$with_anser;
+  case $withval in
+    yes)
+      :
+      ;;
+    no)
+      :
+      ;;
+    *)
+      as_fn_error $? "no argument expected for --with-anser option" "$LINENO" 5
+      ;;
+  esac
+
+else
+  with_anser=no
+
+fi
+
+
+
+
+#
+# Robust predicate transfer (RPT+ over Anser)
+#
+
+
+
+# Check whether --with-rpt was given.
+if test "${with_rpt+set}" = set; then :
+  withval=$with_rpt;
+  case $withval in
+    yes)
+      :
+      ;;
+    no)
+      :
+      ;;
+    *)
+      as_fn_error $? "no argument expected for --with-rpt option" "$LINENO" 5
+      ;;
+  esac
+
+else
+  with_rpt=no
 
 fi
 

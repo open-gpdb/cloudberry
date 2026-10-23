@@ -235,6 +235,20 @@ PGAC_ARG_BOOL(enable, debug-extensions, yes,
 AC_SUBST(enable_debug_extensions)
 
 #
+# Anser adaptive information sharing (runtime filters)
+#
+PGAC_ARG_BOOL(with, anser, no,
+              [build the Anser runtime-filter extension])
+AC_SUBST(with_anser)
+
+#
+# Robust predicate transfer (RPT+ over Anser)
+#
+PGAC_ARG_BOOL(with, rpt, no,
+              [build the RPT+ transfer-plan extension (requires --with-anser)])
+AC_SUBST(with_rpt)
+
+#
 # Enable fault injector
 #
 PGAC_ARG_BOOL(enable, faultinjector, yes, [disable fault injector],
