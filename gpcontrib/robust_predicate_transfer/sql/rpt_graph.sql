@@ -1,0 +1,80 @@
+-- Join graph and transfer plan: equivalence classes, root choice, forward
+-- chain shape, and consumer eligibility.  Assertions are over structural
+-- properties of the dump (LIKE/strpos), so the test does not depend on
+-- estimate printouts or tie-breaking cosmetics.
+CREATE EXTENSION robust_predicate_transfer;
+
+CREATE TABLE rpt_a (a int, b int) DISTRIBUTED BY (a);
+CREATE TABLE rpt_b (a int) DISTRIBUTED BY (a);
+CREATE TABLE rpt_c (a int) DISTRIBUTED BY (a);
+CREATE TABLE rpt_d (x int, y int) DISTRIBUTED BY (x);
+INSERT INTO rpt_a SELECT i, i FROM generate_series(1, 100) i;
+INSERT INTO rpt_b SELECT i FROM generate_series(1, 10) i;
+INSERT INTO rpt_c SELECT i FROM generate_series(1, 50) i;
+INSERT INTO rpt_d SELECT i, i FROM generate_series(1, 20) i;
+ANALYZE rpt_a;
+ANALYZE rpt_b;
+ANALYZE rpt_c;
+ANALYZE rpt_d;
+
+SET optimizer = off;
+
+-- Three-table chain over one column: one class with all three tables, and the
+-- filtered table (rpt_a) leads the transfer order.
+SELECT rpt_transfer_plan(
+    'SELECT * FROM rpt_a a JOIN rpt_b b ON a.a = b.a JOIN rpt_c c ON b.a = c.a WHERE a.b > 50')
+    LIKE 'transfer order: 1%' AS root_is_filtered_table;
+SELECT rpt_transfer_plan(
+    'SELECT * FROM rpt_a a JOIN rpt_b b ON a.a = b.a JOIN rpt_c c ON b.a = c.a WHERE a.b > 50')
+    LIKE '%members=1,2,3 leader=1%' AS one_class_all_members;
+
+-- Star: rpt_a joins three others on one column -- one class, root rpt_a.
+SELECT rpt_transfer_plan(
+    'SELECT * FROM rpt_a a JOIN rpt_b b ON a.a = b.a JOIN rpt_c c ON a.a = c.a WHERE a.b > 50')
+    LIKE '%members=1,2,3 leader=1%' AS star_one_class;
+
+-- Cyclic triangle: still produces a plan (cycles cost completeness, not
+-- correctness), one class, all three members.
+SELECT rpt_transfer_plan(
+    'SELECT * FROM rpt_a a JOIN rpt_b b ON a.a = b.a JOIN rpt_c c ON b.a = c.a AND a.a = c.a WHERE a.b > 50')
+    LIKE '%members=1,2,3%' AS cyclic_one_class;
+
+-- Multi-clause join: two clauses on one vertex pair merge into one edge; the
+-- keys land in two classes (one per column pair).
+SELECT rpt_transfer_plan(
+    'SELECT * FROM rpt_a a JOIN rpt_d d ON a.a = d.x AND a.b = d.y WHERE a.b > 50')
+    LIKE '%members=1,2%' AS compound_members;
+
+-- LEFT JOIN: the preserved (outer) side must never be reduced by the
+-- nullable side's keys, so the backward filter points at rpt_a, never away
+-- from it.
+SELECT strpos(rpt_transfer_plan(
+    'SELECT * FROM rpt_a a LEFT JOIN rpt_b b ON a.a = b.a WHERE a.b > 50'),
+    'consumer_ok 1 no') > 0 AS left_join_preserved_side_safe;
+
+-- FULL JOIN produces no usable edge at all: no region.
+SELECT rpt_transfer_plan(
+    'SELECT * FROM rpt_a a FULL JOIN rpt_b b ON a.a = b.a WHERE a.b > 50')
+    = 'no transfer regions
+' AS full_join_no_region;
+
+-- SEMI join (IN): unprotected both ways, one class, both members.
+SELECT rpt_transfer_plan(
+    'SELECT * FROM rpt_a a WHERE a.b > 50 AND a.a IN (SELECT a FROM rpt_b)')
+    LIKE '%members=1,2%' AS semi_join_members;
+
+-- Cross-type and float keys are refused (bitwise Datum equality rule).
+SELECT rpt_transfer_plan(
+    'SELECT * FROM rpt_a a JOIN (SELECT a::bigint aa FROM rpt_b) s ON a.a = s.aa')
+    = 'no transfer regions
+' AS cross_type_no_region;
+
+-- The same star through ORCA: the class partition must come out identically.
+SET optimizer = on;
+SELECT rpt_transfer_plan(
+    'SELECT * FROM rpt_a a JOIN rpt_b b ON a.a = b.a JOIN rpt_c c ON a.a = c.a WHERE a.b > 50')
+    LIKE '%members=1,2,3 leader=1%' AS star_one_class_orca;
+RESET optimizer;
+
+DROP TABLE rpt_a, rpt_b, rpt_c, rpt_d;
+DROP EXTENSION robust_predicate_transfer;
