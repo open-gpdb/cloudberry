@@ -42,6 +42,7 @@
 #include "anserbloom.h"
 #include "anserfilter.h"
 #include "anserplan.h"
+#include "ansertlist.h"
 #include "cdb/cdbutil.h"
 #include "cdb/cdbvars.h"
 #include "commands/explain.h"
@@ -248,7 +249,7 @@ anser_build_rf_scan(const CustomScanMethods *methods, Plan *child,
 	cs->custom_plans = list_make1(child);
 	cs->custom_exprs = NIL;
 	cs->custom_private = priv;
-	cs->custom_scan_tlist = copyObject(child->targetlist);
+	cs->custom_scan_tlist = AnserFilterScanTlist(child);
 	cs->methods = methods;
 
 	return cs;
