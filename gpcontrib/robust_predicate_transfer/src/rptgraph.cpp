@@ -77,8 +77,8 @@ struct RptEdgeClause
  * FindBindingRoot (transfer_graph_manager.cpp:12-23), with path
  * compression.
  */
-static RptKey
-rpt_find_key_root(const RptKey &key, std::map<RptKey, RptKey> &uf_parent)
+RptKey
+RptFindKeyRoot(const RptKey &key, std::map<RptKey, RptKey> &uf_parent)
 {
 	std::map<RptKey, RptKey>::iterator it = uf_parent.find(key);
 	RptKey		root;
@@ -89,7 +89,7 @@ rpt_find_key_root(const RptKey &key, std::map<RptKey, RptKey> &uf_parent)
 	root = it->second;
 	if (!(root == key))
 	{
-		root = rpt_find_key_root(root, uf_parent);
+		root = RptFindKeyRoot(root, uf_parent);
 		uf_parent[key] = root;	/* path compression */
 	}
 	return root;
@@ -106,8 +106,8 @@ static void
 rpt_union_keys(const RptKey &a, const RptKey &b, Oid key_type,
 			   RptTransferMgr *mgr)
 {
-	RptKey		root_a = rpt_find_key_root(a, mgr->uf_parent);
-	RptKey		root_b = rpt_find_key_root(b, mgr->uf_parent);
+	RptKey		root_a = RptFindKeyRoot(a, mgr->uf_parent);
+	RptKey		root_b = RptFindKeyRoot(b, mgr->uf_parent);
 	std::map<RptKey, RptKeyGroup>::iterator ga;
 	std::map<RptKey, RptKeyGroup>::iterator gb;
 
@@ -180,7 +180,7 @@ rpt_classify_tables(RptTransferMgr *mgr)
 		{
 			if (mgr->uf_parent.find(*kit) != mgr->uf_parent.end() ||
 				mgr->groups.find(*kit) != mgr->groups.end())
-				belong_groups.insert(rpt_find_key_root(*kit, mgr->uf_parent));
+				belong_groups.insert(RptFindKeyRoot(*kit, mgr->uf_parent));
 			else
 				belong_groups.insert(*kit); /* never unioned: a group of its own */
 		}
@@ -260,13 +260,14 @@ rpt_merge_clauses(RptEdgeInfo *old, const RptEdgeInfo &other, bool reversed)
  * artifact shares one EdgeInfo between both directions, so every write here
  * is mirrored explicitly.
  */
-static void
+static bool
 rpt_upsert_edge(RptTransferMgr *mgr, const RptEdgeInfo &ne)
 {
 	int			i = ne.left_v;
 	int			j = ne.right_v;
 	std::map<int, RptEdgeInfo>::iterator ij;
 	bool		exists = false;
+	bool		changed = false;
 
 	ij = mgr->neighbor_matrix[i].find(j);
 	if (ij != mgr->neighbor_matrix[i].end())
@@ -277,6 +278,8 @@ rpt_upsert_edge(RptTransferMgr *mgr, const RptEdgeInfo &ne)
 		 * the vertex pair, so the same vertex pair in either orientation is
 		 * the same edge and the clauses merge instead.
 		 */
+		RptEdgeInfo before = ij->second;
+
 		bool		same = (ij->second.left_v == ne.left_v &&
 							ij->second.right_v == ne.right_v);
 		bool		rev = (ij->second.left_v == ne.right_v &&
@@ -284,26 +287,33 @@ rpt_upsert_edge(RptTransferMgr *mgr, const RptEdgeInfo &ne)
 
 		if (same)
 		{
-			ij->second.protect_left &= ne.protect_left;
-			ij->second.protect_right &= ne.protect_right;
+			ij->second.protect_left |= ne.protect_left;
+			ij->second.protect_right |= ne.protect_right;
 			rpt_merge_clauses(&ij->second, ne, false);
 			exists = true;
 		}
 		else if (rev)
 		{
-			ij->second.protect_left &= ne.protect_right;
-			ij->second.protect_right &= ne.protect_left;
+			ij->second.protect_left |= ne.protect_right;
+			ij->second.protect_right |= ne.protect_left;
 			rpt_merge_clauses(&ij->second, ne, true);
 			exists = true;
 		}
 		if (exists)
+		{
+			changed = before.protect_left != ij->second.protect_left ||
+				before.protect_right != ij->second.protect_right ||
+				before.clauses.size() != ij->second.clauses.size();
 			mgr->neighbor_matrix[j][i] = ij->second;
+		}
 	}
 	if (!exists)
 	{
 		mgr->neighbor_matrix[i][j] = ne;
 		mgr->neighbor_matrix[j][i] = ne;
+		changed = true;
 	}
+	return changed;
 }
 
 /*
@@ -355,7 +365,8 @@ rpt_skip_unfiltered(RptTransferMgr *mgr)
 				RptEdgeInfo *e = &pit->second;
 				size_t		c;
 
-				if (!rpt_can_flow(e, pit->first, t))
+				if (mgr->vertices[mgr->by_rti[pit->first]].unfiltered ||
+					!rpt_can_flow(e, pit->first, t))
 					continue;
 				for (c = 0; c < e->clauses.size(); c++)
 				{
@@ -422,21 +433,13 @@ rpt_skip_unfiltered(RptTransferMgr *mgr)
 							ne.clauses.push_back(std::make_pair(rpt_key_opposite(in_e, rep.clause, t),
 																out_e->clauses[oc].first));
 
-							/*
-							 * disable reverse flow (L → R) -- kept verbatim
-							 * from the artifact; with src on the left this
-							 * blocks the carrier → destination direction,
-							 * where the t-is-left case above blocks the
-							 * reverse.
-							 */
-							ne.protect_right = true;
+							ne.protect_left = true; /* disable dst -> src */
 						}
 
 						if (src_v == dst_v)
 							continue;	/* a self-edge no later pass can observe */
 
-						rpt_upsert_edge(mgr, ne);
-						changed = true;
+						changed = rpt_upsert_edge(mgr, ne) || changed;
 					}
 				}
 			}
@@ -588,6 +591,47 @@ RptBuildClasses(RptTransferMgr *mgr)
 				rpt_union_keys(edge->clauses[c].first, edge->clauses[c].second,
 							   edge->key_type, mgr);
 		}
+	}
+
+	/* Equality is transitive within an unprotected class. Make its implicit
+	 * edges explicit so Algorithm 1 can choose deepest/shallowest parents
+	 * even when the SQL spelled a star rather than a clique. Never merge
+	 * through a protected outer-join edge. */
+	for (const auto &group : mgr->groups)
+	{
+		std::vector<RptKey> keys;
+		for (const auto &vertex : mgr->vertices)
+			for (const auto &key : vertex.join_keys)
+				if (RptFindKeyRoot(key, mgr->uf_parent) == group.first)
+					keys.push_back(key);
+		for (size_t i = 0; i < keys.size(); ++i)
+			for (size_t j = i + 1; j < keys.size(); ++j)
+			{
+				if (keys[i].rtindex == keys[j].rtindex)
+					continue;
+				RptEdgeInfo edge;
+				edge.left_v = keys[i].rtindex;
+				edge.right_v = keys[j].rtindex;
+				edge.key_type = group.second.key_type;
+				edge.protect_left = edge.protect_right = false;
+				edge.clauses.push_back(std::make_pair(keys[i], keys[j]));
+				const auto &existing_row = mgr->neighbor_matrix.find(edge.left_v);
+				if (existing_row != mgr->neighbor_matrix.end())
+				{
+					const auto &existing = existing_row->second.find(edge.right_v);
+					if (existing != existing_row->second.end())
+					{
+						bool reversed = existing->second.left_v != edge.left_v;
+						auto clause = reversed ? std::make_pair(keys[j], keys[i]) :
+							std::make_pair(keys[i], keys[j]);
+						if (std::find(existing->second.clauses.begin(),
+									  existing->second.clauses.end(), clause) !=
+							existing->second.clauses.end())
+							continue;
+					}
+				}
+				rpt_upsert_edge(mgr, edge);
+			}
 	}
 
 	rpt_classify_tables(mgr);

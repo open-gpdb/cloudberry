@@ -3,11 +3,11 @@
 -- properties of the dump (LIKE/strpos), so the test does not depend on
 -- estimate printouts or tie-breaking cosmetics.
 CREATE EXTENSION robust_predicate_transfer;
-
 CREATE TABLE rpt_a (a int, b int) DISTRIBUTED BY (a);
 CREATE TABLE rpt_b (a int) DISTRIBUTED BY (a);
 CREATE TABLE rpt_c (a int) DISTRIBUTED BY (a);
 CREATE TABLE rpt_d (x int, y int) DISTRIBUTED BY (x);
+CREATE TABLE rpt_r (a int) DISTRIBUTED REPLICATED;
 INSERT INTO rpt_a SELECT i, i FROM generate_series(1, 100) i;
 INSERT INTO rpt_b SELECT i FROM generate_series(1, 10) i;
 INSERT INTO rpt_c SELECT i FROM generate_series(1, 50) i;
@@ -16,65 +16,117 @@ ANALYZE rpt_a;
 ANALYZE rpt_b;
 ANALYZE rpt_c;
 ANALYZE rpt_d;
-
-SET optimizer = off;
-
--- Three-table chain over one column: one class with all three tables, and the
--- filtered table (rpt_a) leads the transfer order.
-SELECT rpt_transfer_plan(
-    'SELECT * FROM rpt_a a JOIN rpt_b b ON a.a = b.a JOIN rpt_c c ON b.a = c.a WHERE a.b > 50')
-    LIKE 'transfer order: 1%' AS root_is_filtered_table;
-SELECT rpt_transfer_plan(
-    'SELECT * FROM rpt_a a JOIN rpt_b b ON a.a = b.a JOIN rpt_c c ON b.a = c.a WHERE a.b > 50')
-    LIKE '%members=1,2,3 leader=1%' AS one_class_all_members;
-
--- Star: rpt_a joins three others on one column -- one class, root rpt_a.
-SELECT rpt_transfer_plan(
-    'SELECT * FROM rpt_a a JOIN rpt_b b ON a.a = b.a JOIN rpt_c c ON a.a = c.a WHERE a.b > 50')
-    LIKE '%members=1,2,3 leader=1%' AS star_one_class;
-
--- Cyclic triangle: still produces a plan (cycles cost completeness, not
--- correctness), one class, all three members.
-SELECT rpt_transfer_plan(
-    'SELECT * FROM rpt_a a JOIN rpt_b b ON a.a = b.a JOIN rpt_c c ON b.a = c.a AND a.a = c.a WHERE a.b > 50')
-    LIKE '%members=1,2,3%' AS cyclic_one_class;
-
--- Multi-clause join: two clauses on one vertex pair merge into one edge; the
--- keys land in two classes (one per column pair).
-SELECT rpt_transfer_plan(
-    'SELECT * FROM rpt_a a JOIN rpt_d d ON a.a = d.x AND a.b = d.y WHERE a.b > 50')
-    LIKE '%members=1,2%' AS compound_members;
-
--- LEFT JOIN: the preserved (outer) side must never be reduced by the
--- nullable side's keys, so the backward filter points at rpt_a, never away
--- from it.
-SELECT strpos(rpt_transfer_plan(
-    'SELECT * FROM rpt_a a LEFT JOIN rpt_b b ON a.a = b.a WHERE a.b > 50'),
-    'consumer_ok 1 no') > 0 AS left_join_preserved_side_safe;
-
--- FULL JOIN produces no usable edge at all: no region.
-SELECT rpt_transfer_plan(
-    'SELECT * FROM rpt_a a FULL JOIN rpt_b b ON a.a = b.a WHERE a.b > 50')
-    = 'no transfer regions
-' AS full_join_no_region;
-
--- SEMI join (IN): unprotected both ways, one class, both members.
-SELECT rpt_transfer_plan(
-    'SELECT * FROM rpt_a a WHERE a.b > 50 AND a.a IN (SELECT a FROM rpt_b)')
-    LIKE '%members=1,2%' AS semi_join_members;
-
--- Cross-type and float keys are refused (bitwise Datum equality rule).
-SELECT rpt_transfer_plan(
-    'SELECT * FROM rpt_a a JOIN (SELECT a::bigint aa FROM rpt_b) s ON a.a = s.aa')
-    = 'no transfer regions
-' AS cross_type_no_region;
-
--- The same star through ORCA: the class partition must come out identically.
-SET optimizer = on;
-SELECT rpt_transfer_plan(
-    'SELECT * FROM rpt_a a JOIN rpt_b b ON a.a = b.a JOIN rpt_c c ON a.a = c.a WHERE a.b > 50')
-    LIKE '%members=1,2,3 leader=1%' AS star_one_class_orca;
-RESET optimizer;
-
-DROP TABLE rpt_a, rpt_b, rpt_c, rpt_d;
+INSERT INTO rpt_r SELECT i FROM generate_series(1, 10) i;
+ANALYZE rpt_r;
+DO $$
+DECLARE
+    opt text;
+    dump text;
+    q text;
+    distributed_id text;
+    replicated_id text;
+    preserved_name text;
+    preserved_id text;
+    expected_members text;
+    member_count int;
+BEGIN
+    IF EXISTS (SELECT FROM pg_proc p, LATERAL aclexplode(p.proacl) acl
+               WHERE p.oid = 'rpt_transfer_plan(text)'::regprocedure
+                 AND acl.grantee = 0 AND acl.privilege_type = 'EXECUTE') THEN
+        RAISE EXCEPTION 'diagnostic function is executable by PUBLIC';
+    END IF;
+    FOREACH opt IN ARRAY ARRAY['off', 'on'] LOOP
+        PERFORM set_config('optimizer', opt, true);
+        FOREACH q IN ARRAY ARRAY[
+            'SELECT * FROM rpt_a JOIN rpt_b ON rpt_a.a = rpt_b.a JOIN rpt_c ON rpt_b.a = rpt_c.a WHERE rpt_a.b > 50',
+            'SELECT * FROM rpt_a JOIN rpt_b ON rpt_a.a = rpt_b.a JOIN rpt_c ON rpt_a.a = rpt_c.a WHERE rpt_a.b > 50',
+            'SELECT * FROM rpt_a JOIN rpt_b ON rpt_a.a = rpt_b.a JOIN rpt_c ON rpt_b.a = rpt_c.a AND rpt_a.a = rpt_c.a WHERE rpt_a.b > 50'
+        ] LOOP
+            dump := rpt_transfer_plan(q);
+            distributed_id := substring(dump FROM 'vertex ([0-9]+) rpt_a rows=');
+            SELECT count(*), string_agg(parts[1], ',' ORDER BY parts[1]::int)
+                INTO member_count, expected_members
+                FROM regexp_matches(dump, 'vertex ([0-9]+) (rpt_a|rpt_b|rpt_c) rows=', 'g') AS vertices(parts);
+            IF distributed_id IS NULL OR member_count <> 3 OR
+               dump NOT LIKE ('%members=' || expected_members || ' leader=' || distributed_id || chr(10) || '%') THEN
+                RAISE EXCEPTION 'class/root mismatch (optimizer=%): %', opt, dump;
+            END IF;
+            IF dump NOT LIKE ('%reducer order:' || chr(10) || '%') THEN
+                RAISE EXCEPTION 'unfiltered tables entered reducer: %', dump;
+            END IF;
+        END LOOP;
+        -- A co-distributed star must stay local after Algorithm 1 creates
+        -- implied dimension-to-dimension hops, in both transfer stages.
+        dump := rpt_transfer_plan('SELECT * FROM rpt_a a JOIN rpt_b b ON a.a = b.a JOIN rpt_c c ON a.a = c.a JOIN rpt_d d ON a.a = d.x WHERE a.b > 0 AND b.a > 0 AND c.a > 0 AND d.y > 0');
+        IF dump NOT LIKE '%forward hop%' OR dump NOT LIKE '%backward hop%' OR
+           dump LIKE '%merge=global%' OR
+           EXISTS (SELECT FROM regexp_split_to_table(dump, chr(10)) line
+                   WHERE line LIKE 'consumer_ok % yes') THEN
+            RAISE EXCEPTION 'local star uses global/blocking filters (optimizer=%): %', opt, dump;
+        END IF;
+        -- Replicated -> hash is local; the reverse broadcast stays global.
+        dump := rpt_transfer_plan('SELECT * FROM rpt_a JOIN rpt_r ON rpt_a.a = rpt_r.a WHERE rpt_a.b > 0 AND rpt_r.a > 0');
+        -- Resolve table names from vertex records: ORCA can reorder rtindexes.
+        distributed_id := substring(dump FROM 'vertex ([0-9]+) rpt_a rows=');
+        replicated_id := substring(dump FROM 'vertex ([0-9]+) rpt_r rows=');
+        IF distributed_id IS NULL OR replicated_id IS NULL OR
+           dump NOT LIKE ('%forward hop ' || replicated_id || '->' || distributed_id || ' merge=local%') OR
+           dump NOT LIKE ('%backward hop ' || distributed_id || '->' || replicated_id || ' merge=global%') THEN
+            RAISE EXCEPTION 'replicated direction mismatch (optimizer=%): %', opt, dump;
+        END IF;
+        dump := rpt_transfer_plan('SELECT * FROM rpt_a JOIN rpt_d ON rpt_a.a = rpt_d.x AND rpt_a.b = rpt_d.y WHERE rpt_a.b > 50');
+        SELECT count(*), string_agg(parts[1], ',' ORDER BY parts[1]::int)
+            INTO member_count, expected_members
+            FROM regexp_matches(dump, 'vertex ([0-9]+) (rpt_a|rpt_d) rows=', 'g') AS vertices(parts);
+        IF member_count <> 2 OR
+           (SELECT count(*) FROM regexp_split_to_table(dump, chr(10)) line
+            WHERE line LIKE ('class %: members=' || expected_members || ' leader=%')) <> 2 THEN
+            RAISE EXCEPTION 'expected two compound-key classes: %', dump;
+        END IF;
+        FOR q, preserved_name IN
+            SELECT * FROM (VALUES
+                ('SELECT * FROM rpt_a LEFT JOIN rpt_b ON rpt_a.a = rpt_b.a WHERE rpt_a.b > 50', 'rpt_a'),
+                ('SELECT * FROM rpt_b RIGHT JOIN rpt_a ON rpt_a.a = rpt_b.a WHERE rpt_a.b > 50', 'rpt_a'),
+                ('SELECT * FROM rpt_c LEFT JOIN (rpt_b JOIN rpt_a ON rpt_a.a = rpt_b.a AND rpt_b.a > 0) ON rpt_c.a = rpt_a.a WHERE rpt_c.a > 1', 'rpt_c')
+            ) AS cases(query, preserved)
+        LOOP
+            dump := rpt_transfer_plan(q);
+            preserved_id := substring(dump FROM ('vertex ([0-9]+) ' || preserved_name || ' rows='));
+            IF preserved_id IS NULL THEN
+                RAISE EXCEPTION 'missing preserved table % (optimizer=%): %', preserved_name, opt, dump;
+            END IF;
+            IF EXISTS (SELECT FROM regexp_split_to_table(dump, chr(10)) line
+                       WHERE line LIKE ('vertex ' || preserved_id || ' %')
+                         AND line LIKE '%apply from%') THEN
+                RAISE EXCEPTION 'preserved side reduced: %', dump;
+            END IF;
+            -- The first LEFT JOIN must filter the nullable side, so an
+            -- entirely empty transfer plan cannot satisfy this safety test.
+            IF q LIKE 'SELECT * FROM rpt_a LEFT JOIN%' AND
+               NOT EXISTS (SELECT FROM regexp_split_to_table(dump, chr(10)) line
+                           WHERE line LIKE 'vertex %' AND line LIKE '%apply from%') THEN
+                RAISE EXCEPTION 'LEFT JOIN produced no filter applications (optimizer=%): %', opt, dump;
+            END IF;
+        END LOOP;
+        FOREACH q IN ARRAY ARRAY[
+            'SELECT * FROM rpt_a a FULL JOIN rpt_b b ON a.a = b.a',
+            'SELECT a.a IN (SELECT b.a FROM rpt_b b) FROM rpt_a a',
+            'SELECT * FROM rpt_a a WHERE NOT EXISTS (SELECT FROM rpt_b b WHERE a.a = b.a)',
+            'SELECT * FROM rpt_a a JOIN (SELECT a::bigint aa FROM rpt_b) s ON a.a = s.aa'
+        ] LOOP
+            IF rpt_transfer_plan(q) <> ('no transfer regions' || chr(10)) THEN
+                RAISE EXCEPTION 'unsupported join/key accepted (optimizer=%): %', opt, q;
+            END IF;
+        END LOOP;
+        dump := rpt_transfer_plan('SELECT * FROM rpt_a WHERE rpt_a.b > 50 AND rpt_a.a IN (SELECT a FROM rpt_b)');
+        SELECT count(*), string_agg(parts[1], ',' ORDER BY parts[1]::int)
+            INTO member_count, expected_members
+            FROM regexp_matches(dump, 'vertex ([0-9]+) (rpt_a|rpt_b) rows=', 'g') AS vertices(parts);
+        IF member_count <> 2 OR dump NOT LIKE ('%members=' || expected_members || ' leader=%') THEN
+            RAISE EXCEPTION 'missing SEMI class: %', dump;
+        END IF;
+    END LOOP;
+END
+$$;
+DROP TABLE rpt_a, rpt_b, rpt_c, rpt_d, rpt_r;
 DROP EXTENSION robust_predicate_transfer;
