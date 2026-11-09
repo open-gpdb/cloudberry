@@ -48,6 +48,7 @@ extern "C"
 #include "tcop/tcopprot.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
+#include "utils/memutils.h"
 
 PG_MODULE_MAGIC;
 
@@ -57,6 +58,9 @@ void		_PG_init(void);
 }
 
 #include "rpt.h"
+
+#include <exception>
+#include <new>
 
 bool		rpt_enable = false;
 bool		rpt_debug = false;
@@ -69,26 +73,52 @@ static PlannedStmt *rpt_planner(Query *parse, const char *query_string,
 								int cursorOptions, ParamListInfo boundParams,
 								OptimizerOptions *optimizer_options);
 
-/*
- * Run the Phase I analysis over a finished statement and return the dump.
- * The manager is plain C++ in the caller's memory context; on any error the
- * whole context goes away with the statement.
- */
+/* Run analysis with C++ unwinding before reporting an error to C callers. */
 static void
 rpt_analyze(PlannedStmt *stmt, StringInfo out)
 {
-	RptTransferMgr mgr;
+	bool pg_error = false;
+	bool out_of_memory = false;
+	char message[256] = "unknown C++ exception";
 
-	RptCollectGraph(stmt, &mgr);
-	if (mgr.vertices.empty())
+	try
 	{
-		appendStringInfoString(out, "no transfer regions\n");
+		RptTransferMgr mgr;
+
+		RptCollectGraph(stmt, &mgr);
+		if (mgr.vertices.empty())
+			RptPgCall([&]() { appendStringInfoString(out, "no transfer regions\n"); });
+		else
+		{
+			RptBuildClasses(&mgr);
+			RptBuildTransferPlan(stmt, &mgr);
+			RptDumpTransferPlan(&mgr, out);
+		}
 		return;
 	}
+	catch (const RptPgError &)
+	{
+		pg_error = true;
+	}
+	catch (const std::bad_alloc &)
+	{
+		out_of_memory = true;
+	}
+	catch (const std::exception &e)
+	{
+		strlcpy(message, e.what(), sizeof(message));
+	}
+	catch (...)
+	{
+	}
 
-	RptBuildClasses(&mgr);
-	RptBuildTransferPlan(stmt, &mgr);
-	RptDumpTransferPlan(&mgr, out);
+	/* No live C++ objects (including exception objects) at these longjmps. */
+	if (pg_error)
+		PG_RE_THROW();
+	if (out_of_memory)
+		ereport(ERROR, (errcode(ERRCODE_OUT_OF_MEMORY),
+						errmsg("out of memory during RPT analysis")));
+	ereport(ERROR, (errmsg("RPT analysis failed: %s", message)));
 }
 
 void
@@ -138,12 +168,57 @@ rpt_define_gucs(void)
 
 	DefineCustomIntVariable("rpt.max_chain_depth",
 							"Sets the maximum forward-chain length RPT+ may plan.",
-							"Every chain hop is a global publish/merge/deliver barrier in MPP, so the chain depth is capped; the default is a placeholder until hop latency is measured.",
+							"Global hops require publish/merge/deliver barriers, so chain depth is capped; the default is a placeholder until hop latency is measured.",
 							&rpt_max_chain_depth,
 							4, 1, INT_MAX,
 							PGC_USERSET,
 							GUC_GPDB_NEED_SYNC,
 							NULL, NULL, NULL);
+}
+
+/* The diagnostic hook must not turn an optional analysis failure into a
+ * failed user query. No C++ owners live across this PostgreSQL catch: the
+ * analysis boundary has already unwound them before rethrowing the error. */
+static void
+rpt_log_analysis(PlannedStmt *stmt)
+{
+	MemoryContext saved_context = CurrentMemoryContext;
+	MemoryContext volatile analysis_context = NULL;
+
+	PG_TRY();
+	{
+		analysis_context = AllocSetContextCreate(saved_context,
+												"RPT analysis",
+												ALLOCSET_DEFAULT_SIZES);
+		MemoryContextSwitchTo(analysis_context);
+		StringInfoData buf;
+
+		initStringInfo(&buf);
+		rpt_analyze(stmt, &buf);
+		elog(DEBUG1, "rpt transfer plan:\n%s", buf.data);
+		MemoryContextSwitchTo(saved_context);
+	}
+	PG_CATCH();
+	{
+		MemoryContextSwitchTo(saved_context);
+		ErrorData *error = CopyErrorData();
+
+		FlushErrorState();
+		if (analysis_context != NULL)
+		{
+			MemoryContextDelete(analysis_context);
+			analysis_context = NULL;
+		}
+		/* An optional pass must still honor the user's cancellation. */
+		if (error->sqlerrcode == ERRCODE_QUERY_CANCELED)
+			ReThrowError(error);
+		ereport(WARNING, (errmsg("RPT analysis skipped: %s", error->message)));
+		FreeErrorData(error);
+	}
+	PG_END_TRY();
+
+	if (analysis_context != NULL)
+		MemoryContextDelete(analysis_context);
 }
 
 /*
@@ -169,13 +244,7 @@ rpt_planner(Query *parse, const char *query_string, int cursorOptions,
 		Gp_role == GP_ROLE_DISPATCH &&
 		result != NULL && result->commandType == CMD_SELECT &&
 		result->planTree != NULL)
-	{
-		StringInfoData buf;
-
-		initStringInfo(&buf);
-		rpt_analyze(result, &buf);
-		elog(DEBUG1, "rpt transfer plan:\n%s", buf.data);
-	}
+		rpt_log_analysis(result);
 
 	return result;
 }
@@ -186,8 +255,8 @@ rpt_planner(Query *parse, const char *query_string, int cursorOptions,
  * Plan the query and dump its RPT+ transfer plan.  Analysis only: the plan
  * is discarded afterwards.  This is the regression-test driver.
  */
-Datum
-rpt_transfer_plan(PG_FUNCTION_ARGS)
+static Datum
+rpt_transfer_plan_impl(FunctionCallInfo fcinfo)
 {
 	char	   *query_string = text_to_cstring(PG_GETARG_TEXT_PP(0));
 	List	   *raw_parsetree_list;
@@ -227,4 +296,40 @@ rpt_transfer_plan(PG_FUNCTION_ARGS)
 	rpt_analyze(stmt, &buf);
 
 	PG_RETURN_TEXT_P(cstring_to_text(buf.data));
+}
+
+/* The SQL entry point also contains exceptions raised by future UDF code. */
+Datum
+rpt_transfer_plan(PG_FUNCTION_ARGS)
+{
+	bool pg_error = false;
+	bool out_of_memory = false;
+	char message[256] = "unknown C++ exception";
+
+	try
+	{
+		return rpt_transfer_plan_impl(fcinfo);
+	}
+	catch (const RptPgError &)
+	{
+		pg_error = true;
+	}
+	catch (const std::bad_alloc &)
+	{
+		out_of_memory = true;
+	}
+	catch (const std::exception &e)
+	{
+		strlcpy(message, e.what(), sizeof(message));
+	}
+	catch (...)
+	{
+	}
+	if (pg_error)
+		PG_RE_THROW();
+	if (out_of_memory)
+		ereport(ERROR, (errcode(ERRCODE_OUT_OF_MEMORY),
+						errmsg("out of memory while planning RPT query")));
+	ereport(ERROR, (errmsg("RPT query planning failed: %s", message)));
+	PG_RETURN_NULL();
 }

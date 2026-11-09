@@ -42,6 +42,7 @@ extern "C"
 {
 #include "postgres.h"
 
+#include "catalog/gp_distribution_policy.h"
 #include "nodes/parsenodes.h"
 #include "nodes/pg_list.h"
 #include "parser/parsetree.h"
@@ -140,6 +141,18 @@ rpt_vertex_for_scan(PlannedStmt *stmt, RptTransferMgr *mgr, Plan *scan)
 
 		if (rte->eref != NULL)
 			v.relname = rte->eref->aliasname;
+		if (rte->rtekind == RTE_RELATION)
+		{
+			GpPolicy *policy = RptPgCall([&]() { return GpPolicyFetch(rte->relid); });
+			v.replicated = policy->ptype == POLICYTYPE_REPLICATED;
+			v.numsegments = policy->numsegments;
+			if (policy->ptype == POLICYTYPE_PARTITIONED && policy->nattrs > 0)
+			{
+				v.distkeys.assign(policy->attrs, policy->attrs + policy->nattrs);
+				v.distopclasses.assign(policy->opclasses, policy->opclasses + policy->nattrs);
+			}
+			RptPgCall([&]() { pfree(policy); });
+		}
 	}
 
 	mgr->by_rti[rti] = (int) mgr->vertices.size();
@@ -186,6 +199,18 @@ rpt_resolve_key_scan(Plan *top, AttrNumber key_attno,
 		if (tle == NULL || !IsA(tle->expr, Var))
 			return false;
 		var = (Var *) tle->expr;
+
+		if (IsA(node, IndexOnlyScan) && var->varno == INDEX_VAR)
+		{
+			IndexOnlyScan *ios = (IndexOnlyScan *) node;
+
+			if (var->varattno < 1 || var->varattno > list_length(ios->indextlist))
+				return false;
+			tle = (TargetEntry *) list_nth(ios->indextlist, var->varattno - 1);
+			if (!IsA(tle->expr, Var))
+				return false;
+			var = (Var *) tle->expr;
+		}
 
 		/*
 		 * Terminus: a base scan the reducer could replay.  The key column is
@@ -309,8 +334,8 @@ rpt_equality_clause(Node *clause, Var **outer_var, Var **inner_var,
 	if ((*inner_var)->vartype != (*outer_var)->vartype)
 		return false;
 
-	keytype = getBaseType((*inner_var)->vartype);
-	if (!get_typbyval(keytype))
+	keytype = RptPgCall([&]() { return getBaseType((*inner_var)->vartype); });
+	if (!RptPgCall([&]() { return get_typbyval(keytype); }))
 		return false;
 	if (keytype == FLOAT4OID || keytype == FLOAT8OID)
 		return false;
@@ -321,7 +346,7 @@ rpt_equality_clause(Node *clause, Var **outer_var, Var **inner_var,
 	 * alone is not the bitwise-equality proof and the float exclusion above
 	 * is still needed.
 	 */
-	tce = lookup_type_cache(keytype, TYPECACHE_EQ_OPR);
+	tce = RptPgCall([&]() { return lookup_type_cache(keytype, TYPECACHE_EQ_OPR); });
 	if (!OidIsValid(tce->eq_opr) || op->opno != tce->eq_opr)
 		return false;
 

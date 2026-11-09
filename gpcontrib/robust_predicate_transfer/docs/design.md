@@ -65,31 +65,83 @@ edges, block their outgoing edges) are in rptgraph.cpp.
 
 ## Asymmetric transfer plan
 
-rptplan.cpp ports the artifact's `LargestRootUpdated` + `FindEdge` +
-`CreateTransferPlanUpdated`: a greedy Prim forest (one root per component,
-chosen as the largest filtered-or-intermediate table, falling back to the
-largest), forward stage assigned smaller→larger along the insertion order,
-backward stage redirected through each class's leader — the single vertex per
-class the broadcast filter is built on.  `rpt.max_chain_depth` caps the
-forward chain length once the reducer exists; the default (4) is a placeholder
-until hop latency is measured (work item 0 of the phase plan).
+rptplan.cpp uses one Algorithm 1 insertion loop for both trees. Frontier
+selection prefers the largest shared-column count, then the largest relation;
+each stage chooses among edges open in its transfer direction; among its
+highest-weight open edges, parents use greatest forward depth and smallest
+backward depth,
+with vertex id making remaining ties deterministic. Unprotected equivalence
+classes expose their implied equalities, so a SQL star and a SQL chain can
+produce the same chain within a class. Root selection retains the artifact's
+largest filtered-or-intermediate preference, falling back to the largest table.
+
+The backward stage redirects each class to its earliest-inserted member. A
+non-component-root class leader is a **bridge table**, reported in the dump.
+Only filtered or bridge tables can produce forward filters. Component roots
+are final destinations in the forward graph, but never reducer scans: they
+consume their inbound cached filter in the main query. `reducer order` lists
+only scans that actually produce forward filters, in dependency order.
+
+`rpt.max_chain_depth` limits the number of dependency hops, including the
+last delivery to the root. When another hop would exceed the cap, that edge
+is omitted from both endpoint lists. This loses selectivity, not correctness.
+The dump records the cap, reducer order, bridges, and each forward and
+backward hop's merge mode. The default (4) remains provisional pending measured transport latency.
+
+### C/C++ errors and diagnostic access
+
+STL containers allocate outside PostgreSQL memory contexts. Calls that can
+raise PostgreSQL errors go through `RptPgCall`, which catches the longjmp at
+the call site and throws a C++ marker. C++ unwinding destroys the containers
+before the analysis boundary rethrows the original PostgreSQL error. The
+wrapper restores both PostgreSQL exception stacks on either kind of unwind.
+C++ allocation and other exceptions are converted to PostgreSQL errors only
+after leaving the C++ catch blocks. Both the analysis and SQL entry points
+contain C++ exceptions.
+
+The dump function plans without executing the query's executor permission
+checks. Its default PUBLIC execution privilege is revoked; administrators
+should grant it only to roles allowed to inspect relation estimates.
+
+### Scope and validation still outstanding
+
+This implementation computes schedules and dumps them; it does not inject
+filters, dispatch reducers, or add EXPLAIN annotations. No runtime behavior
+or performance improvement is claimed. The Phase I latency benchmark and
+JOB/TPC-DS co-location coverage report have not been run. Multi-class runtime
+backward chaining remains deferred to later phases. Cloudberry MARK-like
+subplan forms are not DuckDB MARK joins: unsupported join kinds contribute
+no transfer edge. SQL tests run each case with optimizer off and on;
+standalone synthetic tests pin graph shape and error cleanup independently
+of SQL optimizer transformations.
 
 ## Correctness rules
 
 Each of these is a silent-wrong-answer rule, not a performance rule.  A bloom
 filter may only ever *over*-approximate the build side's key set.
 
-1. **Per-hop global merge.** Segment *s* holds only part of table *j*'s keys,
-   so filtering table *j+1* with *s*'s local filter drops rows whose key lives
-   on another segment.  Each hop must be a global publish → merge → deliver,
-   unless the two tables are provably co-distributed on the join key (same
-   distkey, same segment count, no redistributing motion between scan and
-   join).  A local hop is an optimization on top, never the default.
+1. **Merge where the source keys are complete.** Decide each forward and
+   backward edge from the base relations' distribution policies and that
+   edge's key pairs. Equal ordered hash distribution columns, hash opclasses
+   and segment counts permit a segment-local transfer when every distribution
+   column is covered by the transfer equality. Main-plan Motions do not change
+   this proof: the reducer reads the base scans. Implied equivalence-class
+   and unfiltered-bypass edges use exactly the same policy test as original
+   join edges, so a co-distributed star remains local after becoming a chain.
+   A replicated source is complete on every covered segment: it may transfer
+   locally if its segment count covers the destination's. A replicated scan
+   may execute on only one segment: Phase II must place the producer on every
+   consuming segment or classify that broadcast as global; policy coverage
+   alone does not guarantee producer execution coverage. A transfer into a
+   replicated destination stays global, including replicated-to-replicated.
+   Other cases, including unknown policies and random-to-hash transfers, need
+   global publish → merge → deliver. A local hop never publishes to the QD.
 2. **Snapshot identity.** The reducer (Phase III) must run under the main
    query's snapshot and parameters: a row visible to the query but not to the
    reducer would be silently missing from the filter.
 3. **Outer joins are directed edges.** LEFT protects the left side, RIGHT and
-   MARK protect the right; ANTI and FULL produce no edge.  The preserved side
+   MARK protect the right in the artifact; unsupported Cloudberry join kinds,
+   ANTI and FULL produce no edge.  The preserved side
    of an outer join must never be reduced by the nullable side's keys.
 4. **Transitive reduction is sound by induction.** Filtering table *t* with
    filter A before building filter B from *t* is correct because A only
@@ -102,25 +154,57 @@ filter may only ever *over*-approximate the build side's key set.
    non-float type and the operator is that type's own equality
    (`-0.0 = 0.0` is true but not bitwise equal; cross-type Datums for equal
    values are not bitwise equal either).
-7. **Plan-order safety.** A backward consumer may only wait on a producer the
-   plan order guarantees runs first: the consumer's scan must sit on the probe
-   side of a hash join whose build side transitively contains its class
-   leader's scan.  `consumer_ok` in the dump reports exactly this; ineligible
-   vertices fail open (no backward filter).
+7. **Blocking consumers only across slices.** `consumer_ok` describes
+   eligibility for a blocking Anser consumer on **global** backward edges.
+   Every global producer must be on a hash join's build side, the consumer
+   on its probe side, and the scans in different slices; different ancestors
+   can prove different producers. Same-slice exchanges are refused, matching
+   Anser. Local edges never participate in this check, and a vertex with only
+   local in-edges reports `consumer_ok no`: it needs no blocking consumer.
+   Core's `gp_enable_runtime_filter_pushdown` covers eligible same-process
+   HashJoin/SeqScan pairs after building the hash table. Phase II should rely
+   on that path for local backward edges, or use a non-blocking local filter
+   whose absence means no filtering. A HashJoin can fetch its first probe
+   tuple before starting the build; waiting there can deadlock even if the
+   producer is on its build side. A local edge must never become an Anser
+   exchange merely because its consumer passes the structural hash-join test.
 8. **Fail open, always.** Timeout, malformed part, oversized filter, squelched
    producer, missing cache entry — all degrade to "no filter", never to an
-   error and never to a filtered result.
+   error and never to a filtered result. The optional planner-hook analysis
+   runs in a disposable memory context: analysis failures warn and return the
+   original finished plan. User cancellation still propagates. The explicit
+   diagnostic UDF reports errors to its caller rather than masking them.
 
 ## Runtime contract with Anser (Phases II/III)
 
 - The reducer never joins — scan, filter, build — so it fits one slice, one
   gang, one dispatch, with the forward chain as an ordered `Append`.
-- The backward pass is ordinary Anser injection into the main plan.
+- Global backward edges may use Anser in the main plan only where
+  `consumer_ok` permits it. Local backward edges use core runtime-filter
+  pushdown (or an optional non-blocking local filter), with no QD channel,
+  subscription, network round trip or wait.
 - A session-scoped filter cache per QE, keyed by condition_key alone, carries
   chain filters across the dispatch boundary and lets the broadcast be
   delivered once per segment rather than once per consuming scan.
 - Condition keys derive from the semantic identity `(region_id, class_id,
   build_rel)`, not a per-query counter.
+
+### Parallel workers and segment completeness
+
+`merge=local` is a distribution-policy decision, not permission to use a
+single parallel worker's partial filter. With parallel scans, each QE worker
+reads only part of its segment's keys. Even a replicated source then needs
+all workers' parts combined before its filter is complete on that segment.
+
+Phase III's initial reducer must be **non-parallel**, with one scanning QE
+per segment. Supporting parallel reducers requires a segment-local merge of
+all worker filters before delivery or probing. Anser's `docs/local-fold.md`
+describes such a rendezvous, but it is an idea, not an implemented facility;
+Phase III must not assume it exists. Missing or failed worker parts must
+abandon the filter and fail open, never expose an incomplete filter. The
+same completeness requirement applies to any custom local backward producer.
+Core currently disables its pushdown path in MPP parallel mode, so relying
+on core there simply means no local filter, rather than a global exchange.
 
 ## GUCs
 
@@ -128,7 +212,7 @@ filter may only ever *over*-approximate the build side's key set.
 | --- | --- | --- |
 | `rpt.enable` | off | Master switch for the analysis hook. |
 | `rpt.debug` | off | Log the transfer plan of every analyzed query at DEBUG1. |
-| `rpt.max_chain_depth` | 4 | Cap on the forward chain length (placeholder until hop latency is measured). |
+| `rpt.max_chain_depth` | 4 | Enforced maximum dependency hops; default provisional until hop latency is measured. |
 
 Setup: `shared_preload_libraries = 'anser,robust_predicate_transfer'`, in that
 order (the extension resolves Anser symbols at load time).  The analysis UDF

@@ -58,6 +58,10 @@ include $(top_builddir)/src/Makefile.global
 include $(top_srcdir)/contrib/contrib-global.mk
 endif
 
+# Link with the C++ driver so the module owns its STL/exception runtime
+# dependency even when the server was built without ORCA.
+COMPILER = $(CXX) $(CXXFLAGS)
+
 # The analysis needs anser's library installed and preloaded: our module
 # resolves AnserIsRuntimeFilterScan from it at load time (RTLD_NOW), and
 # load order must be anser first.  Mirrors gpcontrib/anser's preload
@@ -92,6 +96,18 @@ preload-rpt:
 # cluster, and runs the tests.
 .PHONY: installcheck-with-install
 installcheck-with-install:
+	$(MAKE) unitcheck
 	$(MAKE) -C ../anser install
 	$(MAKE) install
 	$(MAKE) installcheck
+
+# Uses PostgreSQL headers but no server: synthetic plans exercise the exact
+# production graph code and deterministic failure paths.
+.PHONY: unitcheck
+unitcheck: test/graph_test
+	./test/graph_test
+
+test/graph_test: $(srcdir)/test/graph_test.cpp $(wildcard $(srcdir)/src/*.cpp) $(srcdir)/include/rpt.h
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(PG_CPPFLAGS) $< -o $@
+
+EXTRA_CLEAN += test/graph_test

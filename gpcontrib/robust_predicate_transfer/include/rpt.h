@@ -32,9 +32,9 @@
  * rule) the single-node original never had.
  *
  * Phase I is a pure analysis pass: nothing is injected or executed, and the
- * dumps in rptplan.cpp are the only output.  Everything lives in transient
- * C++ containers in the caller's memory context; nothing may rely on a
- * destructor running across an elog(ERROR) longjmp.
+ * dumps in rptplan.cpp are the only output.  STL containers own malloc-backed
+ * storage. PostgreSQL errors must be translated to C++ exceptions before
+ * unwinding those containers, then rethrown at the C boundary.
  *
  * IDENTIFICATION
  *	  gpcontrib/robust_predicate_transfer/include/rpt.h
@@ -57,6 +57,44 @@ extern "C"
 #include <set>
 #include <string>
 #include <vector>
+
+/*
+ * Like gpopt's GP_WRAP: never longjmp over a live C++ container. Only call
+ * PostgreSQL through this boundary; callbacks must do the same for their
+ * own PostgreSQL calls. The guard also restores PG's stacks when a callback
+ * throws a C++ exception through a C walker.
+ */
+struct RptPgError {};
+
+struct RptPgStackGuard
+{
+	sigjmp_buf *exception_stack;
+	ErrorContextCallback *context_stack;
+
+	RptPgStackGuard() : exception_stack(PG_exception_stack),
+		context_stack(error_context_stack) {}
+	~RptPgStackGuard()
+	{
+		PG_exception_stack = exception_stack;
+		error_context_stack = context_stack;
+	}
+};
+
+template <typename F>
+auto RptPgCall(const F &call) -> decltype(call())
+{
+	RptPgStackGuard guard;
+	sigjmp_buf local;
+	int saved_dispatch_nest_level = dispatch_nest_level;
+
+	if (sigsetjmp(local, 0) != 0)
+	{
+		dispatch_nest_level = saved_dispatch_nest_level;
+		throw RptPgError();
+	}
+	PG_exception_stack = &local;
+	return call();
+}
 
 /* GUCs (defined in rptinit.cpp). */
 extern bool rpt_enable;
@@ -102,6 +140,10 @@ struct RptVertexInfo
 	bool		filtered;		/* the scan carries restriction quals */
 	bool		intermediate;	/* touches >1 equivalence class */
 	bool		unfiltered;		/* neither filtered nor intermediate */
+	bool replicated = false;
+	int numsegments = 0;
+	std::vector<AttrNumber> distkeys;
+	std::vector<Oid> distopclasses;
 	std::set<RptKey> join_keys; /* this table's keys over all its edges */
 };
 
@@ -111,10 +153,10 @@ struct RptVertexInfo
  * clauses.size() is the shared-attribute count the paper uses as the edge
  * weight; each clause is one (left key, right key) pair.
  *
- * protect_left/protect_right are ported verbatim: the preserved side of an
+ * protect_left/protect_right name the protected destination: the preserved side of an
  * outer join keeps its rows whether or not they match, so it must never be
- * reduced by the other side's keys.  LEFT protects left, RIGHT and MARK
- * protect right; ANTI and FULL never create an edge at all.
+ * reduced by the other side's keys.  LEFT protects left and RIGHT
+ * protects right; unsupported join kinds, ANTI and FULL create no edge.
  */
 struct RptEdgeInfo
 {
@@ -147,6 +189,7 @@ struct RptGraphEdge
 	std::vector<RptKey> left_keys;	/* keys on the smaller table's side */
 	std::vector<RptKey> right_keys; /* keys on the larger table's side */
 	std::vector<Oid>	key_types;
+	bool local = false; /* policy permits local merge; never use QD transport */
 };
 
 /* Ports dag.hpp's GraphNode: one vertex's full transfer plan. */
@@ -181,17 +224,23 @@ struct RptTransferMgr
 
 	/* rptplan.cpp: the transfer plan. */
 	std::map<int, RptGraphNode> graph;
+	std::set<int> roots;
+	std::set<int> bridges;
+	std::vector<int> reducer_order;
 	std::vector<int> transfer_order;	/* Prim insertion order of vertex ids */
 
-	/* Our addition: backward-consumer eligibility (Anser's deadlock rule) --
-	 * consumer_ok[v] is true only where v's scan sits on the probe side of a
-	 * hash join whose build side transitively contains the vertex's class
-	 * leader's scan. */
+	/* Eligibility for blocking global backward consumers only. Every global
+	 * producer must be on a hash join's build side in a different slice from
+	 * the probe-side consumer. Local edges never wait and do not participate;
+	 * a vertex with no global in-edges has consumer_ok=false. */
 	std::map<int, bool> consumer_ok;
 };
 
 /* rptregion.cpp: extract the join graph from the finished statement. */
 extern void RptCollectGraph(PlannedStmt *stmt, RptTransferMgr *mgr);
+
+extern RptKey RptFindKeyRoot(const RptKey &key,
+							   std::map<RptKey, RptKey> &uf_parent);
 
 /* rptgraph.cpp: union-find classes, classification, SkipUnfilteredTable. */
 extern void RptBuildClasses(RptTransferMgr *mgr);

@@ -18,3 +18,8 @@ Build: `./configure --with-anser --with-rpt` (needs Anser), then
 `make -C gpcontrib/robust_predicate_transfer`.  Run tests with
 `make -C gpcontrib/robust_predicate_transfer installcheck` against a demo
 cluster (it preloads `anser,robust_predicate_transfer` itself).
+
+Run `make unitcheck` in this directory after configuring the source tree to
+exercise synthetic graph, stage, co-location, consumer-order and exception
+fixtures without starting a server. `make installcheck` additionally needs a
+running Cloudberry cluster and executes SQL cases under both optimizers.
