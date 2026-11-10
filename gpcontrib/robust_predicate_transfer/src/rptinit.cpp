@@ -64,6 +64,8 @@ void		_PG_init(void);
 
 bool		rpt_enable = false;
 bool		rpt_debug = false;
+bool		rpt_backward = true;
+int			rpt_max_backward_consumers = 4;
 int			rpt_max_chain_depth = 4;
 
 static planner_hook_type prev_planner_hook = NULL;
@@ -165,6 +167,18 @@ rpt_define_gucs(void)
 							 PGC_USERSET,
 							 GUC_GPDB_NEED_SYNC,
 							 NULL, NULL, NULL);
+
+	DefineCustomBoolVariable("rpt.backward",
+							 "Reserves the backward runtime switch for a future Phase II build.",
+							 "QD-only; this analysis-only build never injects executor nodes.",
+							 &rpt_backward, true, PGC_USERSET, 0,
+							 NULL, NULL, NULL);
+
+	DefineCustomIntVariable("rpt.max_backward_consumers",
+							"Caps backward consumers per equivalence class.",
+							"QD-only; prefer consumers with larger estimated benefit.",
+							&rpt_max_backward_consumers, 4, 1, INT_MAX,
+							PGC_USERSET, 0, NULL, NULL, NULL);
 
 	DefineCustomIntVariable("rpt.max_chain_depth",
 							"Sets the maximum forward-chain length RPT+ may plan.",

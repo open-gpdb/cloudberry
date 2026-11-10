@@ -99,6 +99,8 @@ auto RptPgCall(const F &call) -> decltype(call())
 /* GUCs (defined in rptinit.cpp). */
 extern bool rpt_enable;
 extern bool rpt_debug;
+extern bool rpt_backward;
+extern int rpt_max_backward_consumers;
 extern int	rpt_max_chain_depth;
 
 /*
@@ -135,6 +137,7 @@ struct RptVertexInfo
 {
 	int			id;				/* rtindex of the scan, the vertex identity */
 	Plan	   *scan;			/* the base scan node */
+	Oid relid = InvalidOid;
 	std::string relname;		/* RTE alias, for dumps */
 	int64		cardinality;	/* scan->plan_rows */
 	bool		filtered;		/* the scan carries restriction quals */
@@ -206,6 +209,28 @@ struct RptGraphNode
 				backward_stage;
 };
 
+/* One class/member decision. Relink points and tuple-output positions are
+ * recorded only after the complete consumer and producer paths are proven. */
+struct RptBackwardConsumer
+{
+	RptKey class_key = {0, 0};
+	int producer = 0;
+	int consumer = 0;
+	Plan *producer_parent = NULL;
+	Plan *consumer_parent = NULL;
+	AttrNumber producer_attno = 0;
+	AttrNumber consumer_attno = 0;
+	int producer_slice = -1;
+	int consumer_slice = -1;
+	bool local = false;
+	bool rule9 = false;
+	bool strict_eligible = false;
+	bool eligible = false;
+	bool defer_first = true;
+	double estimated_rows_removed = -1; /* unknown without column statistics */
+	std::string reason;
+};
+
 /*
  * The whole analysis.  Ports TransferGraphManager; the neighbor matrix is
  * symmetric (both [a][b] and [b][a] name the same edge) as in the original.
@@ -234,6 +259,7 @@ struct RptTransferMgr
 	 * the probe-side consumer. Local edges never wait and do not participate;
 	 * a vertex with no global in-edges has consumer_ok=false. */
 	std::map<int, bool> consumer_ok;
+	std::vector<RptBackwardConsumer> backward_consumers;
 };
 
 /* rptregion.cpp: extract the join graph from the finished statement. */
@@ -248,6 +274,8 @@ extern void RptBuildClasses(RptTransferMgr *mgr);
 /* rptplan.cpp: the Prim forest (LargestRootUpdated), forward/backward stage
  * assignment (CreateTransferPlanUpdated), consumer eligibility, and dumps. */
 extern void RptBuildTransferPlan(PlannedStmt *stmt, RptTransferMgr *mgr);
+extern void RptCheckBackwardConsumers(PlannedStmt *stmt, RptTransferMgr *mgr);
+extern double RptEstimateDistinct(const RptVertexInfo &vertex, AttrNumber attno);
 extern void RptDumpTransferPlan(const RptTransferMgr *mgr, StringInfo out);
 
 #endif							/* RPT_H */
