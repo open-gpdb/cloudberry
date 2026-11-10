@@ -27,8 +27,9 @@
  *
  * Phase I is analysis-only: the planner hook computes the transfer plan and
  * logs it at DEBUG1 when rpt.debug is on, and rpt_transfer_plan() exposes
- * the same dump to SQL for the regression tests.  Nothing is injected into
- * the plan tree.
+ * the same dump to SQL for the regression tests. Runtime filters are not
+ * injected yet. The explicit debug_noop_initplan measurement switch adds
+ * only an empty distributed InitPlan.
  *
  * IDENTIFICATION
  *	  gpcontrib/robust_predicate_transfer/src/rptinit.cpp
@@ -40,6 +41,7 @@ extern "C"
 #include "postgres.h"
 
 #include "cdb/cdbvars.h"
+#include "cdb/cdbutil.h"
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "nodes/pg_list.h"
@@ -49,6 +51,8 @@ extern "C"
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
+
+#include "rptlocal.h"
 
 PG_MODULE_MAGIC;
 
@@ -68,7 +72,27 @@ bool		rpt_backward = true;
 int			rpt_max_backward_consumers = 4;
 int			rpt_max_chain_depth = 4;
 
+bool		rpt_forward = true;
+int			rpt_forward_apply = RPT_FORWARD_APPLY_ROOT;
+/* Measured 2026-11-10 on one host, 3 primaries (docs/design.md). */
+double		rpt_forward_ms_per_mib_part = 3.5;
+double		rpt_forward_max_exchange_ms = 100.0;
+double		rpt_forward_min_root_rows = 10000.0;
+/* The RPT+ paper's lambda (its Algorithm 2 threshold). */
+double		rpt_forward_max_selectivity = 0.35;
+
+static const struct config_enum_entry rpt_forward_apply_options[] = {
+	{"root", RPT_FORWARD_APPLY_ROOT, false},
+	{"all", RPT_FORWARD_APPLY_ALL, false},
+	{NULL, 0, false}
+};
+
 static planner_hook_type prev_planner_hook = NULL;
+static bool rpt_debug_noop_initplan = false;
+
+/* Set while rpt_transfer_plan() plans its query: the dump must describe the
+ * uninjected plan, so the hook leaves it alone. */
+static bool rpt_suppress_injection = false;
 
 static void rpt_define_gucs(void);
 static PlannedStmt *rpt_planner(Query *parse, const char *query_string,
@@ -95,6 +119,12 @@ rpt_analyze(PlannedStmt *stmt, StringInfo out)
 			RptBuildClasses(&mgr);
 			RptBuildTransferPlan(stmt, &mgr);
 			RptDumpTransferPlan(&mgr, out);
+
+			/* What the forward pass would do with this plan, built nothing. */
+			std::string forward_trace;
+
+			(void) RptInjectForward(stmt, false, &forward_trace);
+			RptPgCall([&]() { appendStringInfoString(out, forward_trace.c_str()); });
 		}
 		return;
 	}
@@ -127,6 +157,12 @@ void
 _PG_init(void)
 {
 	rpt_define_gucs();
+
+	/*
+	 * The local reducer nodes travel to the segments inside dispatched plans,
+	 * so every backend that loads us must be able to resolve them by name.
+	 */
+	RptRegisterLocalMethods();
 
 	/*
 	 * Only a preloaded library can be relied on to have installed its hooks
@@ -168,6 +204,12 @@ rpt_define_gucs(void)
 							 GUC_GPDB_NEED_SYNC,
 							 NULL, NULL, NULL);
 
+	DefineCustomBoolVariable("rpt.debug_noop_initplan",
+							 "Adds an empty distributed InitPlan for overhead measurement.",
+							 "QD-only, independent of rpt.enable. No filters are built or applied.",
+							 &rpt_debug_noop_initplan, false, PGC_SUSET, 0,
+							 NULL, NULL, NULL);
+
 	DefineCustomBoolVariable("rpt.backward",
 							 "Reserves the backward runtime switch for a future Phase II build.",
 							 "QD-only; this analysis-only build never injects executor nodes.",
@@ -179,6 +221,43 @@ rpt_define_gucs(void)
 							"QD-only; prefer consumers with larger estimated benefit.",
 							&rpt_max_backward_consumers, 4, 1, INT_MAX,
 							PGC_USERSET, 0, NULL, NULL, NULL);
+
+	DefineCustomBoolVariable("rpt.forward",
+							 "Builds the RPT+ forward reducer when rpt.enable is on.",
+							 "QD-only. Needs anser.enable=on and anser.runtime_filter=off.",
+							 &rpt_forward, true, PGC_USERSET, 0,
+							 NULL, NULL, NULL);
+
+	DefineCustomEnumVariable("rpt.forward_apply",
+							 "Which main-plan scans apply forward filters.",
+							 "root: only each chain's root; all: chain tables too.",
+							 &rpt_forward_apply, RPT_FORWARD_APPLY_ROOT,
+							 rpt_forward_apply_options, PGC_USERSET, 0,
+							 NULL, NULL, NULL);
+
+	DefineCustomRealVariable("rpt.forward_ms_per_mib_part",
+							 "Estimated cost of one global hop per MiB of bitset per producer.",
+							 "The c in c * n_producers * filter_MiB; QD-only.",
+							 &rpt_forward_ms_per_mib_part, 3.5, 0.0, 1.0e6,
+							 PGC_USERSET, 0, NULL, NULL, NULL);
+
+	DefineCustomRealVariable("rpt.forward_max_exchange_ms",
+							 "Skips a forward chain whose estimated exchange cost is higher.",
+							 "-1 disables the limit; QD-only.",
+							 &rpt_forward_max_exchange_ms, 100.0, -1.0, 1.0e9,
+							 PGC_USERSET, 0, NULL, NULL, NULL);
+
+	DefineCustomRealVariable("rpt.forward_min_root_rows",
+							 "Skips a forward chain whose root scan is estimated smaller.",
+							 "Compared with the root scan's plan_rows (per segment); QD-only.",
+							 &rpt_forward_min_root_rows, 10000.0, 0.0, 1.0e15,
+							 PGC_USERSET, 0, NULL, NULL, NULL);
+
+	DefineCustomRealVariable("rpt.forward_max_selectivity",
+							 "Skips a forward chain expected to keep at least this fraction of the root's rows.",
+							 "Estimated from the reducer quals and column NDVs; 1 disables the check; QD-only.",
+							 &rpt_forward_max_selectivity, 0.35, 0.0, 1.0,
+							 PGC_USERSET, 0, NULL, NULL, NULL);
 
 	DefineCustomIntVariable("rpt.max_chain_depth",
 							"Sets the maximum forward-chain length RPT+ may plan.",
@@ -235,6 +314,169 @@ rpt_log_analysis(PlannedStmt *stmt)
 		MemoryContextDelete(analysis_context);
 }
 
+/* Contain C++ exceptions before returning to the PostgreSQL error handler. */
+static PlannedStmt *
+rpt_build_noop_initplan(PlannedStmt *stmt)
+{
+	bool pg_error = false;
+	bool out_of_memory = false;
+	char message[256] = "unknown C++ exception";
+
+	try
+	{
+		PlannedStmt *copy = RptPgCall([&]() {
+			return (PlannedStmt *) copyObjectImpl(stmt);
+		});
+		int width = RptPgCall([]() { return getgpsegmentCount(); });
+
+		RptAttachReducerInitPlan(copy, NIL, width);
+		return copy;
+	}
+	catch (const RptPgError &)
+	{
+		pg_error = true;
+	}
+	catch (const std::bad_alloc &)
+	{
+		out_of_memory = true;
+	}
+	catch (const std::exception &e)
+	{
+		strlcpy(message, e.what(), sizeof(message));
+	}
+	catch (...)
+	{
+	}
+	if (pg_error)
+		PG_RE_THROW();
+	if (out_of_memory)
+		ereport(ERROR, (errcode(ERRCODE_OUT_OF_MEMORY),
+						errmsg("out of memory building RPT measurement InitPlan")));
+	ereport(ERROR, (errmsg("RPT measurement InitPlan failed: %s", message)));
+	return NULL;
+}
+
+/* Atomic finished-plan surgery: retain the original on construction failure.
+ * This switch is only a measurement harness, independent of runtime filters.
+ * Successful allocations stay under the planner's memory context. */
+static PlannedStmt *
+rpt_try_noop_initplan(PlannedStmt *stmt)
+{
+	MemoryContext saved_context = CurrentMemoryContext;
+	MemoryContext volatile build_context = NULL;
+	PlannedStmt *volatile result = stmt;
+
+	PG_TRY();
+	{
+		build_context = AllocSetContextCreate(saved_context,
+											 "RPT measurement InitPlan",
+											 ALLOCSET_DEFAULT_SIZES);
+		MemoryContextSwitchTo(build_context);
+		result = rpt_build_noop_initplan(stmt);
+		MemoryContextSwitchTo(saved_context);
+	}
+	PG_CATCH();
+	{
+		MemoryContextSwitchTo(saved_context);
+		ErrorData *error = CopyErrorData();
+
+		FlushErrorState();
+		if (build_context != NULL)
+			MemoryContextDelete(build_context);
+		if (error->sqlerrcode == ERRCODE_QUERY_CANCELED)
+			ReThrowError(error);
+		ereport(WARNING, (errmsg("RPT measurement InitPlan skipped: %s", error->message)));
+		FreeErrorData(error);
+	}
+	PG_END_TRY();
+
+	return result;
+}
+
+/* Contain C++ exceptions before returning to the PostgreSQL error handler. */
+static PlannedStmt *
+rpt_build_forward(PlannedStmt *stmt)
+{
+	bool pg_error = false;
+	bool out_of_memory = false;
+	char message[256] = "unknown C++ exception";
+
+	try
+	{
+		std::string trace;
+		PlannedStmt *result = RptInjectForward(stmt, true, &trace);
+
+		if (rpt_debug)
+			RptPgCall([&]() { elog(DEBUG1, "rpt forward:\n%s", trace.c_str()); });
+		return result;
+	}
+	catch (const RptPgError &)
+	{
+		pg_error = true;
+	}
+	catch (const std::bad_alloc &)
+	{
+		out_of_memory = true;
+	}
+	catch (const std::exception &e)
+	{
+		strlcpy(message, e.what(), sizeof(message));
+	}
+	catch (...)
+	{
+	}
+	if (pg_error)
+		PG_RE_THROW();
+	if (out_of_memory)
+		ereport(ERROR, (errcode(ERRCODE_OUT_OF_MEMORY),
+						errmsg("out of memory building the RPT forward reducer")));
+	ereport(ERROR, (errmsg("RPT forward reducer failed: %s", message)));
+	return NULL;
+}
+
+/* Same contract as rpt_try_noop_initplan: the original plan survives any
+ * failure, which is reported as a WARNING; only cancellation propagates. */
+static PlannedStmt *
+rpt_try_forward(PlannedStmt *stmt)
+{
+	MemoryContext saved_context = CurrentMemoryContext;
+	MemoryContext volatile build_context = NULL;
+	PlannedStmt *volatile result = stmt;
+
+	PG_TRY();
+	{
+		build_context = AllocSetContextCreate(saved_context,
+											 "RPT forward reducer",
+											 ALLOCSET_DEFAULT_SIZES);
+		MemoryContextSwitchTo(build_context);
+		result = rpt_build_forward(stmt);
+		MemoryContextSwitchTo(saved_context);
+		/* Nothing injected: the scratch context holds only garbage. */
+		if (result == stmt)
+		{
+			MemoryContextDelete(build_context);
+			build_context = NULL;
+		}
+	}
+	PG_CATCH();
+	{
+		MemoryContextSwitchTo(saved_context);
+		ErrorData *error = CopyErrorData();
+
+		FlushErrorState();
+		if (build_context != NULL)
+			MemoryContextDelete(build_context);
+		if (error->sqlerrcode == ERRCODE_QUERY_CANCELED)
+			ReThrowError(error);
+		ereport(WARNING, (errmsg("RPT forward reducer skipped: %s", error->message)));
+		FreeErrorData(error);
+		result = stmt;
+	}
+	PG_END_TRY();
+
+	return result;
+}
+
 /*
  * Plan as usual, then run the analysis over the finished tree.  Chaining
  * prev first means that when Anser is preloaded before us its injection pass
@@ -259,6 +501,17 @@ rpt_planner(Query *parse, const char *query_string, int cursorOptions,
 		result != NULL && result->commandType == CMD_SELECT &&
 		result->planTree != NULL)
 		rpt_log_analysis(result);
+
+	if (rpt_enable && rpt_forward && !rpt_suppress_injection &&
+		Gp_role == GP_ROLE_DISPATCH &&
+		result != NULL && result->commandType == CMD_SELECT &&
+		result->planTree != NULL && result->intoClause == NULL &&
+		result->copyIntoClause == NULL && result->refreshClause == NULL)
+		result = rpt_try_forward(result);
+
+	if (rpt_debug_noop_initplan && Gp_role == GP_ROLE_DISPATCH &&
+		result != NULL && result->commandType == CMD_SELECT && result->planTree != NULL)
+		result = rpt_try_noop_initplan(result);
 
 	return result;
 }
@@ -304,7 +557,18 @@ rpt_transfer_plan_impl(FunctionCallInfo fcinfo)
 	 * runtime_filter GUC on the tree we analyze already carries Anser's
 	 * injected nodes -- exactly what production planning will hand us.
 	 */
-	stmt = pg_plan_query(query, query_string, 0, NULL);
+	/* The dump describes the uninjected plan; the forward decisions are
+	 * appended by a dry run inside rpt_analyze(). */
+	rpt_suppress_injection = true;
+	PG_TRY();
+	{
+		stmt = pg_plan_query(query, query_string, 0, NULL);
+	}
+	PG_FINALLY();
+	{
+		rpt_suppress_injection = false;
+	}
+	PG_END_TRY();
 
 	initStringInfo(&buf);
 	rpt_analyze(stmt, &buf);

@@ -186,8 +186,10 @@ filter may only ever *over*-approximate the build side's key set.
   consumers, QD channels or blocking waits for them.
 - Channels are statement-scoped. The broadcast is delivered once per
   consuming QE; fan-out is capped per class. There is no session filter cache.
-- A future forward reducer must run inside the same statement and dispatch,
-  preserving the snapshot, parameters and Anser command/channel identity.
+- The forward reducer (Phase III, below) runs inside the same statement,
+  as an uncorrelated InitPlan. Cloudberry dispatches it before the main plan,
+  with the same snapshot and `gp_command_count`, so both dispatches share one
+  Anser channel namespace. Channels live until `ExecutorEnd`.
 
 ### Parallel workers and segment completeness
 
@@ -298,8 +300,99 @@ The SQL suite has been added but has not been executed on a local cluster.
 
 No eligibility percentages or go/no-go conclusion are available yet. This
 section must be updated with measured results before adding runtime nodes.
-Phase III's reducer must likewise live inside the same statement (for example
-Sequence plus Append); no cross-dispatch state is planned.
+Phase III's reducer likewise lives inside the same statement; its only state
+crossing the InitPlan/main dispatch boundary is the statement's Anser channels.
+
+## Phase III forward reducer (implemented, not yet run on a cluster)
+
+Injection happens in the planner hook, on the coordinator, for top-level
+`SELECT`s without `INTO`/`COPY`/`REFRESH` targets. It requires `rpt.enable`,
+`rpt.forward`, `anser.enable=on` and `anser.runtime_filter=off`, and leaves
+plans that already carry Anser nodes alone. Any construction error warns and
+keeps the original plan; cancellation propagates.
+
+Selection (`rptforwardplan.cpp`, unit-tested) works per forward root, which is
+the largest relation of its component and may differ from the backward
+(Phase II) root:
+
+1. The chain is `reducer_order` restricted to vertices whose filters reach the
+   root, root excluded; producers come before consumers.
+2. Each chain vertex's forward out-edges become channels, keyed by the first
+   key pair. Filters are sized by `AnserRuntimeFilterSize` from the source's
+   estimated rows.
+   A filter is sized for the rows its reducer scan inserts: the table's
+   rows per segment (`reltuples`) times the fraction its own reducer quals
+   keep -- all rows when those quals were dropped.
+3. Exchange cost: `c × n_producers × filter_MiB` per channel, with
+   `c = rpt.forward_ms_per_mib_part` and `n_producers` the number of
+   primaries; a chain's cost is the sum of its channels (hops run serially).
+   An in-process hop (below) costs nothing.
+4. Benefit: the fraction of root rows the chain is expected to keep. A
+   vertex keeps what its own reducer quals keep (`plan_rows / reltuples` per
+   segment; 1 when dropped or unknown) times what its inbound filters keep; a
+   filter from `u` keeps `keep(u) × min(1, ndv(u.key) / ndv(v.key))` of `v`,
+   assuming the smaller key domain is contained in the larger. NDVs come
+   from `pg_statistic`; unknown NDV means `keep(u)`.
+5. Gates, in order: no forward edges; root rows below
+   `rpt.forward_min_root_rows`; expected root selectivity not below
+   `rpt.forward_max_selectivity` (the RPT+ paper's λ = 0.35); estimated cost
+   above `rpt.forward_max_exchange_ms`.
+
+Construction (`rptforward.cpp`): every chain table must be a plain Seq Scan in
+the main plan, and the root must be one whose output carries its key. For each
+chain vertex, the reducer gets a key-only copy of its scan with its own quals,
+wrapped in consumers for its incoming channels and then producers for its
+outgoing ones.
+
+Rule 13 for the reducer: the quals are copied whole only when every one is
+provably unable to fail -- built from Vars, Consts, AND/OR/NOT, NULL and
+boolean tests, binary-compatible relabels, and an explicit allowlist of
+built-in integer, OID and boolean comparisons. Hashed array operations must
+also use allowlisted hash and negator functions. LEAKPROOF alone is not a
+proof of error-free evaluation: a leakproof user function can fail for reasons
+unrelated to its arguments. No arbitrary functions, arithmetic, coercions,
+Params or SubPlans are accepted. Otherwise all are
+dropped. The reducer runs eagerly, before the main plan and over rows the
+main plan may never read (`LIMIT 0`, an empty outer side): copying
+`100 / a > 1` would turn a successful query into a division-by-zero error
+that no planner fail-open can catch. Dropping quals keeps the reducer's rows a
+superset, and the selectivity estimate and filter sizing see the drop.
+
+In-process hops (rule 16, `rptlocal.c`): a local hop (`rpt_local_hop`: the
+destination's rows that can match live on the producer's segment) whose
+filter is consumed only inside the reducer is handed over without Anser.
+`RPT Local Bloom Producer` builds a `lib/bloomfilter.h` filter while passing
+rows through and, when its child is exhausted, leaves it in a per-execution
+registry (keyed by EState and condition, unregistered by a reset callback on
+the query context); the `RPT Local Bloom Consumer` of a later Sequence child
+probes it. A consumer that finds no completed filter passes everything. A
+filter the main plan also consumes -- every hop into the root, and every hop
+under `rpt.forward_apply=all` -- is published through Anser instead. The main plan's root scan (and with
+`rpt.forward_apply=all`, every chain scan) is wrapped in consumers. The
+children are attached with `RptAttachReducerInitPlan`: one EXISTS InitPlan,
+Gather Motion over a Sequence, so its dispatch completes before the main one.
+
+Connection lifetime: the reducer's dispatcher releases its gangs in
+`ExecSetParamPlan`, long before `ExecutorEnd`, and every dispatcher does so
+early on the error path. Anser keeps `PGconn` pointers for deliveries and for
+partially flushed chunks, and `cleanupQE` destroys connections with unflushed
+output. Before retaining a connection pointer, Anser registers a libpq event
+handler. `PGEVT_CONNDESTROY` forgets all of that connection's deliveries and
+queued-chunk references before `PQfinish` frees it, including on InitPlan
+and error cleanup paths. `PGEVT_CONNRESET` drops state for the previous stream.
+Cloudberry hides public PQ event APIs in the backend, so Anser installs its
+entry using the existing libpq-int.h event layout and libc allocator; it does
+not link a second libpq or require new exported core symbols.
+The callbacks do not allocate, log, wait, or scan dynahash. Failed registration
+refuses the subscription, so the consumer times out unfiltered. A recycled
+connection that stays allocated remains safe to reference; completed channel
+payloads stay available to the main dispatch. No core hook is required.
+
+Known limits of this version: only Seq Scan targets; a single key per channel;
+the selectivity estimate assumes independence and key containment; the cost
+model was calibrated on one host with three primaries. `rpt.debug` dumps and
+`rpt_transfer_plan()` report the selection with `decision=` reasons, the
+estimated selectivity (`est_sel=`), in-process hops and dropped quals.
 
 ## GUCs
 
@@ -310,6 +403,12 @@ Sequence plus Append); no cross-dispatch state is planned.
 | `rpt.backward` | on | QD-only runtime switch reserved for Phase II; disable during the survey. |
 | `rpt.max_backward_consumers` | 4 | QD-only cap on consumers per class, applied to analysis decisions. |
 | `rpt.max_chain_depth` | 4 | Enforced maximum dependency hops; default provisional until hop latency is measured. |
+| `rpt.forward` | on | Build the Phase III forward reducer when `rpt.enable` is on. |
+| `rpt.forward_apply` | root | Where the main plan consumes forward filters: `root` only, or `all` chain scans too. |
+| `rpt.forward_ms_per_mib_part` | 3.5 | Cost model `c`, ms per MiB of filter per producer part. |
+| `rpt.forward_max_exchange_ms` | 100 | Refuse a chain whose estimated exchange exceeds this; −1 disables the gate. |
+| `rpt.forward_min_root_rows` | 10000 | Refuse a chain whose root is estimated below this many rows per segment. |
+| `rpt.forward_max_selectivity` | 0.35 | λ: refuse a chain expected to keep at least this fraction of the root's rows; 1 disables. |
 
 Setup: `shared_preload_libraries = 'anser,robust_predicate_transfer'`, in that
 order (the extension resolves Anser symbols at load time).  The analysis UDF

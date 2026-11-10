@@ -100,6 +100,8 @@ DECLARE
     q text;
     dump text;
     path text[];
+    producer_path text[];
+    split_at integer;
     producer_id text;
     correlated text;
 BEGIN
@@ -150,7 +152,25 @@ BEGIN
         IF EXISTS (SELECT FROM unnest(path) tag WHERE tag LIKE '%:Left:Inner' OR tag LIKE '%:Right:Outer') THEN
             PERFORM pg_temp.rpt_expect(q, 'rpt_elig_root', 'rpt_elig_member', ARRAY['nullable side of outer join'], false);
         ELSE
-            PERFORM pg_temp.rpt_expect(q, 'rpt_elig_root', 'rpt_elig_member', ARRAY['eligible'], true);
+            -- Simplification does not fix hash build/probe order. Compare
+            -- the first differing path step: the shared parent is the join
+            -- separating these named scans, regardless of range-table IDs.
+            producer_path := pg_temp.rpt_scan_path(q, 'rpt_elig_root');
+            IF producer_path IS NULL THEN
+                RAISE EXCEPTION 'nullable-side fixture lost its root scan';
+            END IF;
+            SELECT min(n) INTO split_at FROM generate_subscripts(path, 1) n
+                WHERE path[n] IS DISTINCT FROM producer_path[n];
+            IF split_at IS NULL THEN
+                RAISE EXCEPTION 'nullable-side fixture has no separating join';
+            END IF;
+            IF producer_path[split_at] LIKE 'Hash Join:%:Outer'
+               AND path[split_at] LIKE 'Hash Join:%:Inner' THEN
+                PERFORM pg_temp.rpt_expect(q, 'rpt_elig_root', 'rpt_elig_member',
+                    ARRAY['producer is not on a qualifying hash build side'], false);
+            ELSE
+                PERFORM pg_temp.rpt_expect(q, 'rpt_elig_root', 'rpt_elig_member', ARRAY['eligible'], true);
+            END IF;
         END IF;
         -- The aggregate scalar subquery commonly becomes an InitPlan in the
         -- PostgreSQL planner. ORCA may instead use a join, without extParam.
