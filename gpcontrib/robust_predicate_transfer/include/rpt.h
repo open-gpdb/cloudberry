@@ -262,6 +262,100 @@ struct RptTransferMgr
 	std::vector<RptBackwardConsumer> backward_consumers;
 };
 
+/*
+ * Phase III forward pass.  A channel is one forward transfer edge: the
+ * reducer scan of `from` builds a bloom filter on from_key, and every scan of
+ * `to` (in the reducer, and the root's scan in the main plan) applies it on
+ * to_key.  Only the first clause of a multi-key edge is transferred; one key
+ * of a conjunctive equality still over-approximates, so this loses
+ * selectivity, never rows.
+ */
+struct RptForwardChannel
+{
+	int			from = 0;
+	int			to = 0;
+	RptKey		from_key = {0, 0};
+	RptKey		to_key = {0, 0};
+	bool		local = false;		/* policy-local (rptplan.cpp, rpt_local_hop) */
+	bool		in_process = false; /* local and consumed only inside the reducer:
+									 * handed over in-process, no Anser channel */
+	uint32		condition_id = 0;
+	std::string condition_key;
+	int64		total_elems = 0;
+	int64		max_payload = 0;
+	int64		planned_bytes = 0;
+	double		est_cost_ms = 0;
+};
+
+/* One root's forward chain and the decision about it. */
+struct RptForwardComponent
+{
+	int			root = 0;
+	std::vector<int> chain;			/* reducer scans, producers before consumers */
+	std::vector<RptForwardChannel> channels;
+	double		est_cost_ms = 0;	/* sum of hop estimates */
+	double		est_selectivity = 1;	/* estimated fraction of root rows kept */
+	bool		accepted = false;
+	std::string reason;				/* "inject", or why not */
+};
+
+struct RptForwardParams
+{
+	int			width = 0;			/* reducer gang size: producers per channel */
+	double		ms_per_mib_part = 0;	/* c in c * n_producers * filter_MiB */
+	double		max_exchange_ms = 0;	/* component budget; < 0 disables the limit */
+	double		min_root_rows = 0;	/* root scan plan_rows below this: no reducer */
+	double		max_selectivity = 1;	/* lambda; >= 1 disables the check */
+	bool		apply_all = false;	/* chain scans of the main plan consume too */
+};
+
+/*
+ * What the reducer scan of one vertex is expected to keep, from the plan and
+ * the catalog (rptforward.cpp).  `rows` is per segment, before quals; it sizes
+ * the vertex's filters together with `selectivity`, the fraction its own
+ * reducer quals keep -- 1 when they were dropped (rule 13).  Vertices with no
+ * entry use their plan_rows and selectivity 1.
+ */
+struct RptForwardVertexEst
+{
+	double		rows = -1;
+	double		selectivity = 1;
+	bool		quals_dropped = false;
+};
+
+/* Distinct values of a column over the whole table, or < 0 when unknown. */
+typedef double (*RptNdvFn) (const RptVertexInfo &vertex, AttrNumber attno);
+
+/* Anser's bloom sizing (AnserRuntimeFilterSize), injectable for unit tests. */
+typedef bool (*RptFilterSizeFn) (double est_rows, int64 *total_elems,
+								  int64 *max_payload, int64 *planned_bytes);
+
+/* rptforwardplan.cpp: pure selection over a forward schedule. */
+extern void RptSelectForward(const RptTransferMgr &forward,
+							 const RptForwardParams &params,
+							 const std::map<int, RptForwardVertexEst> &est,
+							 RptFilterSizeFn size_fn, RptNdvFn ndv_fn,
+							 std::vector<RptForwardComponent> *out);
+extern void RptDumpForward(const std::vector<RptForwardComponent> &components,
+						   std::string *out);
+
+/* rptforward.cpp: the planner-hook pass.  Returns a new statement, or stmt
+ * itself when nothing is injected; *trace receives the decision dump.  May
+ * throw; the caller fails open. */
+extern PlannedStmt *RptInjectForward(PlannedStmt *stmt, bool materialize,
+									 std::string *trace);
+
+/* Phase III GUCs (rptinit.cpp). */
+extern bool rpt_forward;
+extern int	rpt_forward_apply;			/* RPT_FORWARD_APPLY_* */
+extern double rpt_forward_ms_per_mib_part;
+extern double rpt_forward_max_exchange_ms;
+extern double rpt_forward_min_root_rows;
+extern double rpt_forward_max_selectivity;
+
+#define RPT_FORWARD_APPLY_ROOT	0
+#define RPT_FORWARD_APPLY_ALL	1
+
 /* rptregion.cpp: extract the join graph from the finished statement. */
 extern void RptCollectGraph(PlannedStmt *stmt, RptTransferMgr *mgr);
 

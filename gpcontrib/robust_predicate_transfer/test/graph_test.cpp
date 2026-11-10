@@ -32,6 +32,8 @@
 #include "../src/rptplan.cpp"
 #include "../src/rptregion.cpp"
 #include "../src/rpteligible.cpp"
+#include "../include/rptqual.h"
+#include "../src/rptforwardplan.cpp"
 
 #include <cstdlib>
 #include <new>
@@ -786,8 +788,264 @@ static void error_unwinds()
 	CHECK(PG_exception_stack == NULL);
 }
 
+static bool size_one_mib(double, int64 *elems, int64 *payload, int64 *planned)
+{
+	*elems = 1000; *payload = 1 << 20; *planned = 1 << 20;
+	return true;
+}
+
+static bool size_declined(double, int64 *, int64 *, int64 *)
+{
+	return false;
+}
+
+static RptTransferMgr forward_star()
+{
+	RptTransferMgr analysis;
+	vertex(analysis, 1, 1000000, false);
+	vertex(analysis, 2, 100, true);
+	vertex(analysis, 3, 50, true);
+	connect(analysis, edge(1, 2));
+	connect(analysis, edge(1, 3));
+	RptBuildClasses(&analysis);
+	rpt_max_chain_depth = 4;
+	RptBuildTransferPlan(NULL, &analysis);
+	RptTransferMgr forward;
+	RptBuildForwardPlan(&analysis, &forward);
+	return forward;
+}
+
+static RptForwardParams forward_params(double budget, double min_rows)
+{
+	RptForwardParams p;
+	p.width = 3; p.ms_per_mib_part = 3.5;
+	p.max_exchange_ms = budget; p.min_root_rows = min_rows;
+	return p;
+}
+
+static void forward_selection_star()
+{
+	RptTransferMgr forward = forward_star();
+	std::vector<RptForwardComponent> comps;
+	RptSelectForward(forward, forward_params(-1, 0), {}, size_one_mib, nullptr, &comps);
+	CHECK(comps.size() == 1);
+	const RptForwardComponent &c = comps[0];
+	CHECK(c.root == 1 && c.accepted && c.reason == "inject");
+	CHECK(!c.chain.empty() && !c.channels.empty());
+	CHECK(std::find(c.chain.begin(), c.chain.end(), 1) == c.chain.end());
+	std::set<uint32> ids;
+	double cost = 0;
+	bool reaches_root = false;
+	for (const RptForwardChannel &ch : c.channels)
+	{
+		/* producers before consumers: a channel's source precedes its target */
+		auto from = std::find(c.chain.begin(), c.chain.end(), ch.from);
+		CHECK(from != c.chain.end());
+		if (ch.to == c.root)
+			reaches_root = true;
+		else
+		{
+			auto to = std::find(c.chain.begin(), c.chain.end(), ch.to);
+			CHECK(to != c.chain.end() && from < to);
+		}
+		CHECK(ids.insert(ch.condition_id).second);
+		CHECK(ch.condition_key == "rpt_f_" + std::to_string(ch.from) + "_" + std::to_string(ch.to));
+		CHECK(ch.from_key.rtindex == ch.from && ch.to_key.rtindex == ch.to);
+		CHECK(ch.est_cost_ms > 10.49 && ch.est_cost_ms < 10.51);	/* 3.5 * 3 * 1 MiB */
+		cost += ch.est_cost_ms;
+	}
+	CHECK(reaches_root);
+	CHECK(c.est_cost_ms > cost - 1e-9 && c.est_cost_ms < cost + 1e-9);
+	CHECK(*ids.begin() == 0 && *ids.rbegin() == ids.size() - 1);
+	std::string dump;
+	RptDumpForward(comps, &dump);
+	CHECK(dump.find("forward component root=1") == 0);
+	CHECK(dump.find("decision=inject") != std::string::npos);
+}
+
+static void forward_selection_gates()
+{
+	RptTransferMgr forward = forward_star();
+	std::vector<RptForwardComponent> comps;
+
+	RptSelectForward(forward, forward_params(-1, 2000000), {}, size_one_mib, nullptr, &comps);
+	CHECK(!comps[0].accepted && comps[0].reason == "root rows below rpt.forward_min_root_rows");
+	for (const RptForwardChannel &ch : comps[0].channels)
+		CHECK(ch.condition_key.empty());
+
+	RptSelectForward(forward, forward_params(1.0, 0), {}, size_one_mib, nullptr, &comps);
+	CHECK(!comps[0].accepted &&
+		  comps[0].reason == "estimated exchange cost above rpt.forward_max_exchange_ms");
+
+	RptSelectForward(forward, forward_params(-1, 0), {}, size_declined, nullptr, &comps);
+	CHECK(!comps[0].accepted && comps[0].reason.find("filter sizing declined") == 0);
+
+	/* nothing filtered: no table can produce, so there is no chain */
+	RptTransferMgr analysis;
+	vertex(analysis, 1, 1000000, false);
+	vertex(analysis, 2, 100, false);
+	connect(analysis, edge(1, 2));
+	RptBuildClasses(&analysis);
+	RptBuildTransferPlan(NULL, &analysis);
+	RptTransferMgr bare;
+	RptBuildForwardPlan(&analysis, &bare);
+	RptSelectForward(bare, forward_params(-1, 0), {}, size_one_mib, nullptr, &comps);
+	for (const RptForwardComponent &c : comps)
+		CHECK(!c.accepted && c.reason == "no forward edges");
+
+	/* ids restart per call and only accepted components consume them */
+	RptSelectForward(forward, forward_params(-1, 0), {}, size_one_mib, nullptr, &comps);
+	CHECK(comps[0].channels[0].condition_id == 0);
+}
+
+/* Snowflake: fact 1 joins dimension 2 on 1.1 = 2.1, dimension 2 joins
+ * subdimension 3 on 2.2 = 3.1 -- a genuine chain 3 -> 2 -> 1.  Colocated
+ * means 2 and 3 are both hash-distributed on their join columns, so 3 -> 2
+ * is a local hop; 2 -> 1 never is. */
+static RptTransferMgr forward_chain(bool colocated)
+{
+	RptTransferMgr analysis;
+	vertex(analysis, 1, 1000000, false);
+	vertex(analysis, 2, 100, true);
+	vertex(analysis, 3, 50, true);
+	for (auto &v : analysis.vertices)
+		hash_policy(v);
+	analysis.vertices[analysis.by_rti[2]].distkeys = {(AttrNumber) (colocated ? 2 : 3)};
+	connect(analysis, edge(1, 2));
+	connect(analysis, edge(2, 3, false, false, 2, 1));
+	RptBuildClasses(&analysis);
+	rpt_max_chain_depth = 4;
+	RptBuildTransferPlan(NULL, &analysis);
+	RptTransferMgr forward;
+	RptBuildForwardPlan(&analysis, &forward);
+	return forward;
+}
+
+static std::vector<double> sized_rows;
+
+static bool size_recording(double rows, int64 *elems, int64 *payload, int64 *planned)
+{
+	sized_rows.push_back(rows);
+	return size_one_mib(rows, elems, payload, planned);
+}
+
+static double ndv_small_dims(const RptVertexInfo &v, AttrNumber)
+{
+	return v.id == 1 ? 1000 : 100;
+}
+
+static double ndv_large_dims(const RptVertexInfo &v, AttrNumber)
+{
+	return v.id == 1 ? 100 : 1000;
+}
+
+static void forward_selection_chain_and_selectivity()
+{
+	RptTransferMgr forward = forward_chain(false);
+	std::vector<RptForwardComponent> comps;
+	RptForwardParams params = forward_params(-1, 0);
+	std::map<int, RptForwardVertexEst> est;
+
+	params.max_selectivity = 0.35;
+	est[2].rows = 100; est[2].selectivity = 0.1;
+	est[3].rows = 50; est[3].selectivity = 0.5;
+	sized_rows.clear();
+	RptSelectForward(forward, params, est, size_recording, nullptr, &comps);
+	CHECK(comps.size() == 1 && comps[0].accepted);
+	CHECK(comps[0].chain == std::vector<int>({3, 2}));
+	CHECK(comps[0].channels.size() == 2);
+	CHECK(comps[0].channels[0].from == 3 && comps[0].channels[0].to == 2);
+	CHECK(comps[0].channels[1].from == 2 && comps[0].channels[1].to == 1);
+	/* 2 keeps 0.1 of itself times 0.5 from 3; the root keeps what 2 keeps */
+	CHECK(comps[0].est_selectivity > 0.0499 && comps[0].est_selectivity < 0.0501);
+	/* filters are sized for rows after the vertex's own reducer quals */
+	CHECK(sized_rows == std::vector<double>({25, 10}));
+
+	/* NDV: a smaller source domain keeps proportionally less of the target */
+	RptSelectForward(forward, params, est, size_one_mib, ndv_small_dims, &comps);
+	CHECK(comps[0].est_selectivity > 0.00499 && comps[0].est_selectivity < 0.00501);
+	/* a larger source domain cannot keep more than its own fraction */
+	RptSelectForward(forward, params, est, size_one_mib, ndv_large_dims, &comps);
+	CHECK(comps[0].est_selectivity > 0.0499 && comps[0].est_selectivity < 0.0501);
+
+	/* Quals dropped in the reducer (rule 13): nothing selective is left, the
+	 * filters grow to the whole table, and lambda refuses the chain. */
+	est[2].selectivity = 1; est[2].quals_dropped = true;
+	est[3].selectivity = 1; est[3].quals_dropped = true;
+	sized_rows.clear();
+	RptSelectForward(forward, params, est, size_recording, nullptr, &comps);
+	CHECK(!comps[0].accepted &&
+		  comps[0].reason == "estimated root selectivity not below rpt.forward_max_selectivity");
+	CHECK(sized_rows == std::vector<double>({50, 100}));
+	for (const RptForwardChannel &ch : comps[0].channels)
+		CHECK(ch.condition_key.empty());
+
+	/* Just below lambda passes, exactly lambda does not; 1 disables it. */
+	est[2].selectivity = 0.34;
+	RptSelectForward(forward, params, est, size_one_mib, nullptr, &comps);
+	CHECK(comps[0].accepted);
+	est[2].selectivity = 0.35;
+	RptSelectForward(forward, params, est, size_one_mib, nullptr, &comps);
+	CHECK(!comps[0].accepted);
+	params.max_selectivity = 1;
+	RptSelectForward(forward, params, est, size_one_mib, nullptr, &comps);
+	CHECK(comps[0].accepted);
+}
+
+/* A local hop consumed only inside the reducer is in-process and free; the
+ * hop into the root, or any hop the main plan consumes, stays on Anser. */
+static void forward_selection_in_process()
+{
+	RptTransferMgr forward = forward_chain(true);
+	std::vector<RptForwardComponent> comps;
+	RptForwardParams params = forward_params(-1, 0);
+
+	RptSelectForward(forward, params, {}, size_one_mib, nullptr, &comps);
+	CHECK(comps[0].accepted && comps[0].channels.size() == 2);
+	const RptForwardChannel &inner = comps[0].channels[0];
+	const RptForwardChannel &into_root = comps[0].channels[1];
+	CHECK(inner.to == 2 && inner.local && inner.in_process && inner.est_cost_ms == 0);
+	CHECK(into_root.to == 1 && !into_root.local && !into_root.in_process);
+	CHECK(comps[0].est_cost_ms > 10.49 && comps[0].est_cost_ms < 10.51);
+	std::string dump;
+	RptDumpForward(comps, &dump);
+	CHECK(dump.find(" local in-process\n") != std::string::npos);
+
+	params.apply_all = true;
+	RptSelectForward(forward, params, {}, size_one_mib, nullptr, &comps);
+	CHECK(comps[0].channels[0].local);
+	for (const RptForwardChannel &ch : comps[0].channels)
+		CHECK(!ch.in_process && ch.est_cost_ms > 0);
+
+	forward = forward_chain(false);
+	params.apply_all = false;
+	RptSelectForward(forward, params, {}, size_one_mib, nullptr, &comps);
+	for (const RptForwardChannel &ch : comps[0].channels)
+		CHECK(!ch.local && !ch.in_process);
+}
+
+static void qual_function_allowlist()
+{
+	CHECK(RptQualFunctionSafe(F_INT4LT));
+	CHECK(RptQualFunctionSafe(F_INT8EQ));
+	CHECK(RptQualFunctionSafe(F_INT24NE));
+	CHECK(RptQualFunctionSafe(F_OIDGE));
+	CHECK(!RptQualFunctionSafe(F_INT4DIV));
+	CHECK(!RptQualFunctionSafe(F_INT4PL));
+	CHECK(!RptQualFunctionSafe(1000000)); /* user function, even if leakproof */
+	CHECK(!RptQualFunctionSafe(InvalidOid));
+	CHECK(RptQualHashFunctionSafe(F_HASHINT4));
+	CHECK(!RptQualHashFunctionSafe(F_INT4EQ));
+	CHECK(!RptQualHashFunctionSafe(1000000));
+}
+
 int main()
 {
+	qual_function_allowlist();
+	forward_selection_chain_and_selectivity();
+	forward_selection_in_process();
+	forward_selection_star();
+	forward_selection_gates();
 	bypass_direction(false);
 	bypass_direction(true);
 	protection_and_idempotence();

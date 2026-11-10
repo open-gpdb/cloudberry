@@ -111,7 +111,7 @@ static void collect_ids(Plan *p, std::set<int> &ids)
 	}
 }
 
-static void layout(bool existing)
+static void layout(bool existing, bool noop)
 {
 	PlannedStmt stmt = {};
 	Result main = {}; main.plan.type = T_Result; main.plan.plan_node_id = 5;
@@ -131,7 +131,7 @@ static void layout(bool existing)
 		stmt.planTree->initPlan = list_make1(&old_init);
 	}
 	Result child = {}; child.plan.type = T_Result; child.plan.plan_node_id = 110;
-	List *children = list_make1(&child);
+	List *children = noop ? NIL : list_make1(&child);
 	int old_slices = stmt.numSlices;
 	RptAttachReducerInitPlan(&stmt, children, 8);
 	CHECK(stmt.numSlices == old_slices + 2);
@@ -163,8 +163,9 @@ static void layout(bool existing)
 	CHECK(motion->motionType == MOTIONTYPE_GATHER);
 	CHECK(motion->plan.flow->flotype == FLOW_SINGLETON);
 	Sequence *seq = (Sequence *) motion->plan.lefttree;
-	CHECK(IsA(seq, Sequence) && list_length(seq->subplans) == 2);
-	CHECK(linitial(seq->subplans) == &child && list_length(children) == 1);
+	CHECK(IsA(seq, Sequence) && list_length(seq->subplans) == (noop ? 1 : 2));
+	CHECK(list_length(children) == (noop ? 0 : 1));
+	if (!noop) CHECK(linitial(seq->subplans) == &child);
 	CHECK(seq->plan.flow->flotype == FLOW_PARTITIONED && seq->plan.flow->numsegments == 8);
 	Result *empty = (Result *) llast(seq->subplans);
 	CHECK(IsA(empty, Result) && IsA(empty->resconstantqual, List));
@@ -176,12 +177,15 @@ static void layout(bool existing)
 	std::set<int> ids;
 	collect_ids(stmt.planTree, ids);
 	ListCell *lc; foreach(lc, stmt.subplans) collect_ids((Plan *) lfirst(lc), ids);
-	CHECK(ids.size() == (existing ? 6 : 5));
-	CHECK(empty->plan.plan_node_id > 110 && seq->plan.plan_node_id > 110 && motion->plan.plan_node_id > 110);
+	CHECK(ids.size() == (existing ? 6U : 5U) - (noop ? 1U : 0U));
+	int previous_max = noop ? (existing ? 90 : 5) : 110;
+	CHECK(empty->plan.plan_node_id > previous_max &&
+		  seq->plan.plan_node_id > previous_max && motion->plan.plan_node_id > previous_max);
 }
 int main()
 {
-	layout(false); layout(true);
+	layout(false, false); layout(true, false);
+	layout(false, true); layout(true, true);
 	for (void *p : allocations) free(p);
 	return 0;
 }

@@ -29,8 +29,11 @@ OBJS = \
 	$(WIN32RES) \
 	src/rptgraph.o \
 	src/rpteligible.o \
+	src/rptforward.o \
+	src/rptforwardplan.o \
 	src/rptinit.o \
 	src/rptinject.o \
+	src/rptlocal.o \
 	src/rptplan.o \
 	src/rptregion.o
 
@@ -39,7 +42,7 @@ PGFILEDESC = "robust_predicate_transfer - RPT+ transfer plans over Anser"
 EXTENSION = robust_predicate_transfer
 DATA = robust_predicate_transfer--1.0.sql
 
-REGRESS = rpt_regions rpt_graph rpt_backward_eligibility
+REGRESS = rpt_regions rpt_graph rpt_backward_eligibility rpt_forward rpt_forward_faults
 
 # Anser is a sibling module, not a linked library: it is preloaded and dfmgr.c
 # loads modules RTLD_GLOBAL, so the AnserXxx entry points resolve at load time.
@@ -110,7 +113,7 @@ unitcheck: test/graph_test test/inject_test
 	./test/graph_test
 	./test/inject_test
 
-test/graph_test: $(srcdir)/test/graph_test.cpp $(wildcard $(srcdir)/src/*.cpp) $(srcdir)/include/rpt.h
+test/graph_test: $(srcdir)/test/graph_test.cpp $(wildcard $(srcdir)/src/*.cpp) $(srcdir)/include/rpt.h $(srcdir)/include/rptqual.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(PG_CPPFLAGS) $< -o $@
 
 test/inject_test: $(srcdir)/test/inject_test.cpp $(srcdir)/src/rptinject.cpp $(srcdir)/include/rpt.h
