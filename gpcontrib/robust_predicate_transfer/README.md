@@ -23,3 +23,15 @@ Run `make unitcheck` in this directory after configuring the source tree to
 exercise synthetic graph, stage, co-location, consumer-order and exception
 fixtures without starting a server. `make installcheck` additionally needs a
 running Cloudberry cluster and executes SQL cases under both optimizers.
+
+Phase II runtime injection is gated by the benchmark eligibility survey in
+`plans/rpt-plus-phase2-plan.md`. The stricter analysis and planning-only
+`scripts/survey.py` are available; no backward executor nodes are injected yet.
+See `docs/design.md` for the survey command and metrics. `make surveycheck`
+checks the runner without needing a server.
+
+The survey requires a superuser or explicit EXECUTE on `rpt_transfer_plan(text)`.
+It counts SELECT statements: JOB 113, TPC-H 22 (Q15 in CTE form), TPC-DS 103
+(99 templates, including the four two-SELECT variants). See the normalization
+instructions in the design document. `rpt_backward_eligibility` supplies
+production-walker/resolver regression coverage under both optimizers.

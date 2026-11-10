@@ -18,13 +18,13 @@ planner hook logs the same dump at `DEBUG1` when `rpt.debug` is on.
 ## Architecture at a glance
 
 ```
-dispatch 1 — reducer (Phase III, not implemented yet)
-   forward chain over predicated + bridge tables, root excluded
+Phase II candidate — one statement, one dispatch (survey gate pending)
+   class-root scan: produce the global class broadcast filter
+   eligible global members: consume it, with bounded prefetch
+   local members: core runtime-filter pushdown only
 
-dispatch 2 — the real query (Phase II, not implemented yet)
-   root scan: consume inbound chain filter from the session cache,
-              produce the class broadcast filter
-   others:    consume the broadcast filter
+Phase III candidate — inside that same statement (not implemented)
+   Sequence(reducer Append, main plan); no cross-command filter cache
 ```
 
 Phase I answers the question everything downstream depends on: given this
@@ -79,7 +79,7 @@ The backward stage redirects each class to its earliest-inserted member. A
 non-component-root class leader is a **bridge table**, reported in the dump.
 Only filtered or bridge tables can produce forward filters. Component roots
 are final destinations in the forward graph, but never reducer scans: they
-consume their inbound cached filter in the main query. `reducer order` lists
+would consume their inbound chain filter in the main query in Phase III. `reducer order` lists
 only scans that actually produce forward filters, in dependency order.
 
 `rpt.max_chain_depth` limits the number of dependency hops, including the
@@ -177,17 +177,17 @@ filter may only ever *over*-approximate the build side's key set.
 
 ## Runtime contract with Anser (Phases II/III)
 
-- The reducer never joins — scan, filter, build — so it fits one slice, one
-  gang, one dispatch, with the forward chain as an ordered `Append`.
-- Global backward edges may use Anser in the main plan only where
-  `consumer_ok` permits it. Local backward edges use core runtime-filter
-  pushdown (or an optional non-blocking local filter), with no QD channel,
-  subscription, network round trip or wait.
-- A session-scoped filter cache per QE, keyed by condition_key alone, carries
-  chain filters across the dispatch boundary and lets the broadcast be
-  delivered once per segment rather than once per consuming scan.
-- Condition keys derive from the semantic identity `(region_id, class_id,
-  build_rel)`, not a per-query counter.
+- Phase II has no reducer: its root builds from its own predicates only,
+  inside the main statement. Runtime injection is gated by the survey below.
+- Anser transport is reused, while its per-join injection is disabled. Plans
+  carrying Anser per-join nodes are left untouched rather than mixed.
+- Global backward edges may use Anser only where strict eligibility permits
+  it. Local members use core runtime-filter pushdown; RPT injects no local
+  consumers, QD channels or blocking waits for them.
+- Channels are statement-scoped. The broadcast is delivered once per
+  consuming QE; fan-out is capped per class. There is no session filter cache.
+- A future forward reducer must run inside the same statement and dispatch,
+  preserving the snapshot, parameters and Anser command/channel identity.
 
 ### Parallel workers and segment completeness
 
@@ -206,12 +206,109 @@ same completeness requirement applies to any custom local backward producer.
 Core currently disables its pushdown path in MPP parallel mode, so relying
 on core there simply means no local filter, rather than a global exchange.
 
+## Phase II eligibility survey gate (in progress)
+
+The agreed next phase is backward broadcast inside the main statement. It
+uses no session-scoped cache and injects no local filters: local edges stay
+with core pushdown. Anser transport must be enabled and Anser's per-join
+injection disabled; the two injection strategies are alternatives. A class
+led by a bridge is deferred. Runtime injection remains **unimplemented**
+until Work item 0 of `plans/rpt-plus-phase2-plan.md` has been completed and
+its result justifies proceeding.
+
+The analysis now records a decision for each class/member pair. In addition
+to different slices and a producer on a hash-build side, it rejects
+multi-tuple prefetch paths and nullable-side crossings. If the qualifying
+join builds first (`prefetch_inner` or RIGHT), the prefetch blocker is lifted;
+the shared Anser key resolver must still accept the path. This conservatively
+rejects unsupported resolver shapes even when scheduling alone is safe.
+Every placement under `stmt->subplans` is refused, even below a Motion and
+even for an uncorrelated InitPlan, matching Anser's conservative scope. A
+non-empty build-side `extParam` is also refused regardless of the parameter
+source; publication has no rescan generation protocol yet. Successful decisions record
+parents, output-tuple key positions, slice IDs and `defer_first`; physical
+column numbers are never assumed to be tuple positions.
+
+`consumer_ok` is an aggregate over all non-local decisions for a vertex.
+Per-edge lines report refusals separately, including local edges, bridge-led
+classes, unsupported key paths and the fan-out cap. The `survey` line counts
+classes, component-root-led classes, global class/member pairs, structural
+rule-9 passes, strict passes before the cap, and eligible consumers after it.
+NDV estimates come from `pg_statistic`, with negative fractions scaled by
+`pg_class.reltuples`. Their intersection estimate assumes uniform key overlap,
+caps root NDV by estimated filtered root rows, and reports missing statistics
+as unknown. Estimated removed rows use consumer scan-plan-row units, not a
+cluster-total or a correctness claim. A table in multiple classes can be
+counted more than once. Unknown-benefit consumers are ranked by their scan
+row count as an upper-bound fallback when applying the per-class cap.
+
+Run the planning-only survey after installing this analysis build and loading
+benchmark schemas, data and statistics. `rpt_transfer_plan(text)` has EXECUTE
+revoked from PUBLIC, so connect as a superuser or a role explicitly granted
+EXECUTE on that function (and SELECT on the benchmark tables). For example,
+an administrator can grant `EXECUTE ON FUNCTION public.rpt_transfer_plan(text)
+TO rpt_survey`; adjust the function schema if installed elsewhere:
+
+```sh
+python3 scripts/survey.py \
+  --job /bench/job/queries --job-dbname imdb \
+  --tpch /bench/tpch/queries --tpch-dbname tpch \
+  --tpcds /bench/tpcds/queries --tpcds-dbname tpcds \
+  --output /tmp/rpt-phase2-survey
+```
+
+Normalize the benchmark input before running the gate:
+
+- Use instantiated SQL with the benchmark's original parameters, not templates.
+- TPC-DS templates 14, 23, 24 and 39 each contain two SELECT statements. The
+  runner splits them automatically and records `filename#1` / `filename#2`;
+  alternatively supply separate `14a.sql` / `14b.sql`, etc. Both layouts
+  represent **103 SELECT statements from 99 templates**.
+- Rewrite TPC-H Q15's `CREATE VIEW revenue... AS ...; SELECT ...; DROP VIEW ...`
+  as `WITH revenue... AS (...) SELECT ...;`, preserving its view column names,
+  SELECT body and date parameters. The runner rejects view DDL instead of
+  executing it or silently excluding Q15. The normalized suite has 22 SELECTs.
+- Statement splitting respects quoted strings, identifiers, dollar quotes
+  and nested comments. The server still parses and validates each statement.
+
+The tool uses read-only transactions, `rpt.enable=off`, `rpt.backward=off`,
+and EXPLAIN without ANALYZE to compare RPT eligibility with Anser's actual
+producer-node count. It records per-statement JSON/CSV, source file and
+statement ordinal, raw dumps/JSON plans, optimizer identity and suite
+summaries. Failures stay in the denominator. Completion is counted by
+statements, never by files: 113 JOB, 22 TPC-H and 103 TPC-DS, each under both
+optimizer settings. `--allow-partial` is a pilot and cannot satisfy the gate.
+
+| Suite | SELECT statements | Optimizers | Eligibility vs. Anser |
+| --- | --- | --- | --- |
+| JOB | 113 | off/on | Not run: benchmark cluster and query set not supplied |
+| TPC-H | 22 (Q15 CTE form) | off/on | Not run: benchmark cluster and query set not supplied |
+| TPC-DS | 103 (99 templates) | off/on | Not run: benchmark cluster and query set not supplied |
+
+`rpt_backward_eligibility` is a server regression under both optimizer
+settings, using the production plan walker and Anser resolver. It asserts
+qualification, local/same-slice and root-on-probe refusals, bridge-led classes,
+cap enforcement, parameterized builds and a correlated SubPlan containing a
+Motion. Sort and nullable-side expectations follow the actual retained plan
+shape: removing those operators is a legitimate optimizer transformation.
+Aggregate/window/set-operation boundaries also have server coverage in
+`rpt_regions`. Native fixtures additionally cover the individual prefetch
+blocker tags and defensive states that valid SQL cannot reliably force.
+The SQL suite has been added but has not been executed on a local cluster.
+
+No eligibility percentages or go/no-go conclusion are available yet. This
+section must be updated with measured results before adding runtime nodes.
+Phase III's reducer must likewise live inside the same statement (for example
+Sequence plus Append); no cross-dispatch state is planned.
+
 ## GUCs
 
 | GUC | Default | Meaning |
 | --- | --- | --- |
 | `rpt.enable` | off | Master switch for the analysis hook. |
 | `rpt.debug` | off | Log the transfer plan of every analyzed query at DEBUG1. |
+| `rpt.backward` | on | QD-only runtime switch reserved for Phase II; disable during the survey. |
+| `rpt.max_backward_consumers` | 4 | QD-only cap on consumers per class, applied to analysis decisions. |
 | `rpt.max_chain_depth` | 4 | Enforced maximum dependency hops; default provisional until hop latency is measured. |
 
 Setup: `shared_preload_libraries = 'anser,robust_predicate_transfer'`, in that

@@ -493,163 +493,6 @@ rpt_classify_hops(RptTransferMgr *mgr)
 }
 
 /*
- * Backward-consumer eligibility: Anser's deadlock rule, with no counterpart
- * in the single-node artifact.  A live backward consumer blocks until its
- * producer's filter arrives, so it may only wait on a producer the plan
- * order guarantees runs first: the producer's scan on the build (inner)
- * side of a hash join and the consumer's scan on the probe (outer) side of
- * the same join, in different slices (Anser refuses same-slice exchanges).
- * consumer_ok[v] is true only when every GLOBAL backward in-edge satisfies
- * that condition. Local edges bypass Anser and never wait; vertices with no
- * global in-edges keep consumer_ok=false.
- *
- * The contexts are prefixed with plan_tree_base_prefix because
- * plan_tree_walker resolves SubPlan nodes through it, even when not
- * recursing into subplans.
- */
-typedef struct RptScanCollectContext
-{
-	plan_tree_base_prefix base; /* must be first */
-	const std::map<const Plan *, int> *scan_vertex;
-	std::map<int, int> slices;
-	int slice_index;
-} RptScanCollectContext;
-
-typedef struct RptConsumerCheckContext
-{
-	plan_tree_base_prefix base; /* must be first */
-	PlannedStmt *stmt;
-	int slice_index;
-	const std::map<const Plan *, int> *scan_vertex;
-	const std::map<int, std::set<int> > *producers;
-	std::map<int, std::set<int> > *safe_producers;
-} RptConsumerCheckContext;
-
-/* Collect each vertex scan and the slice where it executes. */
-static bool
-rpt_collect_scan_ids_walker(Node *node, void *context)
-{
-	RptScanCollectContext *ctx = (RptScanCollectContext *) context;
-	std::map<const Plan *, int>::const_iterator it;
-
-	if (node == NULL)
-		return false;
-
-	/* vertex scans match by pointer; non-Plan nodes simply never hit */
-	it = ctx->scan_vertex->find((const Plan *) node);
-	int saved_slice = ctx->slice_index;
-	if (IsA(node, Motion))
-		ctx->slice_index = ((Motion *) node)->motionID;
-	if (it != ctx->scan_vertex->end())
-		ctx->slices[it->second] = ctx->slice_index;
-
-	bool result = RptPgCall([&]() { return plan_tree_walker(node, rpt_collect_scan_ids_walker, context, false); });
-	ctx->slice_index = saved_slice;
-	return result;
-}
-
-static bool
-rpt_consumer_check_walker(Node *node, void *context)
-{
-	RptConsumerCheckContext *ctx = (RptConsumerCheckContext *) context;
-
-	if (node == NULL)
-		return false;
-
-	int saved_slice = ctx->slice_index;
-	if (IsA(node, Motion))
-		ctx->slice_index = ((Motion *) node)->motionID;
-
-	if (IsA(node, HashJoin))
-	{
-		HashJoin   *hj = (HashJoin *) node;
-		RptScanCollectContext inner_ctx;
-		RptScanCollectContext outer_ctx;
-		std::map<int, std::set<int> >::const_iterator pit;
-
-		RptPgCall([&]() { return exec_init_plan_tree_base(&inner_ctx.base, ctx->stmt); });
-		inner_ctx.scan_vertex = ctx->scan_vertex;
-		inner_ctx.slice_index = ctx->slice_index;
-		RptPgCall([&]() { return exec_init_plan_tree_base(&outer_ctx.base, ctx->stmt); });
-		outer_ctx.scan_vertex = ctx->scan_vertex;
-		outer_ctx.slice_index = ctx->slice_index;
-
-		/* build side is the inner subtree, probe side the outer */
-		rpt_collect_scan_ids_walker((Node *) innerPlan(hj), &inner_ctx);
-		rpt_collect_scan_ids_walker((Node *) outerPlan(hj), &outer_ctx);
-
-		for (pit = ctx->producers->begin(); pit != ctx->producers->end(); ++pit)
-		{
-			int			consumer = pit->first;
-			std::set<int>::const_iterator prod;
-
-			if (!outer_ctx.slices.count(consumer))
-				continue;
-			for (prod = pit->second.begin(); prod != pit->second.end(); ++prod)
-			{
-				if (inner_ctx.slices.count(*prod) &&
-					inner_ctx.slices.at(*prod) >= 0 &&
-					outer_ctx.slices.at(consumer) >= 0 &&
-					inner_ctx.slices.at(*prod) != outer_ctx.slices.at(consumer))
-				{
-					(*ctx->safe_producers)[consumer].insert(*prod);
-				}
-			}
-		}
-	}
-
-	bool result = RptPgCall([&]() { return plan_tree_walker(node, rpt_consumer_check_walker, context, false); });
-	ctx->slice_index = saved_slice;
-	return result;
-}
-
-static void
-rpt_check_consumers(PlannedStmt *stmt, RptTransferMgr *mgr)
-{
-	std::map<const Plan *, int> scan_vertex;
-	std::map<int, std::set<int> > producers;
-	std::map<int, std::set<int> > safe_producers;
-	RptConsumerCheckContext ctx;
-	size_t		i;
-	std::map<int, RptGraphNode>::const_iterator nit;
-
-	for (i = 0; i < mgr->vertices.size(); i++)
-	{
-		mgr->consumer_ok[mgr->vertices[i].id] = false;
-		scan_vertex[mgr->vertices[i].scan] = mgr->vertices[i].id;
-	}
-
-	/*
-	 * The producer of a backward in-edge is its destination: the class
-	 * leader for a redirected edge, the larger table otherwise. Local filters
-	 * are non-blocking and never need Anser consumer eligibility.
-	 */
-	for (nit = mgr->graph.begin(); nit != mgr->graph.end(); ++nit)
-	{
-		const std::vector<RptGraphEdge> &ins = nit->second.backward_stage.in;
-
-		for (i = 0; i < ins.size(); i++)
-			if (!ins[i].local)
-				producers[nit->first].insert(ins[i].destination);
-	}
-
-	if (producers.empty() || stmt == NULL || stmt->planTree == NULL)
-		return;
-
-	RptPgCall([&]() { return exec_init_plan_tree_base(&ctx.base, stmt); });
-	ctx.stmt = stmt;
-	ctx.slice_index = 0;
-	ctx.scan_vertex = &scan_vertex;
-	ctx.producers = &producers;
-	ctx.safe_producers = &safe_producers;
-
-	rpt_consumer_check_walker((Node *) stmt->planTree, &ctx);
-	for (const auto &entry : producers)
-		mgr->consumer_ok[entry.first] =
-			safe_producers[entry.first] == entry.second;
-}
-
-/*
  * Build the transfer plan for the join graph: the Prim forest, the
  * forward/backward stage assignment, and the consumer-eligibility check.
  */
@@ -723,7 +566,7 @@ RptBuildTransferPlan(PlannedStmt *stmt, RptTransferMgr *mgr)
 	}
 
 	rpt_classify_hops(mgr);
-	rpt_check_consumers(stmt, mgr);
+	RptCheckBackwardConsumers(stmt, mgr);
 }
 
 /*
@@ -857,12 +700,65 @@ RptDumpTransferPlan(const RptTransferMgr *mgr, StringInfo output)
 			out << "backward hop " << node.first << "->" << edge.destination
 				<< " merge=" << (edge.local ? "local" : "global") << '\n';
 	}
+	int global_edges = 0, rule9 = 0, strict = 0, eligible = 0, root_classes = 0;
+	int unknown_estimates = 0;
+	double rows_removed = 0;
+	for (const auto &group : mgr->groups)
+		if (mgr->roots.count(group.second.leader_id))
+			++root_classes;
+	for (const auto &decision : mgr->backward_consumers)
+	{
+		global_edges += !decision.local;
+		rule9 += decision.rule9;
+		strict += decision.strict_eligible;
+		eligible += decision.eligible;
+		if (decision.strict_eligible)
+		{
+			if (decision.estimated_rows_removed < 0)
+				++unknown_estimates;
+			else
+				rows_removed += decision.estimated_rows_removed;
+		}
+		out << "backward consumer " << decision.consumer << " producer " << decision.producer
+			<< " class " << decision.class_key.rtindex << '.' << decision.class_key.attno
+			<< " merge=" << (decision.local ? "local" : "global")
+			<< " rule9=" << (decision.rule9 ? "yes" : "no")
+			<< " strict=" << (decision.strict_eligible ? "yes" : "no")
+			<< " eligible=" << (decision.eligible ? "yes" : "no")
+			<< " defer_first=" << (decision.defer_first ? "yes" : "no")
+			<< " producer_slice=" << decision.producer_slice
+			<< " consumer_slice=" << decision.consumer_slice
+			<< " producer_attno=" << decision.producer_attno
+			<< " consumer_attno=" << decision.consumer_attno
+			<< " rows_removed=";
+		if (decision.estimated_rows_removed < 0)
+			out << "unknown";
+		else
+			out << decision.estimated_rows_removed;
+		out << " reason=" << decision.reason << '\n';
+	}
+	out << "survey classes=" << mgr->groups.size() << " root_classes=" << root_classes
+		<< " global_edges=" << global_edges << " rule9=" << rule9 << " strict=" << strict
+		<< " eligible=" << eligible << " known_rows_removed=" << rows_removed
+		<< " unknown_estimates=" << unknown_estimates << '\n';
 	for (int id : ids)
 	{
 		const auto &consumer = mgr->consumer_ok.find(id);
-
-		out << "consumer_ok " << id << ' '
-			<< (consumer != mgr->consumer_ok.end() && consumer->second ? "yes" : "no") << '\n';
+		bool ok = consumer != mgr->consumer_ok.end() && consumer->second;
+		out << "consumer_ok " << id << ' ' << (ok ? "yes" : "no");
+		if (!ok)
+		{
+			std::string reason = "no backward edge";
+			for (const auto &decision : mgr->backward_consumers)
+				if (decision.consumer == id && !decision.eligible)
+				{
+					reason = decision.reason;
+					if (!decision.local)
+						break;
+				}
+			out << ": " << reason;
+		}
+		out << '\n';
 	}
 
 	std::string text = out.str();

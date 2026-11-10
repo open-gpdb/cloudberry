@@ -28,6 +28,7 @@ MODULE_big = robust_predicate_transfer
 OBJS = \
 	$(WIN32RES) \
 	src/rptgraph.o \
+	src/rpteligible.o \
 	src/rptinit.o \
 	src/rptplan.o \
 	src/rptregion.o
@@ -37,7 +38,7 @@ PGFILEDESC = "robust_predicate_transfer - RPT+ transfer plans over Anser"
 EXTENSION = robust_predicate_transfer
 DATA = robust_predicate_transfer--1.0.sql
 
-REGRESS = rpt_regions rpt_graph
+REGRESS = rpt_regions rpt_graph rpt_backward_eligibility
 
 # Anser is a sibling module, not a linked library: it is preloaded and dfmgr.c
 # loads modules RTLD_GLOBAL, so the AnserXxx entry points resolve at load time.
@@ -96,7 +97,7 @@ preload-rpt:
 # cluster, and runs the tests.
 .PHONY: installcheck-with-install
 installcheck-with-install:
-	$(MAKE) unitcheck
+	$(MAKE) unitcheck surveycheck
 	$(MAKE) -C ../anser install
 	$(MAKE) install
 	$(MAKE) installcheck
@@ -111,3 +112,8 @@ test/graph_test: $(srcdir)/test/graph_test.cpp $(wildcard $(srcdir)/src/*.cpp) $
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(PG_CPPFLAGS) $< -o $@
 
 EXTRA_CLEAN += test/graph_test
+
+SURVEY_PYTHON ?= python3
+.PHONY: surveycheck
+surveycheck:
+	PYTHONDONTWRITEBYTECODE=1 $(SURVEY_PYTHON) $(srcdir)/test/survey_test.py

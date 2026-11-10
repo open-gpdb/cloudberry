@@ -31,6 +31,7 @@
 #include "../src/rptgraph.cpp"
 #include "../src/rptplan.cpp"
 #include "../src/rptregion.cpp"
+#include "../src/rpteligible.cpp"
 
 #include <cstdlib>
 #include <new>
@@ -46,10 +47,37 @@
 		} \
 	} while (0)
 
+struct TestResolution
+{
+	Plan *parent;
+	Plan *scan;
+	AttrNumber attno;
+	int slice;
+	bool consumer;
+};
+static std::map<Plan *, TestResolution> test_resolutions;
+
 extern "C" {
 sigjmp_buf *PG_exception_stack = NULL;
 ErrorContextCallback *error_context_stack = NULL;
 int dispatch_nest_level = 0;
+HeapTuple SearchSysCache1(int, Datum) { abort(); }
+HeapTuple SearchSysCache3(int, Datum, Datum, Datum) { abort(); }
+void ReleaseSysCache(HeapTuple) { abort(); }
+bool AnserResolveKeyScan(Plan *top, AttrNumber slot, int, bool consumer,
+						Plan **parent, Plan **scan, AttrNumber *attno, int *slice)
+{
+	CHECK(slot > 0);
+	auto found = test_resolutions.find(top);
+	if (found == test_resolutions.end())
+		return false;
+	CHECK(found->second.consumer == consumer);
+	*parent = found->second.parent;
+	*scan = found->second.scan;
+	*attno = found->second.attno;
+	*slice = found->second.slice;
+	return true;
+}
 Oid getBaseType(Oid type) { return type; }
 bool get_typbyval(Oid) { return true; }
 TypeCacheEntry *lookup_type_cache(Oid, int) { abort(); }
@@ -85,6 +113,8 @@ void appendStringInfoChar(StringInfo str, char ch)
 }
 bool rpt_enable = false;
 bool rpt_debug = false;
+bool rpt_backward = true;
+int rpt_max_backward_consumers = 4;
 int rpt_max_chain_depth = 4;
 
 static void vertex(RptTransferMgr &mgr, int id, int rows, bool filtered)
@@ -196,61 +226,232 @@ static void unfiltered_cycle()
 				CHECK(!rpt_can_flow(&entry.second, row.first, entry.first));
 }
 
-static void all_producers_required()
+/* A single-column identity targetlist, allocated without PostgreSQL memory. */
+struct TestTargetList
+{
+	Var var = {};
+	TargetEntry entry = {};
+	ListCell cell = {};
+	List list = {};
+
+	void bind(Plan *plan, int varno, int attno)
+	{
+		NodeSetTag(&var, T_Var);
+		var.varno = varno;
+		var.varattno = attno;
+		entry.expr = (Expr *) &var;
+		entry.resno = 1;
+		cell.ptr_value = &entry;
+		list.type = T_List;
+		list.length = list.max_length = 1;
+		list.elements = &cell;
+		plan->targetlist = &list;
+	}
+};
+
+struct TestBackwardPlan
+{
+	SeqScan consumer = {};
+	SeqScan producer = {};
+	Motion motion = {};
+	Hash hash = {};
+	HashJoin join = {};
+	PlannedStmt stmt = {};
+	TestTargetList lists[4];
+	RptTransferMgr mgr;
+
+	TestBackwardPlan()
+	{
+		test_resolutions.clear();
+		NodeSetTag(&consumer, T_SeqScan);
+		NodeSetTag(&producer, T_SeqScan);
+		consumer.scan.scanrelid = 1;
+		producer.scan.scanrelid = 2;
+		lists[0].bind((Plan *) &consumer, 1, 3);
+		lists[1].bind((Plan *) &producer, 2, 3);
+		NodeSetTag(&motion, T_Motion);
+		motion.motionID = 1;
+		outerPlan(&motion) = (Plan *) &producer;
+		lists[2].bind((Plan *) &motion, OUTER_VAR, 1);
+		NodeSetTag(&hash, T_Hash);
+		outerPlan(&hash) = (Plan *) &motion;
+		lists[3].bind((Plan *) &hash, OUTER_VAR, 1);
+		NodeSetTag(&join, T_HashJoin);
+		join.join.jointype = JOIN_INNER;
+		outerPlan(&join) = (Plan *) &consumer;
+		innerPlan(&join) = (Plan *) &hash;
+		stmt.planTree = (Plan *) &join;
+		vertex(mgr, 1, 1000, false);
+		vertex(mgr, 2, 100, true);
+		mgr.vertices[0].scan = (Plan *) &consumer;
+		mgr.vertices[1].scan = (Plan *) &producer;
+		connect(mgr, edge(1, 2, false, false, 3, 3));
+		RptBuildClasses(&mgr);
+		test_resolutions[(Plan *) &hash] = {(Plan *) &motion, (Plan *) &producer, 1, 1, false};
+		RptBuildTransferPlan(&stmt, &mgr);
+	}
+};
+
+static void strict_backward_eligibility()
+{
+	TestBackwardPlan plan;
+	CHECK(plan.mgr.backward_consumers.size() == 1);
+	auto decision = plan.mgr.backward_consumers[0];
+	CHECK(decision.eligible && decision.rule9 && decision.defer_first);
+	CHECK(decision.producer == 2 && decision.consumer == 1);
+	CHECK(decision.consumer_attno == 1 && decision.producer_attno == 1);
+	CHECK(decision.consumer_parent == (Plan *) &plan.join);
+	CHECK(decision.producer_parent == (Plan *) &plan.motion);
+	CHECK(decision.producer_slice == 1 && decision.consumer_slice == 0);
+	CHECK(plan.mgr.consumer_ok[1]);
+
+	for (NodeTag tag : {T_Sort, T_Agg, T_Material, T_Unique, T_WindowAgg, T_Hash, T_SetOp})
+	{
+		Plan blocker = {};
+		blocker.type = tag;
+		outerPlan(&blocker) = (Plan *) &plan.consumer;
+		outerPlan(&plan.join) = &blocker;
+		RptCheckBackwardConsumers(&plan.stmt, &plan.mgr);
+		CHECK(!plan.mgr.backward_consumers[0].eligible);
+		CHECK(plan.mgr.backward_consumers[0].rule9);
+		CHECK(plan.mgr.backward_consumers[0].reason.find("between consumer and join") != std::string::npos);
+	}
+	outerPlan(&plan.join) = (Plan *) &plan.consumer;
+	plan.join.join.prefetch_inner = true;
+	RptCheckBackwardConsumers(&plan.stmt, &plan.mgr);
+	CHECK(plan.mgr.backward_consumers[0].eligible);
+	CHECK(!plan.mgr.backward_consumers[0].defer_first);
+	plan.join.join.prefetch_inner = false;
+	plan.join.join.jointype = JOIN_RIGHT;
+	RptCheckBackwardConsumers(&plan.stmt, &plan.mgr);
+	CHECK(plan.mgr.backward_consumers[0].eligible);
+	CHECK(!plan.mgr.backward_consumers[0].defer_first);
+	plan.join.join.jointype = JOIN_INNER;
+
+	HashJoin nested = {};
+	Hash nested_hash = {};
+	Plan other = {};
+	NodeSetTag(&nested, T_HashJoin);
+	NodeSetTag(&nested_hash, T_Hash);
+	nested.join.jointype = JOIN_LEFT;
+	outerPlan(&nested) = &other;
+	innerPlan(&nested) = (Plan *) &nested_hash;
+	outerPlan(&nested_hash) = (Plan *) &plan.consumer;
+	outerPlan(&plan.join) = (Plan *) &nested;
+	RptCheckBackwardConsumers(&plan.stmt, &plan.mgr);
+	CHECK(plan.mgr.backward_consumers[0].reason == "nullable side of outer join");
+
+	TestTargetList nested_list;
+	nested.join.jointype = JOIN_INNER;
+	outerPlan(&nested) = (Plan *) &plan.consumer;
+	innerPlan(&nested) = &other;
+	nested_list.bind((Plan *) &nested, OUTER_VAR, 1);
+	test_resolutions[(Plan *) &nested] = {(Plan *) &nested, (Plan *) &plan.consumer, 1, 0, true};
+	RptCheckBackwardConsumers(&plan.stmt, &plan.mgr);
+	CHECK(plan.mgr.backward_consumers[0].reason == "join between consumer and join");
+	plan.join.join.prefetch_inner = true;
+	RptCheckBackwardConsumers(&plan.stmt, &plan.mgr);
+	CHECK(plan.mgr.backward_consumers[0].eligible);
+	CHECK(!plan.mgr.backward_consumers[0].defer_first);
+	plan.join.join.prefetch_inner = false;
+
+	outerPlan(&plan.join) = (Plan *) &plan.hash;
+	innerPlan(&plan.join) = (Plan *) &plan.consumer;
+	RptCheckBackwardConsumers(&plan.stmt, &plan.mgr);
+	CHECK(!plan.mgr.backward_consumers[0].rule9);
+	CHECK(plan.mgr.backward_consumers[0].reason == "producer is not on a qualifying hash build side");
+	outerPlan(&plan.join) = (Plan *) &plan.consumer;
+	innerPlan(&plan.join) = (Plan *) &plan.hash;
+	plan.motion.motionID = 0;
+	RptCheckBackwardConsumers(&plan.stmt, &plan.mgr);
+	CHECK(plan.mgr.backward_consumers[0].reason == "same or unknown slice");
+	plan.motion.motionID = 1;
+	plan.mgr.roots.clear();
+	RptCheckBackwardConsumers(&plan.stmt, &plan.mgr);
+	CHECK(plan.mgr.backward_consumers[0].reason == "bridge-led class is deferred");
+	plan.mgr.graph[2].backward_stage.out[0].local = true;
+	RptCheckBackwardConsumers(&plan.stmt, &plan.mgr);
+	CHECK(plan.mgr.backward_consumers[0].reason == "local edge uses core runtime filtering");
+}
+
+static void subplans_and_external_parameters_are_refused()
+{
+	TestBackwardPlan plan;
+	Bitmapset *parameters = (Bitmapset *) calloc(1, offsetof(Bitmapset, words) + sizeof(bitmapword));
+	parameters->nwords = 1;
+	parameters->words[0] = 1;
+	plan.hash.plan.extParam = parameters;
+	RptCheckBackwardConsumers(&plan.stmt, &plan.mgr);
+	CHECK(!plan.mgr.backward_consumers[0].eligible);
+	CHECK(plan.mgr.backward_consumers[0].reason == "parameterized producer can be rescanned");
+	plan.hash.plan.extParam = NULL;
+	RptCheckBackwardConsumers(&plan.stmt, &plan.mgr);
+	CHECK(plan.mgr.backward_consumers[0].eligible);
+	plan.hash.plan.extParam = NULL;
+	free(parameters);
+
+	/* The Motion still gives valid slices inside the SubPlan. A separate
+	 * placement flag must refuse it regardless of slice-number changes. */
+	ListCell cell = {};
+	cell.ptr_value = &plan.join;
+	List subplans = {};
+	subplans.type = T_List;
+	subplans.length = subplans.max_length = 1;
+	subplans.elements = &cell;
+	Plan main = {};
+	NodeSetTag(&main, T_Result);
+	plan.stmt.planTree = &main;
+	plan.stmt.subplans = &subplans;
+	RptCheckBackwardConsumers(&plan.stmt, &plan.mgr);
+	CHECK(!plan.mgr.backward_consumers[0].eligible);
+	CHECK(plan.mgr.backward_consumers[0].reason == "scan inside a SubPlan");
+	plan.mgr.graph[2].backward_stage.out[0].local = true;
+	RptCheckBackwardConsumers(&plan.stmt, &plan.mgr);
+	CHECK(plan.mgr.backward_consumers[0].reason == "scan inside a SubPlan");
+}
+
+static void every_global_producer_is_required()
 {
 	RptTransferMgr mgr;
-	Plan scans[3] = {};
-	for (int id = 1; id <= 3; ++id)
+	vertex(mgr, 1, 100, false);
+	RptBackwardConsumer first;
+	first.consumer = 1;
+	first.producer = 2;
+	first.eligible = true;
+	RptBackwardConsumer second = first;
+	second.producer = 3;
+	second.eligible = false;
+	mgr.backward_consumers = {first, second};
+	rpt_consumer_verdicts(&mgr);
+	CHECK(!mgr.consumer_ok[1]);
+	mgr.backward_consumers[1].local = true;
+	rpt_consumer_verdicts(&mgr);
+	CHECK(mgr.consumer_ok[1]);
+	mgr.backward_consumers[0].local = true;
+	rpt_consumer_verdicts(&mgr);
+	CHECK(!mgr.consumer_ok[1]);
+}
+
+static void backward_consumer_cap()
+{
+	RptTransferMgr mgr;
+	for (int i = 1; i <= 3; ++i)
 	{
-		vertex(mgr, id, 10, true);
-		mgr.vertices.back().scan = &scans[id - 1];
+		vertex(mgr, i, 100 * i, false);
+		RptBackwardConsumer decision;
+		decision.class_key = {9, 1};
+		decision.consumer = i;
+		decision.strict_eligible = decision.eligible = true;
+		decision.estimated_rows_removed = 100 * i;
+		mgr.backward_consumers.push_back(decision);
 	}
-	HashJoin join = {};
-	NodeSetTag(&join, T_HashJoin);
-	outerPlan(&join) = &scans[0];
-	innerPlan(&join) = &scans[1];
-	PlannedStmt stmt = {};
-	stmt.planTree = (Plan *) &join;
-	RptGraphEdge in = {};
-	in.destination = 2;
-	mgr.graph[1].backward_stage.in.push_back(in);
-	rpt_check_consumers(&stmt, &mgr);
-	CHECK(!mgr.consumer_ok[1]);
-	Motion build_motion = {};
-	NodeSetTag(&build_motion, T_Motion);
-	build_motion.motionID = 1;
-	outerPlan(&build_motion) = &scans[1];
-	innerPlan(&join) = (Plan *) &build_motion;
-	rpt_check_consumers(&stmt, &mgr);
-	CHECK(mgr.consumer_ok[1]);
-	build_motion.motionID = -1;
-	rpt_check_consumers(&stmt, &mgr);
-	CHECK(!mgr.consumer_ok[1]);
-	build_motion.motionID = 1;
-	in.destination = 3; /* This producer is not ordered before the probe. */
-	mgr.graph[1].backward_stage.in.push_back(in);
-	rpt_check_consumers(&stmt, &mgr);
-	CHECK(!mgr.consumer_ok[1]);
-	mgr.graph[1].backward_stage.in[1].local = true;
-	rpt_check_consumers(&stmt, &mgr);
-	CHECK(mgr.consumer_ok[1]); /* The unsafe local edge does not wait. */
-	mgr.graph[1].backward_stage.in[0].local = true;
-	rpt_check_consumers(&stmt, &mgr);
-	CHECK(!mgr.consumer_ok[1]); /* All-local means no blocking consumer. */
-	for (auto &edge : mgr.graph[1].backward_stage.in)
-		edge.local = false;
-	/* Different hash joins can independently prove the two producers. */
-	HashJoin upper = {};
-	NodeSetTag(&upper, T_HashJoin);
-	outerPlan(&upper) = (Plan *) &join;
-	Motion upper_motion = {};
-	NodeSetTag(&upper_motion, T_Motion);
-	upper_motion.motionID = 2;
-	outerPlan(&upper_motion) = &scans[2];
-	innerPlan(&upper) = (Plan *) &upper_motion;
-	stmt.planTree = (Plan *) &upper;
-	rpt_check_consumers(&stmt, &mgr);
-	CHECK(mgr.consumer_ok[1]);
+	rpt_max_backward_consumers = 1;
+	rpt_cap_backward_consumers(&mgr);
+	CHECK(!mgr.backward_consumers[0].eligible);
+	CHECK(!mgr.backward_consumers[1].eligible);
+	CHECK(mgr.backward_consumers[2].eligible);
+	CHECK(mgr.backward_consumers[0].reason == "backward consumer cap exceeded");
+	rpt_max_backward_consumers = 4;
 }
 
 static void bridges_and_locality()
@@ -564,7 +765,10 @@ int main()
 	protection_and_idempotence();
 	asymmetric_shape();
 	unfiltered_cycle();
-	all_producers_required();
+	strict_backward_eligibility();
+	subplans_and_external_parameters_are_refused();
+	every_global_producer_is_required();
+	backward_consumer_cap();
 	bridges_and_locality();
 	local_star_and_backward();
 	replicated_and_compound_policies();

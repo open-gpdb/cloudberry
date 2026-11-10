@@ -43,6 +43,9 @@ extern "C"
 #include "postgres.h"
 
 #include "catalog/gp_distribution_policy.h"
+#include "catalog/pg_class.h"
+#include "catalog/pg_statistic.h"
+#include "utils/syscache.h"
 #include "nodes/parsenodes.h"
 #include "nodes/pg_list.h"
 #include "parser/parsetree.h"
@@ -143,6 +146,7 @@ rpt_vertex_for_scan(PlannedStmt *stmt, RptTransferMgr *mgr, Plan *scan)
 			v.relname = rte->eref->aliasname;
 		if (rte->rtekind == RTE_RELATION)
 		{
+			v.relid = rte->relid;
 			GpPolicy *policy = RptPgCall([&]() { return GpPolicyFetch(rte->relid); });
 			v.replicated = policy->ptype == POLICYTYPE_REPLICATED;
 			v.numsegments = policy->numsegments;
@@ -590,4 +594,32 @@ RptCollectGraph(PlannedStmt *stmt, RptTransferMgr *mgr)
 	rpt_walk(stmt, mgr, stmt->planTree);
 	foreach(lc, stmt->subplans)
 		rpt_walk(stmt, mgr, (Plan *) lfirst(lc));
+}
+
+/* Catalog NDV is global. A negative stadistinct is a fraction of reltuples.
+ * This is a survey estimate, never a predicate-transfer correctness input. */
+double
+RptEstimateDistinct(const RptVertexInfo &vertex, AttrNumber attno)
+{
+	if (!OidIsValid(vertex.relid) || attno <= 0)
+		return -1;
+	HeapTuple stats = RptPgCall([&]() { return SearchSysCache3(STATRELATTINH,
+		ObjectIdGetDatum(vertex.relid), Int16GetDatum(attno), BoolGetDatum(false)); });
+	if (!HeapTupleIsValid(stats))
+		return -1;
+	double distinct = ((Form_pg_statistic) GETSTRUCT(stats))->stadistinct;
+	RptPgCall([&]() { ReleaseSysCache(stats); });
+	if (distinct < 0)
+	{
+		HeapTuple relation = RptPgCall([&]() { return SearchSysCache1(RELOID,
+			ObjectIdGetDatum(vertex.relid)); });
+		if (!HeapTupleIsValid(relation))
+			return -1;
+		double rows = ((Form_pg_class) GETSTRUCT(relation))->reltuples;
+		RptPgCall([&]() { ReleaseSysCache(relation); });
+		if (rows < 0)
+			return -1;
+		distinct *= -rows;
+	}
+	return distinct > 0 ? distinct : -1;
 }
