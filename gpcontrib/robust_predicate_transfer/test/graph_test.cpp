@@ -732,6 +732,34 @@ static void directed_parent_choice()
 	CHECK(forward_from == 2 && backward_from == -1);
 }
 
+static void forward_root_includes_unfiltered_fact()
+{
+	RptTransferMgr analysis;
+	vertex(analysis, 1, 1000000, false);
+	vertex(analysis, 2, 100, true);
+	vertex(analysis, 3, 50, true);
+	connect(analysis, edge(1, 2));
+	connect(analysis, edge(1, 3));
+	RptBuildClasses(&analysis);
+	RptBuildTransferPlan(NULL, &analysis);
+	CHECK(analysis.roots.count(2));
+	RptTransferMgr forward;
+	RptBuildForwardPlan(&analysis, &forward);
+	CHECK(forward.roots.size() == 1 && forward.roots.count(1));
+	CHECK(!forward.graph.at(1).forward_stage.in.empty());
+	CHECK(forward.graph.at(1).forward_stage.out.empty());
+	CHECK(forward.reducer_order.size() == 2);
+	CHECK(analysis.roots.count(2));
+	CHECK(analysis.groups.begin()->second.leader_id == 2);
+	CHECK(forward.backward_consumers.empty());
+	for (const auto &node : forward.graph)
+		CHECK(node.second.backward_stage.in.empty() &&
+			  node.second.backward_stage.out.empty());
+	/* Rebuilding must discard the previous schedule. */
+	RptBuildForwardPlan(&analysis, &forward);
+	CHECK(forward.reducer_order.size() == 2);
+}
+
 static void error_unwinds()
 {
 	int destroyed = 0;
@@ -775,6 +803,7 @@ int main()
 	index_only_endpoint();
 	join_protection();
 	directed_parent_choice();
+	forward_root_includes_unfiltered_fact();
 	error_unwinds();
 	return 0;
 }

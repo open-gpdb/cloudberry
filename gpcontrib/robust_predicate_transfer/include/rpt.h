@@ -274,6 +274,9 @@ extern void RptBuildClasses(RptTransferMgr *mgr);
 /* rptplan.cpp: the Prim forest (LargestRootUpdated), forward/backward stage
  * assignment (CreateTransferPlanUpdated), consumer eligibility, and dumps. */
 extern void RptBuildTransferPlan(PlannedStmt *stmt, RptTransferMgr *mgr);
+extern void RptBuildForwardPlan(const RptTransferMgr *analysis,
+								RptTransferMgr *forward);
+extern void RptAttachReducerInitPlan(PlannedStmt *stmt, List *children, int width);
 extern void RptCheckBackwardConsumers(PlannedStmt *stmt, RptTransferMgr *mgr);
 extern double RptEstimateDistinct(const RptVertexInfo &vertex, AttrNumber attno);
 extern void RptDumpTransferPlan(const RptTransferMgr *mgr, StringInfo out);

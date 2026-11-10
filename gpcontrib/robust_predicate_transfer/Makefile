@@ -30,6 +30,7 @@ OBJS = \
 	src/rptgraph.o \
 	src/rpteligible.o \
 	src/rptinit.o \
+	src/rptinject.o \
 	src/rptplan.o \
 	src/rptregion.o
 
@@ -105,13 +106,17 @@ installcheck-with-install:
 # Uses PostgreSQL headers but no server: synthetic plans exercise the exact
 # production graph code and deterministic failure paths.
 .PHONY: unitcheck
-unitcheck: test/graph_test
+unitcheck: test/graph_test test/inject_test
 	./test/graph_test
+	./test/inject_test
 
 test/graph_test: $(srcdir)/test/graph_test.cpp $(wildcard $(srcdir)/src/*.cpp) $(srcdir)/include/rpt.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(PG_CPPFLAGS) $< -o $@
 
-EXTRA_CLEAN += test/graph_test
+test/inject_test: $(srcdir)/test/inject_test.cpp $(srcdir)/src/rptinject.cpp $(srcdir)/include/rpt.h
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(PG_CPPFLAGS) $< -o $@
+
+EXTRA_CLEAN += test/graph_test test/inject_test
 
 SURVEY_PYTHON ?= python3
 .PHONY: surveycheck
