@@ -222,7 +222,7 @@ rpt_largest_root_updated(RptTransferMgr *mgr, std::set<int> &remaining,
 						 const std::vector<int> &sorted_ids,
 						 std::vector<std::pair<int, int> > &forward_edges,
 						 std::vector<std::pair<int, int> > &backward_edges,
-						 int32 &next_order)
+						 int32 &next_order, bool largest_relation)
 {
 	std::map<int, int> forward_depth;
 	std::map<int, int> backward_depth;
@@ -237,7 +237,8 @@ rpt_largest_root_updated(RptTransferMgr *mgr, std::set<int> &remaining,
 	{
 		const RptVertexInfo &v = mgr->vertices[mgr->by_rti[*rit]];
 
-		if (remaining.count(*rit) && (v.filtered || v.intermediate))
+		if (remaining.count(*rit) &&
+			(largest_relation || v.filtered || v.intermediate))
 		{
 			root = *rit;
 			break;
@@ -496,8 +497,9 @@ rpt_classify_hops(RptTransferMgr *mgr)
  * Build the transfer plan for the join graph: the Prim forest, the
  * forward/backward stage assignment, and the consumer-eligibility check.
  */
-void
-RptBuildTransferPlan(PlannedStmt *stmt, RptTransferMgr *mgr)
+static void
+rpt_build_transfer_plan(PlannedStmt *stmt, RptTransferMgr *mgr,
+						bool largest_relation)
 {
 	std::vector<std::pair<int, int> > forward_edges;
 	std::vector<std::pair<int, int> > backward_edges;
@@ -530,7 +532,7 @@ RptBuildTransferPlan(PlannedStmt *stmt, RptTransferMgr *mgr)
 	 */
 	while (!remaining.empty())
 		rpt_largest_root_updated(mgr, remaining, sorted_ids, forward_edges, backward_edges,
-								 next_order);
+								 next_order, largest_relation);
 
 	for (const auto &group : mgr->groups)
 		if (group.second.leader_id != -1 && !mgr->roots.count(group.second.leader_id))
@@ -566,7 +568,42 @@ RptBuildTransferPlan(PlannedStmt *stmt, RptTransferMgr *mgr)
 	}
 
 	rpt_classify_hops(mgr);
-	RptCheckBackwardConsumers(stmt, mgr);
+	if (!largest_relation)
+		RptCheckBackwardConsumers(stmt, mgr);
+}
+
+/* Backward analysis retains the artifact's filtered-root heuristic. */
+void
+RptBuildTransferPlan(PlannedStmt *stmt, RptTransferMgr *mgr)
+{
+	rpt_build_transfer_plan(stmt, mgr, false);
+}
+
+/* The reducer targets the largest relation, including an unfiltered fact.
+ * Build a separate schedule: changing the backward leaders would change the
+ * eligibility survey and its independently gated injection decisions. */
+void
+RptBuildForwardPlan(const RptTransferMgr *analysis, RptTransferMgr *forward)
+{
+	*forward = *analysis;
+	forward->graph.clear();
+	forward->roots.clear();
+	forward->bridges.clear();
+	forward->reducer_order.clear();
+	forward->transfer_order.clear();
+	forward->consumer_ok.clear();
+	forward->backward_consumers.clear();
+	for (auto &group : forward->groups)
+		group.second.leader_id = -1;
+	rpt_build_transfer_plan(NULL, forward, true);
+	/* This schedule is not a backward eligibility decision. */
+	forward->consumer_ok.clear();
+	forward->backward_consumers.clear();
+	for (auto &node : forward->graph)
+	{
+		node.second.backward_stage.in.clear();
+		node.second.backward_stage.out.clear();
+	}
 }
 
 /*
