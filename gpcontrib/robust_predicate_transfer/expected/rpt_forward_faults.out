@@ -17,7 +17,7 @@
 -- specific language governing permissions and limitations
 -- under the License.
 --
--- Phase III forward reducer under forced transport failures.  Kept apart from
+-- Forward reducer under forced transport failures.  Kept apart from
 -- rpt_forward because gp_inject_fault exists only with the debug extensions,
 -- and the regression driver skips any file that calls it.
 --
@@ -47,17 +47,27 @@ INSERT INTO rpt_fwf_sub SELECT i, i FROM generate_series(0, 99) i;
 ANALYZE rpt_fwf_fact;
 ANALYZE rpt_fwf_dim;
 ANALYZE rpt_fwf_sub;
+-- Dynamic SQL: a static statement would keep the plan of its first call,
+-- with or without the reducer, whatever rpt.enable says later.
 CREATE FUNCTION pg_temp.rpt_fwf_run(rpt boolean) RETURNS text LANGUAGE plpgsql AS $$
 DECLARE
     r text;
 BEGIN
     PERFORM set_config('rpt.enable', CASE WHEN rpt THEN 'on' ELSE 'off' END, true);
-    SELECT count(*)::text || '/' || sum(f.v)::text INTO r
-      FROM rpt_fwf_fact f JOIN rpt_fwf_dim d ON f.d = d.k
-      JOIN rpt_fwf_sub u ON d.s = u.k WHERE u.c < 5;
+    EXECUTE 'SELECT count(*)::text || ''/'' || sum(f.v)::text
+               FROM rpt_fwf_fact f JOIN rpt_fwf_dim d ON f.d = d.k
+               JOIN rpt_fwf_sub u ON d.s = u.k WHERE u.c < 5' INTO r;
     PERFORM set_config('rpt.enable', 'on', true);
     RETURN r;
 END
+$$;
+-- How often a fault fired, so a case cannot pass without exercising it.
+CREATE FUNCTION pg_temp.rpt_fwf_hits(fault text, coordinator boolean)
+RETURNS int LANGUAGE sql AS $$
+    SELECT coalesce(sum(substring(gp_inject_fault(fault, 'status', dbid)
+                                  FROM 'num times hit:''([0-9]+)''')::int), 0)::int
+      FROM gp_segment_configuration
+     WHERE role = 'p' AND (content = -1) = coordinator
 $$;
 -- First occurrence only; on the coordinator a 'sleep' fault sleeps 1 s.
 CREATE FUNCTION pg_temp.rpt_fwf_fault(fault text, action text, coordinator boolean)
@@ -92,6 +102,9 @@ BEGIN
     PERFORM set_config('anser.timeout_ms', '100', true);
     PERFORM pg_temp.rpt_fwf_fault('anser_before_deliver', 'sleep', true);
     got := pg_temp.rpt_fwf_run(true);
+    IF pg_temp.rpt_fwf_hits('anser_before_deliver', true) = 0 THEN
+        RAISE EXCEPTION 'held delivery: fault never fired';
+    END IF;
     PERFORM pg_temp.rpt_fwf_fault('anser_before_deliver', 'reset', true);
     IF got IS DISTINCT FROM expected THEN
         RAISE EXCEPTION 'held delivery: % <> %', got, expected;
@@ -109,6 +122,9 @@ BEGIN
     PERFORM set_config('anser.debug_min_filter_bytes', '67108864', true);
     PERFORM pg_temp.rpt_fwf_fault('anser_after_chunk', 'skip', false);
     got := pg_temp.rpt_fwf_run(true);
+    IF pg_temp.rpt_fwf_hits('anser_after_chunk', false) = 0 THEN
+        RAISE EXCEPTION 'walk-away: fault never fired';
+    END IF;
     PERFORM pg_temp.rpt_fwf_fault('anser_after_chunk', 'reset', false);
     IF got IS DISTINCT FROM expected THEN
         RAISE EXCEPTION 'walk-away: % <> %', got, expected;
@@ -147,6 +163,11 @@ BEGIN
 END
 $$;
 SELECT count(*) AS dim_rows FROM rpt_fwf_dim;
+ dim_rows 
+----------
+     1000
+(1 row)
+
 DROP TABLE rpt_fwf_fact, rpt_fwf_dim, rpt_fwf_sub;
 DROP EXTENSION robust_predicate_transfer;
 RESET rpt.enable;

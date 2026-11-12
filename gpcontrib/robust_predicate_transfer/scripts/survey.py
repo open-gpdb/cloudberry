@@ -224,7 +224,7 @@ def parse_output(output):
 
 
 def summarize(records, complete):
-    lines = ["# RPT Phase II eligibility survey", "",
+    lines = ["# RPT backward eligibility survey", "",
              "Survey complete: " + ("yes" if complete else "no"), "",
              "Planning only. Each SELECT statement is counted separately, not each file. "
              "No benchmark query was executed. Counts labelled "

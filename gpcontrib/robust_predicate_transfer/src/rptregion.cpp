@@ -31,13 +31,15 @@
  * anser_hashjoin_keys (all in gpcontrib/anser/src/anserplan.c), widened as
  * noted at each site.
  *
- * Phase I is analysis only: nothing here touches the plan tree.
+ * Graph extraction does not modify the plan tree.
  *
  * IDENTIFICATION
  *	  gpcontrib/robust_predicate_transfer/src/rptregion.cpp
  *
  *-------------------------------------------------------------------------
  */
+#include "rpt.h"
+
 extern "C"
 {
 #include "postgres.h"
@@ -56,7 +58,6 @@ extern "C"
 #include "anserplan.h"
 }
 
-#include "rpt.h"
 
 static bool rpt_is_vertex_scan(const Plan *plan);
 static bool rpt_scan_is_filtered(const Plan *plan);
@@ -275,6 +276,35 @@ rpt_resolve_key_scan(Plan *top, AttrNumber key_attno,
 	}
 }
 
+/* Raw Datum bytes are a valid Bloom key only for these canonical built-in
+ * types. A custom by-value type can equate distinct representations even
+ * through its own default equality operator. Domains are unwrapped first. */
+static bool
+rpt_key_type_supported(Oid type)
+{
+	switch (type)
+	{
+		case BOOLOID:
+		case CHAROID:
+		case INT2OID:
+		case INT4OID:
+		case INT8OID:
+		case OIDOID:
+		case XIDOID:
+		case CIDOID:
+		case DATEOID:
+		case TIMEOID:
+		case TIMESTAMPOID:
+		case TIMESTAMPTZOID:
+		case MONEYOID:
+		case PG_LSNOID:
+		case XID8OID:
+			return true;
+		default:
+			return false;
+	}
+}
+
 /*
  * Validate one equijoin clause and split it into outer/inner Vars.
  *
@@ -282,7 +312,7 @@ rpt_resolve_key_scan(Plan *top, AttrNumber key_attno,
  * (gpcontrib/anser/src/anserplan.c), lifted from HashJoin->hashclauses to
  * any clause list: a two-argument OpExpr whose RelabelType-stripped args are
  * one OUTER_VAR and one INNER_VAR Var, over the same by-value base type on
- * both sides, excluding floats, with opno equal to the type's TYPECACHE_EQ_OPR
+ * both sides, restricted to trusted built-ins, with opno equal to TYPECACHE_EQ_OPR
  * equality operator.  Anser hashes raw Datum bytes, and the transfer filters
  * will too, so SQL equality must coincide with bitwise Datum equality of the
  * key; anything looser could prune rows that actually join.  A NestLoop
@@ -341,14 +371,13 @@ rpt_equality_clause(Node *clause, Var **outer_var, Var **inner_var,
 	keytype = RptPgCall([&]() { return getBaseType((*inner_var)->vartype); });
 	if (!RptPgCall([&]() { return get_typbyval(keytype); }))
 		return false;
-	if (keytype == FLOAT4OID || keytype == FLOAT8OID)
+	if (!rpt_key_type_supported(keytype))
 		return false;
 
 	/*
 	 * The clause has to be the type's own equality rather than just some
-	 * hashable operator spelled "=".  See anser_hashjoin_keys for why this
-	 * alone is not the bitwise-equality proof and the float exclusion above
-	 * is still needed.
+	 * hashable operator spelled "=". The type allowlist above supplies the
+	 * separate proof that equal keys have the same Datum representation.
 	 */
 	tce = RptPgCall([&]() { return lookup_type_cache(keytype, TYPECACHE_EQ_OPR); });
 	if (!OidIsValid(tce->eq_opr) || op->opno != tce->eq_opr)

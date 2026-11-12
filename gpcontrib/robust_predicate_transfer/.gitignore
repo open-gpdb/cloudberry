@@ -1,2 +1,6 @@
 /test/graph_test
 /test/inject_test
+/test/forward_walk_test
+
+# Local design notes and implementation plans.
+/docs/

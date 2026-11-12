@@ -18,7 +18,7 @@
  * under the License.
  *
  * rptlocal.c
- *	  In-process bloom handoff for local reducer hops (design rule 16).
+ *	  In-process bloom handoff for local reducer hops.
  *
  * A local hop joins co-located tables: every row of the destination that can
  * match a row of the source lives on the same segment as that row.  So the

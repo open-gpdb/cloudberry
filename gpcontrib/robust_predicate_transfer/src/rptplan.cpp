@@ -52,6 +52,8 @@
  *
  *-------------------------------------------------------------------------
  */
+#include "rpt.h"
+
 extern "C"
 {
 #include "postgres.h"
@@ -59,9 +61,7 @@ extern "C"
 #include "optimizer/walkers.h"
 }
 
-#include "rpt.h"
 
-#include <algorithm>
 #include <sstream>
 
 /*
@@ -434,7 +434,7 @@ rpt_create_transfer_plan(RptTransferMgr *mgr,
 /* Locality is a property of the base scans' distribution policies, including
  * for implied and bypass edges. A Motion elsewhere in the main plan does not
  * change where the reducer reads a key. Parallel workers still need a
- * segment-local fold (or a non-parallel reducer); see docs/design.md. */
+ * segment-local fold (or a non-parallel reducer). */
 static bool
 rpt_local_hop(const RptTransferMgr *mgr, int source, const RptGraphEdge &hop)
 {

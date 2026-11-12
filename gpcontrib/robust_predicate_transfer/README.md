@@ -1,37 +1,74 @@
-# robust_predicate_transfer
+# RPT+ for Apache Cloudberry
 
-RPT+ (Robust Predicate Transfer with dynamic execution) on top of Anser:
-plans a transfer schedule for Anser's runtime bloom filters over the query's
-join graph — a forward pass that chains filters table-to-table and a backward
-pass that broadcasts one merged filter per equivalence class (Qiao, Boncz,
-Zhang, PVLDB 19(6), 2026).
+RPT+ (Robust Predicate Transfer with Dynamic Execution) reduces the work of
+multi-table joins by transferring runtime filters between related tables.
+A selective predicate on one table can reduce another table before their
+join executes, and that reduction can propagate through the join graph.
+The goal is to make query performance less sensitive to join order and
+inaccurate cardinality estimates.
 
-Phase I (current) is a pure analysis pass over the finished plan: region
-discovery, join graph, equivalence classes, and the asymmetric transfer plan,
-ported from the paper's artifact (MIT license — see
-`licenses/LICENSE-mit-duckdb-rpt.txt`).  `rpt_transfer_plan(text)` dumps the
-analysis for a query; `rpt.debug=on` logs it during planning.
+A Bloom filter summarizes the join keys that survive filtering. A receiving
+scan can discard keys that are definitely absent, while the join still
+checks all remaining rows. Bloom-filter false positives can add work but do
+not remove matching rows. RPT+ chooses transfer schedules and controls their
+overhead; building and exchanging filters is useful only when the saved
+query work exceeds that cost.
 
-See `docs/design.md` for the architecture and the correctness rules.
+## Why it uses Anser
 
-Build: `./configure --with-anser --with-rpt` (needs Anser), then
-`make -C gpcontrib/robust_predicate_transfer`.  Run tests with
-`make -C gpcontrib/robust_predicate_transfer installcheck` against a demo
-cluster (it preloads `anser,robust_predicate_transfer` itself).
+Cloudberry executes queries across multiple segments. For a global filter,
+keys from every producer must be combined before a receiving scan can safely
+use it. The [Anser extension](../anser/README.md) supplies this runtime
+information-sharing mechanism: producers publish filter parts, the
+coordinator merges them, and consumers receive the completed filter over
+existing dispatch connections. Its channel identity, delivery protocol and
+timeout/cancellation handling let RPT+ reuse the transport rather than build
+another distributed filter service.
 
-Run `make unitcheck` in this directory after configuring the source tree to
-exercise synthetic graph, stage, co-location, consumer-order and exception
-fixtures without starting a server. `make installcheck` additionally needs a
-running Cloudberry cluster and executes SQL cases under both optimizers.
+RPT+ decides **which tables exchange filters and in what order**; Anser
+provides **global filter exchange and scan consumers**. RPT+ uses Anser's
+transport independently of Anser's per-join injection policy. Enable RPT+
+with `anser.runtime_filter=off` so only one policy injects filters.
 
-Phase II runtime injection is gated by the benchmark eligibility survey in
-`plans/rpt-plus-phase2-plan.md`. The stricter analysis and planning-only
-`scripts/survey.py` are available; no backward executor nodes are injected yet.
-See `docs/design.md` for the survey command and metrics. `make surveycheck`
-checks the runner without needing a server.
+The forward reducer runs as an InitPlan of the same statement, under its
+snapshot, before the main query starts. Intermediate co-distributed transfers
+stay inside the reducer process. Filters used by the main query cross the
+dispatch boundary through Anser's statement-scoped channels. Backward
+transfer schedules are available for analysis; backward runtime injection
+and dynamic abandonment are not implemented.
 
-The survey requires a superuser or explicit EXECUTE on `rpt_transfer_plan(text)`.
-It counts SELECT statements: JOB 113, TPC-H 22 (Q15 in CTE form), TPC-DS 103
-(99 templates, including the four two-SELECT variants). See the normalization
-instructions in the design document. `rpt_backward_eligibility` supplies
-production-walker/resolver regression coverage under both optimizers.
+## References and attribution
+
+- **RPT+ paper:** Yiming Qiao, Peter Boncz and Huanchen Zhang,
+  [*Robust Predicate Transfer with Dynamic Execution*](https://doi.org/10.14778/3797919.3797934),
+  PVLDB 19(6):1278–1290, 2026.
+- **RPT+ artifact:**
+  [embryo-labs/dynamic-predicate-transfer](https://github.com/embryo-labs/dynamic-predicate-transfer).
+  The transfer-graph code in this extension is adapted from this artifact.
+- **Earlier RPT implementation:**
+  [robust-sql/robust](https://github.com/robust-sql/robust), the baseline
+  implementation extended by the RPT+ work.
+- **Anser paper:** Liang Lin et al.,
+  [*Anser: Adaptive Information Sharing Framework of AnalyticDB*](https://doi.org/10.14778/3611540.3611553),
+  PVLDB 16(12):3636–3648, 2023.
+
+The adapted artifact code is MIT-licensed, Copyright 2018–2025 Stichting
+DuckDB Foundation. See [NOTICE](../../NOTICE), [LICENSE](../../LICENSE) and
+[the artifact license](../../licenses/LICENSE-mit-duckdb-rpt.txt).
+
+## Building and enabling
+
+Configure Cloudberry with both extensions:
+
+```sh
+./configure --with-anser --with-rpt
+```
+
+Install the extensions on every host and preload
+`anser,robust_predicate_transfer` in that order. Set `anser.enable=on` in the
+server configuration and restart the cluster. In a database, create the
+`robust_predicate_transfer` extension and set `rpt.enable=on` and
+`anser.runtime_filter=off` for queries using RPT+.
+
+`rpt_transfer_plan(text)` reports the transfer analysis without injecting
+filters into the query it describes. `rpt.debug=on` logs planning decisions.
