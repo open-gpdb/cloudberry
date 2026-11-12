@@ -60,6 +60,9 @@ get_bin_version(ClusterInfo *cluster)
 				|| (strcmp("Apache", dbstring) == 0 && strcmp("Cloudberry", dbstring2) == 0)))
 		pg_fatal("could not upgrade from non Greenplum/Cloudberry version: %s %s\n", dbstring, dbstring2);
 
+	/* Control-data checks run before we can query the server's version. */
+	cluster->version.type = strcmp("Greenplum", dbstring) == 0 ? Greenplum : Cloudberry;
+
 	if (v1 < 10)
 	{
 		/* old style, e.g. 9.6.1 */
