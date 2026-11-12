@@ -63,7 +63,8 @@ $(top_builddir)/src/port/pg_config_paths.h: | submake-libpgport
 install: all installdirs
 	$(INSTALL_PROGRAM) pg_regress$(X) '$(DESTDIR)$(pgxsdir)/$(subdir)/pg_regress$(X)'
 	$(INSTALL_PROGRAM) regress.so '$(DESTDIR)$(pkglibdir)/regress.so'
-	$(INSTALL_PROGRAM) regress.so '$(DESTDIR)$(pkglibdir)/refint.so'
+	$(INSTALL_PROGRAM) refint$(DLSUFFIX) '$(DESTDIR)$(pkglibdir)/refint$(DLSUFFIX)'
+	$(INSTALL_PROGRAM) autoinc$(DLSUFFIX) '$(DESTDIR)$(pkglibdir)/autoinc$(DLSUFFIX)'
 	$(INSTALL_PROGRAM) gpdiff.pl '$(DESTDIR)$(pgxsdir)/$(subdir)/gpdiff.pl'
 	$(INSTALL_PROGRAM) gpstringsubs.pl '$(DESTDIR)$(pgxsdir)/$(subdir)/gpstringsubs.pl'
 	$(INSTALL_PROGRAM) atmsort.pl '$(DESTDIR)$(pgxsdir)/$(subdir)/atmsort.pl'
@@ -80,7 +81,8 @@ installdirs:
 
 uninstall:
 	rm -f '$(DESTDIR)$(pkglibdir)/regress.so'
-	rm -f '$(DESTDIR)$(pkglibdir)/refint.so'
+	rm -f '$(DESTDIR)$(pkglibdir)/refint$(DLSUFFIX)'
+	rm -f '$(DESTDIR)$(pkglibdir)/autoinc$(DLSUFFIX)'
 	rm -f '$(DESTDIR)$(pgxsdir)/$(subdir)/pg_regress$(X)'
 	rm -f '$(DESTDIR)$(pgxsdir)/$(subdir)/gpdiff.pl'
 	rm -f '$(DESTDIR)$(pgxsdir)/$(subdir)/gpstringsubs.pl'
