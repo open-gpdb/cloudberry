@@ -25,17 +25,18 @@
  * first: the AnserXxx entry points we call are resolved at load time from
  * the global symbol table (dfmgr loads modules RTLD_GLOBAL).
  *
- * Phase I is analysis-only: the planner hook computes the transfer plan and
- * logs it at DEBUG1 when rpt.debug is on, and rpt_transfer_plan() exposes
- * the same dump to SQL for the regression tests. Runtime filters are not
- * injected yet. The explicit debug_noop_initplan measurement switch adds
- * only an empty distributed InitPlan.
+ * The planner hook builds forward reducers and logs transfer decisions at
+ * DEBUG1 when rpt.debug is on. rpt_transfer_plan() exposes analysis without
+ * injecting filters. debug_noop_initplan adds an empty distributed InitPlan
+ * for overhead measurement.
  *
  * IDENTIFICATION
  *	  gpcontrib/robust_predicate_transfer/src/rptinit.cpp
  *
  *-------------------------------------------------------------------------
  */
+#include "rpt.h"
+
 extern "C"
 {
 #include "postgres.h"
@@ -61,9 +62,7 @@ PG_FUNCTION_INFO_V1(rpt_transfer_plan);
 void		_PG_init(void);
 }
 
-#include "rpt.h"
 
-#include <exception>
 #include <new>
 
 bool		rpt_enable = false;
@@ -74,7 +73,7 @@ int			rpt_max_chain_depth = 4;
 
 bool		rpt_forward = true;
 int			rpt_forward_apply = RPT_FORWARD_APPLY_ROOT;
-/* Measured 2026-11-10 on one host, 3 primaries (docs/design.md). */
+/* Measured 2026-11-10 on one host with three primaries. */
 double		rpt_forward_ms_per_mib_part = 3.5;
 double		rpt_forward_max_exchange_ms = 100.0;
 double		rpt_forward_min_root_rows = 10000.0;
@@ -211,8 +210,8 @@ rpt_define_gucs(void)
 							 NULL, NULL, NULL);
 
 	DefineCustomBoolVariable("rpt.backward",
-							 "Reserves the backward runtime switch for a future Phase II build.",
-							 "QD-only; this analysis-only build never injects executor nodes.",
+							 "Reserves the backward runtime switch.",
+							 "QD-only; backward runtime injection is not implemented.",
 							 &rpt_backward, true, PGC_USERSET, 0,
 							 NULL, NULL, NULL);
 

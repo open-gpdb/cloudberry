@@ -42,7 +42,7 @@ PGFILEDESC = "robust_predicate_transfer - RPT+ transfer plans over Anser"
 EXTENSION = robust_predicate_transfer
 DATA = robust_predicate_transfer--1.0.sql
 
-REGRESS = rpt_regions rpt_graph rpt_backward_eligibility rpt_forward rpt_forward_faults
+REGRESS = rpt_regions rpt_graph rpt_backward_eligibility rpt_key_types rpt_forward rpt_forward_faults
 
 # Anser is a sibling module, not a linked library: it is preloaded and dfmgr.c
 # loads modules RTLD_GLOBAL, so the AnserXxx entry points resolve at load time.
@@ -101,7 +101,7 @@ preload-rpt:
 # cluster, and runs the tests.
 .PHONY: installcheck-with-install
 installcheck-with-install:
-	$(MAKE) unitcheck surveycheck
+	$(MAKE) unitcheck surveycheck diagnosticcheck
 	$(MAKE) -C ../anser install
 	$(MAKE) install
 	$(MAKE) installcheck
@@ -109,9 +109,10 @@ installcheck-with-install:
 # Uses PostgreSQL headers but no server: synthetic plans exercise the exact
 # production graph code and deterministic failure paths.
 .PHONY: unitcheck
-unitcheck: test/graph_test test/inject_test
+unitcheck: test/graph_test test/inject_test test/forward_walk_test
 	./test/graph_test
 	./test/inject_test
+	./test/forward_walk_test
 
 test/graph_test: $(srcdir)/test/graph_test.cpp $(wildcard $(srcdir)/src/*.cpp) $(srcdir)/include/rpt.h $(srcdir)/include/rptqual.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(PG_CPPFLAGS) $< -o $@
@@ -125,3 +126,24 @@ SURVEY_PYTHON ?= python3
 .PHONY: surveycheck
 surveycheck:
 	PYTHONDONTWRITEBYTECODE=1 $(SURVEY_PYTHON) $(srcdir)/test/survey_test.py
+
+# Link the production backend walker; unused planner code is discarded so the
+# fixture needs no server. Expression-list traversal is stubbed in the test.
+ifeq ($(PORTNAME),darwin)
+WALK_TEST_LDFLAGS = -Wl,-dead_strip
+else
+WALK_TEST_LDFLAGS = -Wl,--gc-sections
+endif
+
+test/forward_walk_backend.o: $(top_srcdir)/src/backend/optimizer/util/walkers.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(PG_CPPFLAGS) -ffunction-sections -fdata-sections -c $< -o $@
+
+test/forward_walk_test: $(srcdir)/test/forward_walk_test.cpp $(srcdir)/src/rptforward.cpp $(srcdir)/include/rpt.h test/forward_walk_backend.o
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(PG_CPPFLAGS) -ffunction-sections -fdata-sections \
+	  $(WALK_TEST_LDFLAGS) $< test/forward_walk_backend.o -o $@
+
+EXTRA_CLEAN += test/forward_walk_test test/forward_walk_backend.o
+
+.PHONY: diagnosticcheck
+diagnosticcheck:
+	PYTHONDONTWRITEBYTECODE=1 $(SURVEY_PYTHON) $(srcdir)/test/diagnose_forward_test.py

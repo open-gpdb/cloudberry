@@ -968,7 +968,7 @@ static void forward_selection_chain_and_selectivity()
 	RptSelectForward(forward, params, est, size_one_mib, ndv_large_dims, &comps);
 	CHECK(comps[0].est_selectivity > 0.0499 && comps[0].est_selectivity < 0.0501);
 
-	/* Quals dropped in the reducer (rule 13): nothing selective is left, the
+	/* Quals dropped in the reducer: nothing selective is left, the
 	 * filters grow to the whole table, and lambda refuses the chain. */
 	est[2].selectivity = 1; est[2].quals_dropped = true;
 	est[3].selectivity = 1; est[3].quals_dropped = true;
@@ -1039,8 +1039,40 @@ static void qual_function_allowlist()
 	CHECK(!RptQualHashFunctionSafe(1000000));
 }
 
+static void raw_datum_key_types()
+{
+	for (Oid type : {BOOLOID, CHAROID, INT2OID, INT4OID, INT8OID, OIDOID,
+					 XIDOID, CIDOID, DATEOID, TIMEOID, TIMESTAMPOID,
+					 TIMESTAMPTZOID, MONEYOID, PG_LSNOID, XID8OID})
+		CHECK(rpt_key_type_supported(type));
+	for (Oid type : std::vector<Oid>{InvalidOid, FLOAT4OID, FLOAT8OID, TEXTOID, NUMERICOID,
+					 1000000})
+		CHECK(!rpt_key_type_supported(type));
+
+	/* Even if a custom type is by-value, refuse it before consulting its
+	 * own default equality (the type-cache stub aborts if reached). */
+	Var outer = {}, inner = {};
+	outer.xpr.type = inner.xpr.type = T_Var;
+	outer.varno = OUTER_VAR; inner.varno = INNER_VAR;
+	outer.vartype = inner.vartype = 1000000;
+	ListCell args[2] = {};
+	args[0].ptr_value = &outer; args[1].ptr_value = &inner;
+	List arguments = {};
+	arguments.type = T_List;
+	arguments.length = arguments.max_length = 2;
+	arguments.elements = args;
+	OpExpr equality = {};
+	equality.xpr.type = T_OpExpr;
+	equality.args = &arguments;
+	equality.opno = 1000001;
+	Var *out = NULL, *in = NULL;
+	Oid keytype = InvalidOid;
+	CHECK(!rpt_equality_clause((Node *) &equality, &out, &in, &keytype));
+}
+
 int main()
 {
+	raw_datum_key_types();
 	qual_function_allowlist();
 	forward_selection_chain_and_selectivity();
 	forward_selection_in_process();

@@ -17,7 +17,7 @@
 -- specific language governing permissions and limitations
 -- under the License.
 --
--- Phase III forward reducer, end to end: the InitPlan is built, its filters
+-- Forward reducer, end to end: the InitPlan is built, its filters
 -- reach the main plan across the dispatch boundary, intermediate hops work
 -- both through Anser and in-process, and results never change.  Both
 -- optimizers; every check raises with the plan or dump that failed it.
@@ -60,13 +60,13 @@ BEGIN
     RAISE EXCEPTION 'constant failure';
 END
 $$;
-CREATE FUNCTION pg_temp.rpt_fwd_plan(q text, analyze boolean) RETURNS jsonb
+CREATE FUNCTION pg_temp.rpt_fwd_plan(q text, do_analyze boolean) RETURNS jsonb
 LANGUAGE plpgsql AS $$
 DECLARE
     plan jsonb;
 BEGIN
     EXECUTE format('EXPLAIN (%s FORMAT JSON) %s',
-                   CASE WHEN analyze THEN 'ANALYZE,' ELSE '' END, q) INTO plan;
+                   CASE WHEN do_analyze THEN 'ANALYZE,' ELSE '' END, q) INTO plan;
     RETURN plan;
 END
 $$;
@@ -202,6 +202,11 @@ BEGIN
             flake_local,
             flake_global,
             'SELECT f.id, f.v FROM rpt_fwd_fact f JOIN rpt_fwd_d1 d1 ON f.d1 = d1.k WHERE d1.a < 3',
+            -- Existing scalar InitPlans and correlated expression SubPlans
+            -- must be walked with the statement's subplan lookup context.
+            'SELECT count(*) FROM rpt_fwd_fact f JOIN rpt_fwd_d1 d1 ON f.d1 = d1.k WHERE d1.a < 50 AND f.v <= (SELECT max(v) FROM rpt_fwd_fact)',
+            'SELECT f.id, (SELECT max(b) FROM rpt_fwd_d2 d2 WHERE d2.k = f.d2) FROM rpt_fwd_fact f JOIN rpt_fwd_d1 d1 ON f.d1 = d1.k WHERE d1.a < 50 AND f.id < 10',
+
             'SELECT count(*) FROM rpt_fwd_fact f JOIN rpt_fwd_d1 d1 ON f.d1 = d1.k WHERE d1.a < 0',
             'SELECT count(*) FROM rpt_fwd_fact f JOIN rpt_fwd_d1 d1 ON f.d1 = d1.k WHERE d1.a IN (0,1,2,3,4,5,6,7,8,9)',
             'SELECT count(*) FROM rpt_fwd_fact f JOIN rpt_fwd_d1 d1 ON f.d1 = d1.k WHERE d1.a NOT IN (0,1,2,3,4,5,6,7,8,9)',
@@ -252,7 +257,7 @@ BEGIN
             RAISE EXCEPTION 'selectivity gate did not refuse (optimizer=%)', opt;
         END IF;
 
-        -- Rule 13: a qual that can fail is never run by the reducer.  The
+        -- A qual that can fail is never run by the reducer.  The
         -- reducer runs before the main plan and over rows the main plan may
         -- never read; with LIMIT 0 the main plan reads none, so a reducer
         -- evaluating 100 / a would raise division by zero (a = 0 exists), and
@@ -304,7 +309,9 @@ BEGIN
     END LOOP;
 END
 $$;
--- PL/pgSQL (SPI) runs the reducer like any other caller.
+-- PL/pgSQL (SPI) runs the reducer like any other caller.  Its static
+-- statements keep the plan of their first call, so the function runs once,
+-- with RPT on, and the baseline comes from uncached dynamic SQL.
 CREATE FUNCTION pg_temp.rpt_fwd_spi() RETURNS bigint LANGUAGE plpgsql AS $$
 DECLARE
     total bigint := 0;
@@ -330,7 +337,10 @@ BEGIN
     PERFORM set_config('rpt.enable', 'on', true);
     with_rpt := pg_temp.rpt_fwd_spi();
     PERFORM set_config('rpt.enable', 'off', true);
-    without := pg_temp.rpt_fwd_spi();
+    EXECUTE 'SELECT (SELECT sum(f.v) FROM rpt_fwd_fact f JOIN rpt_fwd_d1 d1 ON f.d1 = d1.k
+                      WHERE d1.a < 50) +
+                    (SELECT sum(f.v) FROM rpt_fwd_fact f JOIN rpt_fwd_dl d ON f.d1 = d.k
+                      JOIN rpt_fwd_sub u ON d.s = u.k WHERE u.c < 5)' INTO without;
     IF with_rpt IS DISTINCT FROM without THEN
         RAISE EXCEPTION 'SPI result differs: % vs %', with_rpt, without;
     END IF;

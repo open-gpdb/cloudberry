@@ -18,10 +18,10 @@
  * under the License.
  *
  * rptforwardplan.cpp
- *	  Phase III selection: which forward chains to build, their channels,
+ *	  Forward reducer selection: which forward chains to build, their channels,
  *	  and the cost gate.  No PostgreSQL calls, so it is unit-tested directly.
  *
- * The cost model is the one measured on 2026-11-10 (docs/design.md): every
+ * The cost model was measured on one host with three primaries: every
  * global hop pays about c milliseconds per MiB of bitset per producer, because
  * the coordinator receives and folds the parts one at a time.  Hops of one
  * chain run one after another inside the reducer, so a component's cost is
@@ -39,14 +39,14 @@
  *
  *-------------------------------------------------------------------------
  */
+#include "rpt.h"
+
 extern "C"
 {
 #include "postgres.h"
 }
 
-#include "rpt.h"
 
-#include <iomanip>
 #include <sstream>
 
 /* Every vertex whose filters can reach `root` through forward edges. */

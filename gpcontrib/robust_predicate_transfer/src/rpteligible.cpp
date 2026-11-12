@@ -19,13 +19,15 @@
  *
  * rpteligible.cpp
  *    Analysis-only backward eligibility and refusal diagnostics. These
- *    proofs are shared by the survey and the future Phase II injector.
+ *    proofs are used by the backward eligibility survey.
  *
  * IDENTIFICATION
  *	  gpcontrib/robust_predicate_transfer/src/rpteligible.cpp
  *
  *-------------------------------------------------------------------------
  */
+#include "rpt.h"
+
 extern "C"
 {
 #include "postgres.h"
@@ -33,8 +35,6 @@ extern "C"
 #include "anserplan.h"
 }
 
-#include "rpt.h"
-#include <algorithm>
 
 struct RptPlacement
 {

@@ -31,10 +31,9 @@
  * the consumer-eligibility check answers an MPP question (Anser's deadlock
  * rule) the single-node original never had.
  *
- * Phase I is a pure analysis pass: nothing is injected or executed, and the
- * dumps in rptplan.cpp are the only output.  STL containers own malloc-backed
- * storage. PostgreSQL errors must be translated to C++ exceptions before
- * unwinding those containers, then rethrown at the C boundary.
+ * STL containers own malloc-backed storage. PostgreSQL errors must be
+ * translated to C++ exceptions before unwinding those containers, then
+ * rethrown at the C boundary.
  *
  * IDENTIFICATION
  *	  gpcontrib/robust_predicate_transfer/include/rpt.h
@@ -44,6 +43,21 @@
 #ifndef RPT_H
 #define RPT_H
 
+/* libstdc++ locale headers may include libintl.h. Parse them before
+ * postgres.h defines gettext macros in builds without NLS. */
+#include <algorithm>
+#include <cstdarg>
+#include <cstdlib>
+#include <exception>
+#include <iomanip>
+#include <locale>
+#include <map>
+#include <new>
+#include <set>
+#include <sstream>
+#include <string>
+#include <vector>
+
 extern "C"
 {
 #include "postgres.h"
@@ -52,11 +66,6 @@ extern "C"
 #include "nodes/primnodes.h"
 #include "lib/stringinfo.h"
 }
-
-#include <map>
-#include <set>
-#include <string>
-#include <vector>
 
 /*
  * Like gpopt's GP_WRAP: never longjmp over a live C++ container. Only call
@@ -263,7 +272,7 @@ struct RptTransferMgr
 };
 
 /*
- * Phase III forward pass.  A channel is one forward transfer edge: the
+ * Forward reducer.  A channel is one forward transfer edge: the
  * reducer scan of `from` builds a bloom filter on from_key, and every scan of
  * `to` (in the reducer, and the root's scan in the main plan) applies it on
  * to_key.  Only the first clause of a multi-key edge is transferred; one key
@@ -313,7 +322,7 @@ struct RptForwardParams
  * What the reducer scan of one vertex is expected to keep, from the plan and
  * the catalog (rptforward.cpp).  `rows` is per segment, before quals; it sizes
  * the vertex's filters together with `selectivity`, the fraction its own
- * reducer quals keep -- 1 when they were dropped (rule 13).  Vertices with no
+ * reducer quals keep -- 1 when they were dropped.  Vertices with no
  * entry use their plan_rows and selectivity 1.
  */
 struct RptForwardVertexEst
@@ -345,7 +354,7 @@ extern void RptDumpForward(const std::vector<RptForwardComponent> &components,
 extern PlannedStmt *RptInjectForward(PlannedStmt *stmt, bool materialize,
 									 std::string *trace);
 
-/* Phase III GUCs (rptinit.cpp). */
+/* Forward reducer GUCs (rptinit.cpp). */
 extern bool rpt_forward;
 extern int	rpt_forward_apply;			/* RPT_FORWARD_APPLY_* */
 extern double rpt_forward_ms_per_mib_part;

@@ -18,7 +18,7 @@
  * under the License.
  *
  * rptforward.cpp
- *	  Phase III: build the forward reducer as an InitPlan of the statement
+ *	  Build the forward reducer as an InitPlan of the statement
  *	  and apply its filters to the root scans of the main plan.
  *
  * A transfer is an Anser channel, except a local hop consumed only inside
@@ -31,7 +31,7 @@
  *
  * Reducer scans are copies of the main plan's scans (same scanrelid, so the
  * same RTE, locks and permission checks) with a key-only targetlist.  Their
- * row set must be the main scan's or a superset (design rule 13): the quals
+ * row set must be the main scan's or a superset: the quals
  * are copied whole, in order, or dropped whole unless every one of them is
  * proven unable to fail.  The reducer runs eagerly, over rows the main plan
  * may never visit (LIMIT 0, an empty outer side), so a qual that can raise an
@@ -47,6 +47,8 @@
  *
  *-------------------------------------------------------------------------
  */
+#include "rpt.h"
+
 extern "C"
 {
 #include "postgres.h"
@@ -68,10 +70,8 @@ extern "C"
 #include "rptlocal.h"
 }
 
-#include "rpt.h"
 #include "rptqual.h"
 
-#include <algorithm>
 
 /* ---- finding where a main-plan scan hangs ---- */
 
@@ -171,7 +171,7 @@ rpt_scan_key_position(Plan *scan, const RptKey &key)
 	return 0;
 }
 
-/* ---- rule 13: quals a reducer scan may evaluate ---- */
+/* ---- quals a reducer scan may evaluate ---- */
 
 /* Only explicitly trusted built-in comparisons and their hash support may
  * run eagerly. LEAKPROOF prevents argument disclosure, not unconditional
@@ -374,6 +374,19 @@ rpt_plan_has_anser_nodes_walker(Node *node, void *context)
 	return plan_tree_walker(node, rpt_plan_has_anser_nodes_walker, context, true);
 }
 
+/* The backend walker resolves SubPlan IDs even while walking expressions.
+ * Always provide the statement-backed prefix, including for diagnostic runs. */
+static bool
+rpt_has_runtime_filters(PlannedStmt *stmt)
+{
+	plan_tree_base_prefix context;
+
+	return RptPgCall([&]() {
+		exec_init_plan_tree_base(&context, stmt);
+		return rpt_plan_has_anser_nodes_walker((Node *) stmt->planTree, &context);
+	});
+}
+
 /* Main-plan scans of `vertex`, wrapped in consumers of every channel into it.
  * False when the scan cannot be found or keyed; nothing is changed then. */
 static bool
@@ -412,9 +425,7 @@ RptInjectForward(PlannedStmt *stmt, bool materialize, std::string *trace)
 		*trace += "forward: needs anser.enable=on and anser.runtime_filter=off\n";
 		return stmt;
 	}
-	if (RptPgCall([&]() {
-		return rpt_plan_has_anser_nodes_walker((Node *) stmt->planTree, NULL);
-	}))
+	if (rpt_has_runtime_filters(stmt))
 	{
 		*trace += "forward: plan already carries Anser nodes\n";
 		return stmt;
@@ -533,7 +544,7 @@ RptInjectForward(PlannedStmt *stmt, bool materialize, std::string *trace)
 			});
 
 			/* Consumers below producers: a filter is built from rows the
-			 * inbound filters already reduced (design rule 4). */
+			 * inbound filters already reduced. */
 			for (const RptForwardChannel &ch : comp.channels)
 			{
 				if (ch.to != id)

@@ -22,6 +22,8 @@
  *
  *-------------------------------------------------------------------------
  */
+#include "rpt.h"
+
 extern "C"
 {
 #include "postgres.h"
@@ -30,7 +32,6 @@ extern "C"
 #include "anserplan.h"
 }
 
-#include "rpt.h"
 
 /* The caller owns a private copy of the statement. This function may throw;
  * publish that copy only after the entire injection pass has succeeded.

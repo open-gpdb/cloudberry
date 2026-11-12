@@ -51,14 +51,14 @@
  *
  *-------------------------------------------------------------------------
  */
+#include "rpt.h"
+
 extern "C"
 {
 #include "postgres.h"
 }
 
-#include "rpt.h"
 
-#include <algorithm>
 
 /*
  * One (edge, clause) pair.  The artifact's EdgeInfo carries a single join

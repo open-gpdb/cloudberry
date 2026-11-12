@@ -18,7 +18,7 @@
  * under the License.
  *
  * rptlocal.h
- *	  In-process bloom handoff for local reducer hops (design rule 16).
+ *	  In-process bloom handoff for local reducer hops.
  *
  * IDENTIFICATION
  *	  gpcontrib/robust_predicate_transfer/include/rptlocal.h
