@@ -13937,11 +13937,6 @@ dumpFunc(Archive *fout, const FuncInfo *finfo)
 
 	if (prokind[0] == PROKIND_PROCEDURE)
 		keyword = "PROCEDURE";
-	else
-	{
-		configitems = NULL;
-		nconfigitems = 0;
-	}
 
 
 	/* 8.4 or later; we rely on server-side code for most of the work */
@@ -15803,18 +15798,23 @@ dumpAgg(Archive *fout, const AggInfo *agginfo)
 								 "0 AS aggmtransspace,\n"
 								 "NULL AS aggminitval,\n");
 
-		if (fout->remoteVersion >= 90600)
+		/* GPDB 6 backported the aggregate support functions, but not proparallel. */
+		if (fout->remoteVersion >= 90600 ||
+			(dopt->isGPbackend && fout->remoteVersion >= GPDB6_MAJOR_PGVERSION))
 			appendPQExpBufferStr(query,
 								 "aggcombinefn,\n"
 								 "aggserialfn,\n"
-								 "aggdeserialfn,\n"
-								 "proparallel,\n");
+								 "aggdeserialfn,\n");
 		else
 			appendPQExpBufferStr(query,
 								 "'-' AS aggcombinefn,\n"
 								 "'-' AS aggserialfn,\n"
-								 "'-' AS aggdeserialfn,\n"
-								 "'u' AS proparallel,\n");
+								 "'-' AS aggdeserialfn,\n");
+
+		if (fout->remoteVersion >= 90600)
+			appendPQExpBufferStr(query, "proparallel,\n");
+		else
+			appendPQExpBufferStr(query, "'u' AS proparallel,\n");
 
 		if (fout->remoteVersion >= 110000)
 			appendPQExpBufferStr(query,

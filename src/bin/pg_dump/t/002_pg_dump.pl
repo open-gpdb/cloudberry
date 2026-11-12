@@ -2180,6 +2180,25 @@ my %tests = (
 		},
 	},
 
+	'CREATE FUNCTION ... SET' => {
+		create_order => 41,
+		create_sql =>
+		  q{CREATE FUNCTION dump_test.func_with_config() RETURNS int LANGUAGE sql SET work_mem TO '1MB' SET search_path TO dump_test, public AS $$ SELECT 1 $$;},
+		regexp => qr/^
+			\QCREATE FUNCTION dump_test.func_with_config() RETURNS integer\E
+			\n\s+\QLANGUAGE sql CONTAINS SQL\E
+			\n\s+\QSET work_mem TO '1MB'\E
+			\n\s+\QSET search_path TO 'dump_test', 'public'\E
+			\n\s+AS\ \$\$\Q SELECT 1 \E\$\$;
+			/xm,
+		like =>
+		  { %full_runs, %dump_test_schema_runs, section_pre_data => 1, },
+		unlike => {
+			exclude_dump_test_schema => 1,
+			only_dump_measurement    => 1,
+		},
+	},
+
 	'Check ordering of a function that depends on a primary key' => {
 		create_order => 41,
 		create_sql => '
