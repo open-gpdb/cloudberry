@@ -575,8 +575,13 @@ get_rel_infos(ClusterInfo *cluster, DbInfo *dbinfo)
 			 "      c.oid >= %u::pg_catalog.oid) OR "
 			 "     (n.nspname = 'pg_catalog' AND "
 			 "      relname IN ('pg_largeobject') ))), ",
-	/* see the comment at the top of old_8_3_create_sequence_script() */
-			 (GET_MAJOR_VERSION(old_cluster.major_version) == 803) ?
+	/*
+	 * PostgreSQL 10 moved sequence parameters to pg_sequence and changed
+	 * the sequence tuple layout.  Keep the new files populated by pg_dump's
+	 * SEQUENCE SET entries when upgrading an older source (including GP6).
+	 * Apply the same exclusion to both inventories so file maps still match.
+	 */
+			 (GET_MAJOR_VERSION(old_cluster.major_version) < 1000) ?
 			 "" : ", " CppAsString2(RELKIND_SEQUENCE),
 			 FirstNormalObjectId);
 
