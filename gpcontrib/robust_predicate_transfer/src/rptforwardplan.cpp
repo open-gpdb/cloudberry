@@ -137,7 +137,7 @@ RptSelectForward(const RptTransferMgr &forward, const RptForwardParams &params,
 				ch.source_key = edge.left_keys[0];	/* out-edge: left = this side */
 				ch.target_key = edge.right_keys[0];
 				ch.local = edge.local;
-				ch.in_process = ch.local && ch.target_rtindex != root_rtindex && !params.apply_all;
+				ch.in_process = ch.local && ch.target_rtindex != root_rtindex;
 
 				/* Sized for what the reducer scan inserts: its rows after its
 				 * own quals -- all of them when the quals were dropped. */
@@ -150,14 +150,16 @@ RptSelectForward(const RptTransferMgr &forward, const RptForwardParams &params,
 					break;
 				}
 				if (!ch.in_process)
+				{
+					/* Each hop delivers either to a reducer scan or to the
+					 * root scan in the main plan. */
+					int deliveries = params.width;
+					if (ch.target_rtindex == root_rtindex)
 					{
-					/* One reducer consumer, plus a main-plan consumer for
-					 * root edges or forward_apply=all. */
-					auto processes = params.main_consumer_processes.find(ch.target_rtindex);
-					int main_width = processes == params.main_consumer_processes.end()
-						? params.width : processes->second;
-					int deliveries = (ch.target_rtindex != root_rtindex ? params.width : 0) +
-						(ch.target_rtindex == root_rtindex || params.apply_all ? main_width : 0);
+						auto processes = params.main_consumer_processes.find(root_rtindex);
+						if (processes != params.main_consumer_processes.end())
+							deliveries = processes->second;
+					}
 					ch.est_cost_ms =
 						(params.ms_per_mib_part * params.width +
 						 params.delivery_ms_per_mib * deliveries) *

@@ -27,8 +27,7 @@
  *
  * The planner hook injects forward and backward filters and logs decisions at
  * DEBUG1 when rpt.debug is on. rpt_transfer_plan() exposes analysis without
- * injecting filters. debug_noop_initplan adds an empty distributed InitPlan
- * for overhead measurement.
+ * injecting filters.
  *
  * IDENTIFICATION
  *	  gpcontrib/robust_predicate_transfer/src/rptinit.cpp
@@ -42,7 +41,6 @@ extern "C"
 #include "postgres.h"
 
 #include "cdb/cdbvars.h"
-#include "cdb/cdbutil.h"
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "nodes/pg_list.h"
@@ -72,7 +70,6 @@ int			rpt_max_backward_consumers = 4;
 int			rpt_max_chain_depth = 4;
 
 bool		rpt_forward = true;
-int			rpt_forward_apply = RPT_FORWARD_APPLY_ROOT;
 /* Measured 2026-11-10 on one host with three primaries. */
 double		rpt_forward_ms_per_mib_part = 3.5;
 double		rpt_delivery_ms_per_mib = 0.8;
@@ -81,14 +78,7 @@ double		rpt_forward_min_root_rows = 10000.0;
 /* The RPT+ paper's lambda (its Algorithm 2 threshold). */
 double		rpt_forward_max_selectivity = 0.35;
 
-static const struct config_enum_entry rpt_forward_apply_options[] = {
-	{"root", RPT_FORWARD_APPLY_ROOT, false},
-	{"all", RPT_FORWARD_APPLY_ALL, false},
-	{NULL, 0, false}
-};
-
 static planner_hook_type prev_planner_hook = NULL;
-static bool rpt_debug_noop_initplan = false;
 
 /* Set while rpt_transfer_plan() plans its query: the dump must describe the
  * uninjected plan, so the hook leaves it alone. */
@@ -204,16 +194,10 @@ rpt_define_gucs(void)
 							 GUC_GPDB_NEED_SYNC,
 							 NULL, NULL, NULL);
 
-	DefineCustomBoolVariable("rpt.debug_noop_initplan",
-							 "Adds an empty distributed InitPlan for overhead measurement.",
-							 "QD-only, independent of rpt.enable. No filters are built or applied.",
-							 &rpt_debug_noop_initplan, false, PGC_SUSET, 0,
-							 NULL, NULL, NULL);
-
 	DefineCustomBoolVariable("rpt.backward",
-							 "Builds root-to-member backward runtime filters.",
+							 "Developer control for backward runtime-filter injection.",
 							 "QD-only; only consumers proven safe to wait are injected.",
-							 &rpt_backward, true, PGC_USERSET, 0,
+							 &rpt_backward, true, PGC_USERSET, GUC_NOT_IN_SAMPLE,
 							 NULL, NULL, NULL);
 
 	DefineCustomIntVariable("rpt.max_backward_consumers",
@@ -223,16 +207,9 @@ rpt_define_gucs(void)
 							PGC_USERSET, 0, NULL, NULL, NULL);
 
 	DefineCustomBoolVariable("rpt.forward",
-							 "Builds the RPT+ forward reducer when rpt.enable is on.",
+							 "Developer control for forward reducer injection.",
 							 "QD-only. Needs anser.enable=on and anser.runtime_filter=off.",
-							 &rpt_forward, true, PGC_USERSET, 0,
-							 NULL, NULL, NULL);
-
-	DefineCustomEnumVariable("rpt.forward_apply",
-							 "Which main-plan scans apply forward filters.",
-							 "root: only each chain's root; all: chain tables too.",
-							 &rpt_forward_apply, RPT_FORWARD_APPLY_ROOT,
-							 rpt_forward_apply_options, PGC_USERSET, 0,
+							 &rpt_forward, true, PGC_USERSET, GUC_NOT_IN_SAMPLE,
 							 NULL, NULL, NULL);
 
 	DefineCustomRealVariable("rpt.forward_ms_per_mib_part",
@@ -322,85 +299,6 @@ rpt_log_analysis(PlannedStmt *stmt)
 
 /* Contain C++ exceptions before returning to the PostgreSQL error handler. */
 static PlannedStmt *
-rpt_build_noop_initplan(PlannedStmt *stmt)
-{
-	bool pg_error = false;
-	bool out_of_memory = false;
-	char message[256] = "unknown C++ exception";
-
-	try
-	{
-		PlannedStmt *copy = RptPgCall([&]() {
-			return (PlannedStmt *) copyObjectImpl(stmt);
-		});
-		int width = RptPgCall([]() { return getgpsegmentCount(); });
-
-		RptAttachReducerInitPlan(copy, NIL, width);
-		return copy;
-	}
-	catch (const RptPgError &)
-	{
-		pg_error = true;
-	}
-	catch (const std::bad_alloc &)
-	{
-		out_of_memory = true;
-	}
-	catch (const std::exception &e)
-	{
-		strlcpy(message, e.what(), sizeof(message));
-	}
-	catch (...)
-	{
-	}
-	if (pg_error)
-		PG_RE_THROW();
-	if (out_of_memory)
-		ereport(ERROR, (errcode(ERRCODE_OUT_OF_MEMORY),
-						errmsg("out of memory building RPT measurement InitPlan")));
-	ereport(ERROR, (errmsg("RPT measurement InitPlan failed: %s", message)));
-	return NULL;
-}
-
-/* Atomic finished-plan surgery: retain the original on construction failure.
- * This switch is only a measurement harness, independent of runtime filters.
- * Successful allocations stay under the planner's memory context. */
-static PlannedStmt *
-rpt_try_noop_initplan(PlannedStmt *stmt)
-{
-	MemoryContext saved_context = CurrentMemoryContext;
-	MemoryContext volatile build_context = NULL;
-	PlannedStmt *volatile result = stmt;
-
-	PG_TRY();
-	{
-		build_context = AllocSetContextCreate(saved_context,
-											 "RPT measurement InitPlan",
-											 ALLOCSET_DEFAULT_SIZES);
-		MemoryContextSwitchTo(build_context);
-		result = rpt_build_noop_initplan(stmt);
-		MemoryContextSwitchTo(saved_context);
-	}
-	PG_CATCH();
-	{
-		MemoryContextSwitchTo(saved_context);
-		ErrorData *error = CopyErrorData();
-
-		FlushErrorState();
-		if (build_context != NULL)
-			MemoryContextDelete(build_context);
-		if (error->sqlerrcode == ERRCODE_QUERY_CANCELED)
-			ReThrowError(error);
-		ereport(WARNING, (errmsg("RPT measurement InitPlan skipped: %s", error->message)));
-		FreeErrorData(error);
-	}
-	PG_END_TRY();
-
-	return result;
-}
-
-/* Contain C++ exceptions before returning to the PostgreSQL error handler. */
-static PlannedStmt *
 rpt_build_injection(PlannedStmt *stmt)
 {
 	bool pg_error = false;
@@ -440,8 +338,8 @@ rpt_build_injection(PlannedStmt *stmt)
 	return NULL;
 }
 
-/* Same contract as rpt_try_noop_initplan: the original plan survives any
- * failure, which is reported as a WARNING; only cancellation propagates. */
+/* The original plan survives construction failure, reported as a WARNING;
+ * only cancellation propagates. */
 static PlannedStmt *
 rpt_try_injection(PlannedStmt *stmt)
 {
@@ -514,10 +412,6 @@ rpt_planner(Query *parse, const char *query_string, int cursorOptions,
 		result->planTree != NULL && result->intoClause == NULL &&
 		result->copyIntoClause == NULL && result->refreshClause == NULL)
 		result = rpt_try_injection(result);
-
-	if (rpt_debug_noop_initplan && Gp_role == GP_ROLE_DISPATCH &&
-		result != NULL && result->commandType == CMD_SELECT && result->planTree != NULL)
-		result = rpt_try_noop_initplan(result);
 
 	return result;
 }

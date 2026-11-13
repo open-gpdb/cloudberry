@@ -191,7 +191,7 @@ static void collect_plan_node_ids(Plan *p, std::set<int> &plan_node_ids)
 	}
 }
 
-static void layout(bool existing, bool noop)
+static void layout(bool existing)
 {
 	PlannedStmt stmt = {};
 	Result main = {}; main.plan.type = T_Result; main.plan.plan_node_id = 5;
@@ -211,7 +211,7 @@ static void layout(bool existing, bool noop)
 		stmt.planTree->initPlan = list_make1(&old_init);
 	}
 	Result child = {}; child.plan.type = T_Result; child.plan.plan_node_id = 110;
-	List *children = noop ? NIL : list_make1(&child);
+	List *children = list_make1(&child);
 	int old_slices = stmt.numSlices;
 	RptAttachReducerInitPlan(&stmt, children, 8);
 	CHECK(stmt.numSlices == old_slices + 2);
@@ -243,9 +243,9 @@ static void layout(bool existing, bool noop)
 	CHECK(motion->motionType == MOTIONTYPE_GATHER);
 	CHECK(motion->plan.flow->flotype == FLOW_SINGLETON);
 	Sequence *seq = (Sequence *) motion->plan.lefttree;
-	CHECK(IsA(seq, Sequence) && list_length(seq->subplans) == (noop ? 1 : 2));
-	CHECK(list_length(children) == (noop ? 0 : 1));
-	if (!noop) CHECK(linitial(seq->subplans) == &child);
+	CHECK(IsA(seq, Sequence) && list_length(seq->subplans) == 2);
+	CHECK(list_length(children) == 1);
+	CHECK(linitial(seq->subplans) == &child);
 	CHECK(seq->plan.flow->flotype == FLOW_PARTITIONED && seq->plan.flow->numsegments == 8);
 	Result *empty = (Result *) llast(seq->subplans);
 	CHECK(IsA(empty, Result) && IsA(empty->resconstantqual, List));
@@ -257,8 +257,8 @@ static void layout(bool existing, bool noop)
 	std::set<int> plan_node_ids;
 	collect_plan_node_ids(stmt.planTree, plan_node_ids);
 	ListCell *lc; foreach(lc, stmt.subplans) collect_plan_node_ids((Plan *) lfirst(lc), plan_node_ids);
-	CHECK(plan_node_ids.size() == (existing ? 6U : 5U) - (noop ? 1U : 0U));
-	int previous_max = noop ? (existing ? 90 : 5) : 110;
+	CHECK(plan_node_ids.size() == (existing ? 6U : 5U));
+	int previous_max = 110;
 	CHECK(empty->plan.plan_node_id > previous_max &&
 		  seq->plan.plan_node_id > previous_max && motion->plan.plan_node_id > previous_max);
 }
@@ -324,14 +324,13 @@ static void backward_stacks(bool refused, bool materialize, bool with_forward)
 	CHECK(state.next_condition_id == 7);
 	for (int i = 0; i < 7; ++i)
 		CHECK(forward_components[0].channels[i].condition_id == uint32(i));
-	CustomScan forward[2] = {};
+	CustomScan forward = {};
 	if (with_forward)
-		for (int i = 0; i < 2; ++i)
-		{
-			forward[i].scan.plan.type = T_CustomScan;
-			forward[i].custom_plans = list_make1(&scans[i]);
-			RptRelinkStack(&state, &scans[i].scan.plan, &forward[i].scan.plan);
-		}
+	{
+		forward.scan.plan.type = T_CustomScan;
+		forward.custom_plans = list_make1(&scans[0]);
+		RptRelinkStack(&state, &scans[0].scan.plan, &forward.scan.plan);
+	}
 	if (refused)
 		schedule.backward_consumers[0].consumer_attno =
 			schedule.backward_consumers[1].consumer_attno = 99;
@@ -429,8 +428,7 @@ int main()
 	backward_stacks(false, true, false);
 	backward_stacks(true, true, true);
 	backward_stacks(false, false, true);
-	layout(false, false); layout(true, false);
-	layout(false, true); layout(true, true);
+	layout(false); layout(true);
 	for (void *p : allocations) free(p);
 	return 0;
 }

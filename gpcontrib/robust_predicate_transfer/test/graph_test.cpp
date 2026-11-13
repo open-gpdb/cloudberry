@@ -1028,7 +1028,7 @@ static void forward_selection_chain_and_selectivity()
 }
 
 /* A local hop consumed only inside the reducer is in-process and free; the
- * hop into the root, or any hop the main plan consumes, stays on Anser. */
+ * hop into the root stays on Anser. */
 static void forward_selection_in_process()
 {
 	RptTransferMgr forward = forward_chain(true);
@@ -1046,14 +1046,7 @@ static void forward_selection_in_process()
 	RptDumpForward(comps, &dump);
 	CHECK(dump.find(" local in-process\n") != std::string::npos);
 
-	params.apply_all = true;
-	RptSelectForward(forward, params, {}, size_one_mib, nullptr, &comps);
-	CHECK(comps[0].channels[0].local);
-	for (const RptForwardChannel &ch : comps[0].channels)
-		CHECK(!ch.in_process && ch.est_cost_ms > 0);
-
 	forward = forward_chain(false);
-	params.apply_all = false;
 	RptSelectForward(forward, params, {}, size_one_mib, nullptr, &comps);
 	for (const RptForwardChannel &ch : comps[0].channels)
 		CHECK(!ch.local && !ch.in_process);

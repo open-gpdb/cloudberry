@@ -321,7 +321,6 @@ struct RptForwardParams
 	double		min_root_rows = 0;	/* root scan plan_rows below this: no reducer */
 	double		max_selectivity = 1;	/* lambda; >= 1 disables the check */
 	std::map<int, int> main_consumer_processes; /* rtindex -> main scan width */
-	bool		apply_all = false;	/* chain scans of the main plan consume too */
 };
 
 /*
@@ -399,15 +398,11 @@ extern PlannedStmt *RptInject(PlannedStmt *stmt, bool materialize,
 
 /* Forward reducer GUCs (rptinit.cpp). */
 extern bool rpt_forward;
-extern int	rpt_forward_apply;			/* RPT_FORWARD_APPLY_* */
 extern double rpt_forward_ms_per_mib_part;
 extern double rpt_delivery_ms_per_mib;
 extern double rpt_forward_max_exchange_ms;
 extern double rpt_forward_min_root_rows;
 extern double rpt_forward_max_selectivity;
-
-#define RPT_FORWARD_APPLY_ROOT	0
-#define RPT_FORWARD_APPLY_ALL	1
 
 /* rptregion.cpp: extract the join graph from the finished statement. */
 extern void RptCollectGraph(PlannedStmt *stmt, RptTransferMgr *mgr);

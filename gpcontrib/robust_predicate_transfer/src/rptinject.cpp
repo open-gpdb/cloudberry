@@ -36,13 +36,12 @@ extern "C"
 /* The caller owns a private copy of the statement. This function may throw;
  * publish that copy only after the entire injection pass has succeeded.
  * Children must be non-parallel reducer producers that return NULL at EOF.
- * The final empty Result makes EXISTS drain the Sequence completely.
- * NIL children builds the no-op shape used to measure dispatch overhead. */
+ * The final empty Result makes EXISTS drain the Sequence completely. */
 void
 RptAttachReducerInitPlan(PlannedStmt *stmt, List *children, int width)
 {
 	RptPgCall([&]() {
-		if (!stmt->planTree || width <= 0 ||
+		if (children == NIL || !stmt->planTree || width <= 0 ||
 			stmt->numSlices <= 0 || !stmt->slices ||
 			(stmt->subplans != NIL && !stmt->subplan_sliceIds))
 			elog(ERROR, "invalid RPT reducer InitPlan input");

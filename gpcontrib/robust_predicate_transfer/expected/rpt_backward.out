@@ -112,7 +112,6 @@ $$;
 DO $$
 DECLARE
     opt text;
-    mode text;
     q text;
     dump text;
     plan jsonb;
@@ -129,7 +128,6 @@ BEGIN
     PERFORM set_config('rpt.forward_max_exchange_ms', '-1', true);
     FOREACH opt IN ARRAY ARRAY['off', 'on'] LOOP
         PERFORM set_config('optimizer', opt, true);
-        PERFORM set_config('rpt.forward_apply', 'root', true);
         PERFORM set_config('rpt.forward', 'off', true);
         PERFORM pg_temp.rpt_bw_expect(plain, 'm', 'inject');
         -- Forward skipping must not suppress an unfiltered root's broadcast.
@@ -235,15 +233,11 @@ BEGIN
             -- LIMIT 1 has no SQL ordering guarantee; compare a count instead.
             IF q LIKE '%LIMIT 1' THEN q := 'SELECT count(*) FROM (' || q || ') limited'; END IF;
             baseline := pg_temp.rpt_bw_result(q, false, false);
-            FOREACH mode IN ARRAY ARRAY['root', 'all'] LOOP
-                PERFORM set_config('rpt.forward_apply', mode, true);
-                IF pg_temp.rpt_bw_result(q, true, false) IS DISTINCT FROM baseline OR
-                   pg_temp.rpt_bw_result(q, true, true) IS DISTINCT FROM baseline THEN
-                    RAISE EXCEPTION 'backward result differs (optimizer=%, apply=%): %', opt, mode, q;
-                END IF;
-            END LOOP;
+            IF pg_temp.rpt_bw_result(q, true, false) IS DISTINCT FROM baseline OR
+               pg_temp.rpt_bw_result(q, true, true) IS DISTINCT FROM baseline THEN
+                RAISE EXCEPTION 'backward result differs (optimizer=%): %', opt, q;
+            END IF;
         END LOOP;
-        PERFORM set_config('rpt.forward_apply', 'root', true);
         q := 'SELECT count(*)::text || ''/'' || sum(length(m.pad || r.k::text))::text
             FROM rpt_bw_member m JOIN rpt_bw_root r ON m.k = r.k';
         PERFORM pg_temp.rpt_bw_expect(q, 'm', 'inject');

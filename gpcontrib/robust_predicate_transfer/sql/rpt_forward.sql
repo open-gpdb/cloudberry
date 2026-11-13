@@ -112,7 +112,7 @@ DO $$
 DECLARE
     opt text;
     q text;
-    mode text;
+    selectivity_limit text;
     dump text;
     plan jsonb;
     prep_n bigint;
@@ -135,7 +135,6 @@ BEGIN
     PERFORM set_config('rpt.forward_max_exchange_ms', '-1', true);
     FOREACH opt IN ARRAY ARRAY['off', 'on'] LOOP
         PERFORM set_config('optimizer', opt, true);
-        PERFORM set_config('rpt.forward_apply', 'root', true);
 
         -- Shape: a reducer InitPlan with producers, a consumer in the main plan.
         dump := rpt_transfer_plan(star);
@@ -172,6 +171,7 @@ BEGIN
         END IF;
         plan := pg_temp.rpt_fwd_plan(flake_global, true);
         IF pg_temp.rpt_fwd_count(plan, 'Anser Bloom Consumer', true) = 0 OR
+           pg_temp.rpt_fwd_count(plan, 'Anser Bloom Consumer', false) <> 1 OR
            pg_temp.rpt_fwd_count(plan, 'Anser Bloom Producer', true) < 2 OR
            pg_temp.rpt_fwd_removed(plan) <= 0 THEN
             RAISE EXCEPTION 'global chain shape or effect missing (optimizer=%): %', opt, plan;
@@ -184,6 +184,7 @@ BEGIN
         END IF;
         plan := pg_temp.rpt_fwd_plan(flake_local, true);
         IF pg_temp.rpt_fwd_count(plan, 'RPT Local Bloom Producer', true) <> 1 OR
+           pg_temp.rpt_fwd_count(plan, 'Anser Bloom Consumer', false) <> 1 OR
            pg_temp.rpt_fwd_count(plan, 'RPT Local Bloom Consumer', true) <> 1 OR
            pg_temp.rpt_fwd_count(plan, 'Anser Bloom Consumer', true) <> 0 OR
            (SELECT sum((n->>'Rows Removed by Local Bloom Filter')::float8)
@@ -192,18 +193,7 @@ BEGIN
             RAISE EXCEPTION 'local chain shape or effect missing (optimizer=%): %', opt, plan;
         END IF;
 
-        -- forward_apply=all: the chain's main-plan scans consume too, so the
-        -- local hop is published through Anser instead.
-        PERFORM set_config('rpt.forward_apply', 'all', true);
-        dump := rpt_transfer_plan(flake_local);
-        plan := pg_temp.rpt_fwd_plan(flake_local, false);
-        IF dump LIKE '%in-process%' OR
-           pg_temp.rpt_fwd_count(plan, 'Anser Bloom Consumer', false) < 2 OR
-           pg_temp.rpt_fwd_count(plan, 'RPT Local Bloom Consumer', true) <> 0 THEN
-            RAISE EXCEPTION 'forward_apply=all shape wrong (optimizer=%): % %', opt, dump, plan;
-        END IF;
-
-        -- Results never change, under both apply modes: star, chains, empty
+        -- Results never change: star, chains, empty
         -- filters, NULL keys, a volatile qual (dropped whole in the reducer),
         -- an empty dimension, a preserved side.
         FOREACH q IN ARRAY ARRAY[
@@ -225,14 +215,10 @@ BEGIN
             'SELECT d.k, count(*) FROM rpt_fwd_fact f JOIN rpt_fwd_dl d ON f.d1 = d.k
                JOIN rpt_fwd_sub u ON d.s = u.k WHERE u.c IN (1, 7) GROUP BY d.k'
         ] LOOP
-            FOREACH mode IN ARRAY ARRAY['root', 'all'] LOOP
-                PERFORM set_config('rpt.forward_apply', mode, true);
-                IF pg_temp.rpt_fwd_result(q, true) IS DISTINCT FROM pg_temp.rpt_fwd_result(q, false) THEN
-                    RAISE EXCEPTION 'results differ with RPT (optimizer=%, apply=%): %', opt, mode, q;
-                END IF;
-            END LOOP;
+            IF pg_temp.rpt_fwd_result(q, true) IS DISTINCT FROM pg_temp.rpt_fwd_result(q, false) THEN
+                RAISE EXCEPTION 'results differ with RPT (optimizer=%): %', opt, q;
+            END IF;
         END LOOP;
-        PERFORM set_config('rpt.forward_apply', 'root', true);
 
         -- A prepared statement keeps its reducer and its answer.
         EXECUTE 'PREPARE rpt_fwd_prep AS ' || star;
@@ -283,12 +269,12 @@ BEGIN
         IF rpt_transfer_plan(q) NOT LIKE '%dropped in the reducer (not provably error-free)%' THEN
             RAISE EXCEPTION 'leakproof user function accepted by reducer (optimizer=%)', opt;
         END IF;
-        FOREACH mode IN ARRAY ARRAY['0.35', '1'] LOOP
-            PERFORM set_config('rpt.forward_max_selectivity', mode, true);
+        FOREACH selectivity_limit IN ARRAY ARRAY['0.35', '1'] LOOP
+            PERFORM set_config('rpt.forward_max_selectivity', selectivity_limit, true);
             -- The planner keeps the LIMIT 0 join, so with lambda off the
             -- reducer really runs (GPORCA may fold the query away instead).
             q := 'SELECT f.id FROM rpt_fwd_fact f JOIN rpt_fwd_d1 d1 ON f.d1 = d1.k WHERE 100 / d1.a > 1 LIMIT 0';
-            IF mode = '1' AND opt = 'off' AND rpt_transfer_plan(q) NOT LIKE '%decision=inject%' THEN
+            IF selectivity_limit = '1' AND opt = 'off' AND rpt_transfer_plan(q) NOT LIKE '%decision=inject%' THEN
                 RAISE EXCEPTION 'LIMIT 0 reducer not built with lambda off: %', rpt_transfer_plan(q);
             END IF;
             FOREACH q IN ARRAY ARRAY[
