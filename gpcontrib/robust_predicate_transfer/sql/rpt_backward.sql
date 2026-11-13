@@ -27,6 +27,7 @@ SET statement_timeout = '120s';
 SET work_mem = '1MB';
 SET enable_nestloop = off;
 SET enable_mergejoin = off;
+SET gp_enable_hashjoin_size_heuristic = on;
 SET join_collapse_limit = 1;
 SET optimizer_join_order = query;
 CREATE TABLE rpt_bw_root (k int, s int) DISTRIBUTED BY (k);
@@ -43,7 +44,9 @@ CREATE TABLE rpt_bw_part (k int, pad text) DISTRIBUTED RANDOMLY
 -- root restriction that would change the largest-root choice.
 INSERT INTO rpt_bw_root SELECT CASE WHEN i % 101 = 0 THEN NULL ELSE i % 10 END,
     i % 100 FROM generate_series(1, 10000) i;
-INSERT INTO rpt_bw_member SELECT i, repeat(md5(i::text), 100)
+-- Incompressible padding keeps the member's hash footprint genuinely wide.
+INSERT INTO rpt_bw_member SELECT i,
+    (SELECT string_agg(md5(i::text || ':' || j::text), '') FROM generate_series(1, 100) j)
     FROM generate_series(0, 999) i;
 INSERT INTO rpt_bw_dim SELECT i, i FROM generate_series(0, 99) i;
 INSERT INTO rpt_bw_bridge SELECT i, i % 100 FROM generate_series(0, 999) i;
@@ -77,7 +80,7 @@ CREATE FUNCTION pg_temp.rpt_bw_plan(q text) RETURNS jsonb LANGUAGE plpgsql AS $$
 DECLARE
     plan jsonb;
 BEGIN
-    EXECUTE 'EXPLAIN (ANALYZE, FORMAT JSON) ' || q INTO plan;
+    EXECUTE 'EXPLAIN (ANALYZE, VERBOSE, FORMAT JSON) ' || q INTO plan;
     RETURN plan;
 END
 $$;
@@ -129,6 +132,14 @@ BEGIN
         PERFORM set_config('rpt.forward_apply', 'root', true);
         PERFORM set_config('rpt.forward', 'off', true);
         PERFORM pg_temp.rpt_bw_expect(plain, 'm', 'inject');
+        -- Forward skipping must not suppress an unfiltered root's broadcast.
+        -- Redundant safe predicates must not be required to recover its edges.
+        q := plain || ' WHERE m.k >= 0 AND r.s >= 0';
+        PERFORM pg_temp.rpt_bw_expect(q, 'm', 'inject');
+        IF pg_temp.rpt_bw_result(plain, true, true) IS DISTINCT FROM
+           pg_temp.rpt_bw_result(q, true, true) THEN
+            RAISE EXCEPTION 'redundant qualifiers changed backward results';
+        END IF;
         plan := pg_temp.rpt_bw_plan(plain);
         IF NOT EXISTS (SELECT FROM pg_temp.rpt_bw_nodes(plan) n
                        WHERE n->>'Custom Plan Provider' = 'Anser Bloom Producer') OR
@@ -271,6 +282,7 @@ RESET anser.timeout_ms;
 RESET statement_timeout;
 RESET enable_nestloop;
 RESET enable_mergejoin;
+RESET gp_enable_hashjoin_size_heuristic;
 RESET work_mem;
 RESET join_collapse_limit;
 RESET optimizer_join_order;

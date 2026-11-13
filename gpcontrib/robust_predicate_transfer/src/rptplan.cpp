@@ -142,67 +142,66 @@ rpt_find_edge(const RptTransferMgr *mgr, const std::set<int> &constructed,
 	size_t best_weight = 0;
 	int64 best_rows = -1;
 	bool found = false;
+	auto edge_at = [&](int parent_rtindex, int candidate_rtindex, bool forward)
+		-> const RptEdgeInfo * {
+		const auto &matrix = forward || mgr->logical_neighbor_matrix.empty()
+			? mgr->neighbor_matrix : mgr->logical_neighbor_matrix;
+		auto row = matrix.find(parent_rtindex);
+		if (row == matrix.end())
+			return NULL;
+		auto edge = row->second.find(candidate_rtindex);
+		if (edge == row->second.end() ||
+			(edge->second.protect_left && edge->second.protect_right))
+			return NULL;
+		return &edge->second;
+	};
 
-	/* Algorithm 1: select the frontier vertex, then each tree's parent. */
+	/* Grow one forest over both views. Forward pruning must not disconnect
+	 * tables that can still receive a useful backward filter. */
 	for (int candidate_rtindex : unconstructed)
-	{
 		for (int parent_rtindex : constructed)
-		{
-			const auto &row = mgr->neighbor_matrix.find(parent_rtindex);
-			if (row == mgr->neighbor_matrix.end())
-				continue;
-			const auto &eit = row->second.find(candidate_rtindex);
-			if (eit == row->second.end() ||
-				(eit->second.protect_left && eit->second.protect_right))
-				continue;
-			size_t weight = eit->second.clauses.size();
-			int64 rows = mgr->vertices[mgr->vertex_index_by_rtindex.find(candidate_rtindex)->second].cardinality;
-
-			if (!found || weight > best_weight ||
-				(weight == best_weight && rows > best_rows))
+			for (bool forward : {true, false})
 			{
-				found = true;
-				best_weight = weight;
-				best_rows = rows;
-				*target_rtindex = candidate_rtindex;
+				const RptEdgeInfo *edge = edge_at(parent_rtindex, candidate_rtindex, forward);
+				if (edge == NULL)
+					continue;
+				size_t weight = edge->clauses.size();
+				int64 rows = mgr->vertices[mgr->vertex_index_by_rtindex.at(candidate_rtindex)].cardinality;
+				if (!found || weight > best_weight ||
+					(weight == best_weight && rows > best_rows))
+				{
+					found = true;
+					best_weight = weight;
+					best_rows = rows;
+					*target_rtindex = candidate_rtindex;
+				}
 			}
-		}
-	}
 	if (!found)
 		return false;
 
 	*forward_parent_rtindex = *backward_parent_rtindex = -1;
-	size_t forward_weight = 0;
-	size_t backward_weight = 0;
-	for (int parent_rtindex : constructed)
+	for (bool forward : {true, false})
 	{
-		const auto &row = mgr->neighbor_matrix.find(parent_rtindex);
-		if (row == mgr->neighbor_matrix.end())
-			continue;
-		const auto &eit = row->second.find(*target_rtindex);
-		if (eit == row->second.end() ||
-			(eit->second.protect_left && eit->second.protect_right))
-			continue;
-		const RptEdgeInfo &edge = eit->second;
-		size_t weight = edge.clauses.size();
-		bool forward_open = edge.left_rtindex == *target_rtindex ? !edge.protect_right : !edge.protect_left;
-		bool backward_open = edge.left_rtindex == parent_rtindex ? !edge.protect_right : !edge.protect_left;
-
-		/* A protected edge is not a parent candidate for that stage. Prefer
-		 * its best open alternative, even if it has lower weight. */
-		if (forward_open && (*forward_parent_rtindex == -1 || weight > forward_weight ||
-			(weight == forward_weight &&
-			 forward_depth.at(parent_rtindex) > forward_depth.at(*forward_parent_rtindex))))
+		int *selected = forward ? forward_parent_rtindex : backward_parent_rtindex;
+		const auto &depth = forward ? forward_depth : backward_depth;
+		size_t best_parent_weight = 0;
+		for (int parent_rtindex : constructed)
 		{
-			*forward_parent_rtindex = parent_rtindex;
-			forward_weight = weight;
-		}
-		if (backward_open && (*backward_parent_rtindex == -1 || weight > backward_weight ||
-			(weight == backward_weight &&
-			 backward_depth.at(parent_rtindex) < backward_depth.at(*backward_parent_rtindex))))
-		{
-			*backward_parent_rtindex = parent_rtindex;
-			backward_weight = weight;
+			const RptEdgeInfo *edge = edge_at(parent_rtindex, *target_rtindex, forward);
+			if (edge == NULL)
+				continue;
+			int source_rtindex = forward ? *target_rtindex : parent_rtindex;
+			bool open = edge->left_rtindex == source_rtindex
+				? !edge->protect_right : !edge->protect_left;
+			size_t weight = edge->clauses.size();
+			if (open && (*selected == -1 || weight > best_parent_weight ||
+				(weight == best_parent_weight &&
+				 (forward ? depth.at(parent_rtindex) > depth.at(*selected)
+						  : depth.at(parent_rtindex) < depth.at(*selected)))))
+			{
+				*selected = parent_rtindex;
+				best_parent_weight = weight;
+			}
 		}
 	}
 	return true;
@@ -341,8 +340,10 @@ rpt_create_transfer_plan(RptTransferMgr *mgr,
 		bool		protect_right;
 		size_t		c;
 
-		eit = mgr->neighbor_matrix[selected_edges[i].first].find(selected_edges[i].second);
-		if (eit == mgr->neighbor_matrix[selected_edges[i].first].end())
+		auto &matrix = forward || mgr->logical_neighbor_matrix.empty()
+			? mgr->neighbor_matrix : mgr->logical_neighbor_matrix;
+		eit = matrix[selected_edges[i].first].find(selected_edges[i].second);
+		if (eit == matrix[selected_edges[i].first].end())
 			continue;
 		edge = &eit->second;
 

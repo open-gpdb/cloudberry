@@ -635,5 +635,6 @@ RptBuildClasses(RptTransferMgr *mgr)
 	}
 
 	rpt_classify_tables(mgr);
+    mgr->logical_neighbor_matrix = mgr->neighbor_matrix;
 	rpt_skip_unfiltered(mgr);
 }

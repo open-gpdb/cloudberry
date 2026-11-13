@@ -124,7 +124,7 @@ unitcheck: test/graph_test test/inject_test test/forward_walk_test
 test/graph_test: $(srcdir)/test/graph_test.cpp $(wildcard $(srcdir)/src/*.cpp) $(srcdir)/include/rpt.h $(srcdir)/include/rptqual.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(PG_CPPFLAGS) $< -o $@
 
-test/inject_test: $(srcdir)/test/inject_test.cpp $(wildcard $(srcdir)/src/*.cpp) $(srcdir)/include/rpt.h $(srcdir)/include/rptinject.h
+test/inject_test: $(srcdir)/test/inject_test.cpp $(wildcard $(srcdir)/src/*.cpp) $(srcdir)/include/rpt.h $(srcdir)/include/rptinject.h $(srcdir)/../anser/include/ansertlist.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(PG_CPPFLAGS) -ffunction-sections -fdata-sections \
 	  $(WALK_TEST_LDFLAGS) $< -o $@
 
