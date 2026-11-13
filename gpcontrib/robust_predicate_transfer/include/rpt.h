@@ -251,8 +251,10 @@ struct RptTransferMgr
 	std::vector<RptVertexInfo> vertices;
 	/* rtindex -> vector index in vertices */
 	std::map<int, int> vertex_index_by_rtindex;
-	/* rtindex -> (rtindex -> edge) */
+	/* rtindex -> (rtindex -> edge); rewritten/pruned for forward transfers */
 	std::map<int, std::map<int, RptEdgeInfo> > neighbor_matrix;
+	/* Logical edges before forward-only SkipUnfilteredTable pruning. */
+	std::map<int, std::map<int, RptEdgeInfo> > logical_neighbor_matrix;
 
 	/* rptgraph.cpp: classes and classification. */
 	std::map<RptKey, RptKeyGroup> groups;	/* by class representative key */

@@ -32,10 +32,13 @@ SET statement_timeout = '120s';
 SET work_mem = '1MB';
 SET enable_nestloop = off;
 SET enable_mergejoin = off;
+SET gp_enable_hashjoin_size_heuristic = on;
 CREATE TABLE rpt_bwf_root (k int) DISTRIBUTED BY (k);
 CREATE TABLE rpt_bwf_member (k int, pad text) DISTRIBUTED RANDOMLY;
 INSERT INTO rpt_bwf_root SELECT i % 10 FROM generate_series(1, 10000) i;
-INSERT INTO rpt_bwf_member SELECT i, repeat(md5(i::text), 100) FROM generate_series(0, 999) i;
+INSERT INTO rpt_bwf_member SELECT i,
+    (SELECT string_agg(md5(i::text || ':' || j::text), '') FROM generate_series(1, 100) j)
+    FROM generate_series(0, 999) i;
 ANALYZE rpt_bwf_root;
 ANALYZE rpt_bwf_member;
 CREATE FUNCTION pg_temp.rpt_bwf_query() RETURNS text LANGUAGE sql AS $$
@@ -151,17 +154,38 @@ $$;
 CREATE FUNCTION pg_temp.rpt_bwf_cancel() RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
     cancelled boolean := false;
+    answer text;
 BEGIN
     BEGIN
-        PERFORM pg_temp.rpt_bwf_run(true);
+        EXECUTE 'EXECUTE rpt_bwf_cancel_plan' INTO answer;
     EXCEPTION WHEN query_canceled THEN
         cancelled := true;
     END;
-    IF NOT cancelled THEN RAISE EXCEPTION 'backward wait was not cancelled'; END IF;
+    IF NOT cancelled THEN
+        RAISE EXCEPTION 'backward wait was not cancelled (optimizer=%, delivery hits=%)',
+            current_setting('optimizer'), pg_temp.rpt_bwf_hits('anser_before_deliver', true);
+    END IF;
+END
+$$;
+-- Prepare and verify each optimizer's plan before starting the short timer.
+-- The cancellation check then measures executor/transport cleanup, not planning.
+CREATE FUNCTION pg_temp.rpt_bwf_prepare_cancel() RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+    plan jsonb;
+BEGIN
+    IF rpt_transfer_plan(pg_temp.rpt_bwf_query()) NOT LIKE '%backward class %decision=inject%' THEN
+        RAISE EXCEPTION 'cancel fixture has no backward injection (optimizer=%)', current_setting('optimizer');
+    END IF;
+    EXECUTE 'PREPARE rpt_bwf_cancel_plan AS ' || pg_temp.rpt_bwf_query();
+    EXECUTE 'EXPLAIN (VERBOSE, FORMAT JSON) EXECUTE rpt_bwf_cancel_plan' INTO plan;
+    IF plan::text NOT LIKE '%Anser Bloom Producer%' OR plan::text NOT LIKE '%Anser Bloom Consumer%' THEN
+        RAISE EXCEPTION 'cancel fixture lost its runtime nodes: %', plan;
+    END IF;
 END
 $$;
 -- Separate top-level commands arm statement_timeout for each optimizer.
 SET optimizer = off;
+DO $$ BEGIN PERFORM pg_temp.rpt_bwf_prepare_cancel(); END $$;
 DO $$ BEGIN PERFORM pg_temp.rpt_bwf_fault('anser_before_deliver', 'sleep', true); END $$;
 SET anser.timeout_ms = 600000;
 SET statement_timeout = '300ms';
@@ -173,12 +197,14 @@ BEGIN
         RAISE EXCEPTION 'cancel test never reached backward delivery';
     END IF;
     PERFORM pg_temp.rpt_bwf_fault('anser_before_deliver', 'reset', true);
+    EXECUTE 'DEALLOCATE rpt_bwf_cancel_plan';
     IF pg_temp.rpt_bwf_run(true) IS DISTINCT FROM pg_temp.rpt_bwf_run(false) THEN
         RAISE EXCEPTION 'session failed after backward cancellation';
     END IF;
 END
 $$;
 SET optimizer = on;
+DO $$ BEGIN PERFORM pg_temp.rpt_bwf_prepare_cancel(); END $$;
 DO $$ BEGIN PERFORM pg_temp.rpt_bwf_fault('anser_before_deliver', 'sleep', true); END $$;
 SET statement_timeout = '300ms';
 DO $$ BEGIN PERFORM pg_temp.rpt_bwf_cancel(); END $$;
@@ -189,6 +215,7 @@ BEGIN
         RAISE EXCEPTION 'ORCA cancel test never reached backward delivery';
     END IF;
     PERFORM pg_temp.rpt_bwf_fault('anser_before_deliver', 'reset', true);
+    EXECUTE 'DEALLOCATE rpt_bwf_cancel_plan';
     IF pg_temp.rpt_bwf_run(true) IS DISTINCT FROM pg_temp.rpt_bwf_run(false) THEN
         RAISE EXCEPTION 'ORCA session failed after backward cancellation';
     END IF;
@@ -206,4 +233,5 @@ RESET optimizer;
 RESET statement_timeout;
 RESET enable_nestloop;
 RESET enable_mergejoin;
+RESET gp_enable_hashjoin_size_heuristic;
 RESET work_mem;

@@ -172,15 +172,15 @@ BEGIN
                 PERFORM pg_temp.rpt_expect(q, 'rpt_elig_root', 'rpt_elig_member', ARRAY['eligible'], true);
             END IF;
         END IF;
-        -- The aggregate scalar subquery commonly becomes an InitPlan in the
-        -- PostgreSQL planner. ORCA may instead use a join, without extParam.
+        -- An InitPlan is evaluated once, and its presence alone does not
+        -- imply a nonempty extParam on the qualifying hash build. Depending
+        -- on planner placement it can be internal to that build or external.
+        -- The native test checks an explicit extParam bitmap; the correlated
+        -- SubPlan below exercises the rescan refusal on a real SQL plan.
         q := 'SELECT * FROM rpt_elig_root JOIN rpt_elig_member USING (k) WHERE rpt_elig_root.v < (SELECT max(k) FROM rpt_elig_outer)';
-        IF pg_temp.rpt_explain(q)::text LIKE '%InitPlan%' THEN
-            PERFORM pg_temp.rpt_expect(q, 'rpt_elig_root', 'rpt_elig_member', ARRAY['parameterized producer can be rescanned'], false);
-        ELSE
-            PERFORM pg_temp.rpt_expect(q, 'rpt_elig_root', 'rpt_elig_member',
-                ARRAY['eligible', 'unsupported producer key path', 'producer is not on a qualifying hash build side']);
-        END IF;
+        PERFORM pg_temp.rpt_expect(q, 'rpt_elig_root', 'rpt_elig_member',
+            ARRAY['eligible', 'parameterized producer can be rescanned',
+                  'unsupported producer key path', 'producer is not on a qualifying hash build side']);
         -- Volatility and OFFSET retain a correlated SubPlan instead of
         -- allowing a decorrelating join rewrite. Its internal Motion must
         -- not undo the explicit SubPlan refusal.

@@ -1205,8 +1205,30 @@ static void backward_selection()
 	CHECK(classes[0].consumers[1].accepted);
 }
 
+static void unfiltered_backward_edges()
+{
+	for (bool filtered : {false, true})
+	{
+		RptTransferMgr analysis;
+		vertex(analysis, 1, 10000, filtered);
+		vertex(analysis, 2, 1000, filtered);
+		connect(analysis, edge(1, 2));
+		RptBuildClasses(&analysis);
+		CHECK(!analysis.logical_neighbor_matrix.at(1).empty());
+		if (!filtered) CHECK(analysis.neighbor_matrix.at(1).empty());
+		RptTransferMgr runtime;
+		RptBuildForwardPlan(&analysis, &runtime);
+		CHECK(runtime.root_rtindexes == std::set<int>({1}));
+		CHECK(runtime.graph.at(1).backward_stage.out.size() == 1);
+		CHECK(runtime.graph.at(1).backward_stage.out[0].other_rtindex == 2);
+		CHECK(runtime.graph.at(2).backward_stage.in.size() == 1);
+		if (!filtered) CHECK(runtime.graph.at(1).forward_stage.in.empty());
+	}
+}
+
 int main()
 {
+	unfiltered_backward_edges();
 	forward_delivery_process_counts();
 	backward_selection();
 	raw_datum_key_types();

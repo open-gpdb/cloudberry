@@ -30,6 +30,9 @@
 #include "../src/rptforward.cpp"
 #include "../src/rptbackwardplan.cpp"
 #include "../src/rptbackward.cpp"
+extern "C" {
+#include "ansertlist.h"
+}
 #include <cstdlib>
 #include <cstdarg>
 #include <set>
@@ -104,6 +107,49 @@ static int max_plan_node_id(Plan *p)
 		foreach(lc, ((Sequence *) p)->subplans) m = Max(m, max_plan_node_id((Plan *) lfirst(lc)));
 	}
 	return m;
+}
+TargetEntry *get_tle_by_resno(List *list, AttrNumber resno)
+{
+	ListCell *lc;
+	foreach(lc, list)
+		if (((TargetEntry *) lfirst(lc))->resno == resno)
+			return (TargetEntry *) lfirst(lc);
+	return NULL;
+}
+void *copyObjectImpl(const void *input)
+{
+	if (input == NULL) return NULL;
+	const Node *node = (const Node *) input;
+	if (IsA(node, Var))
+	{
+		Var *out = (Var *) palloc(sizeof(Var));
+		memcpy(out, input, sizeof(Var)); return out;
+	}
+	if (IsA(node, TargetEntry))
+	{
+		TargetEntry *out = (TargetEntry *) palloc(sizeof(TargetEntry));
+		memcpy(out, input, sizeof(TargetEntry));
+		out->expr = (Expr *) copyObjectImpl(out->expr); return out;
+	}
+	CHECK(IsA(node, List));
+	List *out = NIL; ListCell *lc;
+	foreach(lc, (List *) input) out = lappend(out, copyObjectImpl(lfirst(lc)));
+	return out;
+}
+Node *expression_tree_mutator_impl(Node *node, tree_mutator_callback mutator, void *ctx)
+{
+	if (!node) return NULL;
+	if (IsA(node, Var)) return (Node *) copyObjectImpl(node);
+	if (IsA(node, TargetEntry))
+	{
+		TargetEntry *out = (TargetEntry *) copyObjectImpl(node);
+		out->expr = (Expr *) mutator((Node *) ((TargetEntry *) node)->expr, ctx);
+		return (Node *) out;
+	}
+	CHECK(IsA(node, List));
+	List *out = NIL; ListCell *lc;
+	foreach(lc, (List *) node) out = lappend(out, mutator((Node *) lfirst(lc), ctx));
+	return (Node *) out;
 }
 int AnserSliceProducers(PlannedStmt *, int slice_index)
 {
@@ -337,8 +383,48 @@ static void backward_stacks(bool refused, bool materialize, bool with_forward)
 	}
 }
 
+static void stacked_deparse_targetlists()
+{
+	SeqScan base = {}; base.scan.plan.type = T_SeqScan;
+	Var columns[2] = {}; TargetEntry entries[2] = {};
+	for (int i = 0; i < 2; ++i)
+	{
+		columns[i].xpr.type = T_Var; columns[i].varno = 42;
+		columns[i].varattno = i + 7;
+		entries[i].xpr.type = T_TargetEntry; entries[i].expr = (Expr *) &columns[i];
+		entries[i].resno = i + 1; entries[i].resjunk = i == 1;
+		base.scan.plan.targetlist = lappend(base.scan.plan.targetlist, &entries[i]);
+	}
+	CustomScan stack[8] = {}; Plan *child = &base.scan.plan;
+	for (int depth = 0; depth < 8; ++depth)
+	{
+		CustomScan *node = &stack[depth]; node->scan.plan.type = T_CustomScan;
+		node->custom_scan_tlist = AnserFilterScanTlist(child);
+		for (int i = 0; i < 2; ++i)
+		{
+			TargetEntry *resolved = get_tle_by_resno(node->custom_scan_tlist, i + 1);
+			CHECK(((Var *) resolved->expr)->varno == 42);
+			CHECK(((Var *) resolved->expr)->varattno == i + 7);
+			CHECK(resolved->resjunk == (i == 1));
+			Var *var = (Var *) copyObjectImpl(&columns[i]);
+			var->varno = INDEX_VAR; var->varattno = i + 1;
+			TargetEntry *tle = (TargetEntry *) copyObjectImpl(&entries[i]);
+			tle->expr = (Expr *) var;
+			node->scan.plan.targetlist = lappend(node->scan.plan.targetlist, tle);
+		}
+		node->custom_plans = list_make1(child);
+		child = &node->scan.plan;
+	}
+	/* Resolve the referenced slot, not the tlist's positional order. */
+	((Var *) ((TargetEntry *) linitial(stack[7].scan.plan.targetlist))->expr)->varattno = 2;
+	List *resolved = AnserFilterScanTlist(&stack[7].scan.plan);
+	CHECK(((Var *) ((TargetEntry *) linitial(resolved))->expr)->varattno == 8);
+	CHECK(columns[0].varno == 42 && columns[0].varattno == 7);
+}
+
 int main()
 {
+	stacked_deparse_targetlists();
 	backward_stacks(false, true, true);
 	backward_stacks(false, true, false);
 	backward_stacks(true, true, true);

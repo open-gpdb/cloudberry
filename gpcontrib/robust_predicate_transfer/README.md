@@ -144,7 +144,8 @@ The structures are declared in [rpt.h](include/rpt.h):
 | `RptInjectionState` | Shared channel/node allocators and original-parent/current-top maps, declared in [rptinject.h](include/rptinject.h) |
 
 `RptTransferMgr.vertex_index_by_rtindex` maps a range-table index to a
-position in `vertices`. `neighbor_matrix` maps relation pairs to edges;
+position in `vertices`. `neighbor_matrix` holds the forward graph after skip rules;
+`logical_neighbor_matrix` retains the logical edges for backward scheduling;
 `uf_parent` represents the key union-find; `groups` contains the resulting
 classes. `graph` maps each range-table index to its transfer node.
 `root_rtindexes`, `bridge_rtindexes`, `reducer_order_rtindexes` and

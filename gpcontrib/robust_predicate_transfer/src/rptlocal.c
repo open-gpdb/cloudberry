@@ -45,6 +45,8 @@
  */
 #include "postgres.h"
 
+#include "ansertlist.h"
+
 #include "commands/explain.h"
 #include "executor/executor.h"
 #include "lib/bloomfilter.h"
@@ -186,7 +188,7 @@ rpt_local_build(const CustomScanMethods *methods, Plan *child,
 	cs->scan.plan.flow = (Flow *) copyObject(child->flow);
 	cs->scan.scanrelid = 0;
 	cs->custom_plans = list_make1(child);
-	cs->custom_scan_tlist = copyObject(child->targetlist);
+	cs->custom_scan_tlist = AnserFilterScanTlist(child);
 	cs->methods = methods;
 	return cs;
 }

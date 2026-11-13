@@ -59,13 +59,13 @@ $diag$;
                                 "CREATE EXTENSION robust_predicate_transfer;\n" + helper, 1)
         source = source.replace("    EXECUTE q INTO r;",
                                 "    RAISE NOTICE 'RPT STEP results SQL=%', q;\n    EXECUTE q INTO r;")
-        source = source.replace("    EXECUTE 'EXPLAIN (ANALYZE, FORMAT JSON) ' || q INTO plan;",
+        source = source.replace("    EXECUTE 'EXPLAIN (ANALYZE, VERBOSE, FORMAT JSON) ' || q INTO plan;",
                                 "    RAISE NOTICE 'RPT STEP explain SQL=%', q;\n"
-                                "    EXECUTE 'EXPLAIN (ANALYZE, FORMAT JSON) ' || q INTO plan;")
+                                "    EXECUTE 'EXPLAIN (ANALYZE, VERBOSE, FORMAT JSON) ' || q INTO plan;")
         return source
     source = source.replace(anchor, helper + anchor)
     edits = {
-        "    EXECUTE format('EXPLAIN (%s FORMAT JSON) %s',":
+        "    EXECUTE format('EXPLAIN (%s VERBOSE, FORMAT JSON) %s',":
         "    RAISE NOTICE 'RPT STEP explain analyze=% SQL=%', do_analyze, q;\n",
         "    EXECUTE format('SELECT string_agg(t::text, %L ORDER BY t::text) FROM (%s) t',":
         "    RAISE NOTICE 'RPT STEP results rpt=% SQL=%', rpt, q;\n",

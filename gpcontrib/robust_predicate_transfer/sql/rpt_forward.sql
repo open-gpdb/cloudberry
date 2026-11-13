@@ -66,7 +66,7 @@ LANGUAGE plpgsql AS $$
 DECLARE
     plan jsonb;
 BEGIN
-    EXECUTE format('EXPLAIN (%s FORMAT JSON) %s',
+    EXECUTE format('EXPLAIN (%s VERBOSE, FORMAT JSON) %s',
                    CASE WHEN do_analyze THEN 'ANALYZE,' ELSE '' END, q) INTO plan;
     RETURN plan;
 END
@@ -146,6 +146,14 @@ BEGIN
         IF pg_temp.rpt_fwd_count(plan, 'Anser Bloom Producer', true) = 0 OR
            pg_temp.rpt_fwd_count(plan, 'Anser Bloom Consumer', false) = 0 THEN
             RAISE EXCEPTION 'reducer shape missing (optimizer=%): %', opt, plan;
+        END IF;
+
+        -- Two root consumers must really be stacked. VERBOSE deparses their
+        -- INDEX_VAR outputs; copying the child's identity tlist here used to
+        -- make EXPLAIN loop forever in resolve_special_varno.
+        IF NOT EXISTS (SELECT FROM pg_temp.rpt_fwd_nodes(plan, 'Anser Bloom Consumer', false) n
+                       WHERE n->'Plans'->0->>'Custom Plan Provider' = 'Anser Bloom Consumer') THEN
+            RAISE EXCEPTION 'star did not exercise stacked consumers (optimizer=%): %', opt, plan;
         END IF;
 
         -- The property the design rests on: filters produced in the InitPlan's
