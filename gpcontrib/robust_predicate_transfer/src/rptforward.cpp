@@ -603,11 +603,6 @@ RptInjectForward(const RptTransferMgr &forward,
 		if (!rpt_apply_in_main(forward.vertices[forward.vertex_index_by_rtindex.at(comp.root_rtindex)],
 							   comp.channels, &state, params.width, false))
 			RptPgCall([]() { elog(ERROR, "RPT forward: root relink failed after preflight"); });
-
-		if (params.apply_all)
-			for (int rtindex : comp.chain_rtindexes)
-				(void) rpt_apply_in_main(forward.vertices[forward.vertex_index_by_rtindex.at(rtindex)],
-										 comp.channels, &state, params.width, false);
 	}
 
 	return children;
@@ -669,7 +664,6 @@ RptInject(PlannedStmt *stmt, bool materialize, std::string *trace)
 	params.max_exchange_ms = rpt_forward_max_exchange_ms;
 	params.min_root_rows = rpt_forward_min_root_rows;
 	params.max_selectivity = rpt_forward_max_selectivity;
-	params.apply_all = (rpt_forward_apply == RPT_FORWARD_APPLY_ALL);
 	for (const auto &vertex : forward.vertices)
 	{
 		auto found = scan_slices.find(vertex.scan);
