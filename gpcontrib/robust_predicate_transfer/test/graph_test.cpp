@@ -34,6 +34,7 @@
 #include "../src/rpteligible.cpp"
 #include "../include/rptqual.h"
 #include "../src/rptforwardplan.cpp"
+#include "../src/rptbackwardplan.cpp"
 
 #include <cstdlib>
 #include <new>
@@ -54,8 +55,8 @@ struct TestResolution
 	Plan *parent;
 	Plan *scan;
 	AttrNumber attno;
-	int slice;
-	bool consumer;
+	int slice_index;
+	bool for_consumer;
 };
 static std::map<Plan *, TestResolution> test_resolutions;
 
@@ -67,17 +68,17 @@ HeapTuple SearchSysCache1(int, Datum) { abort(); }
 HeapTuple SearchSysCache3(int, Datum, Datum, Datum) { abort(); }
 void ReleaseSysCache(HeapTuple) { abort(); }
 bool AnserResolveKeyScan(Plan *top, AttrNumber slot, int, bool consumer,
-						Plan **parent, Plan **scan, AttrNumber *attno, int *slice)
+						Plan **parent, Plan **scan, AttrNumber *attno, int *slice_index)
 {
 	CHECK(slot > 0);
 	auto found = test_resolutions.find(top);
 	if (found == test_resolutions.end())
 		return false;
-	CHECK(found->second.consumer == consumer);
+	CHECK(found->second.for_consumer == consumer);
 	*parent = found->second.parent;
 	*scan = found->second.scan;
 	*attno = found->second.attno;
-	*slice = found->second.slice;
+	*slice_index = found->second.slice_index;
 	return true;
 }
 Oid getBaseType(Oid type) { return type; }
@@ -119,13 +120,13 @@ bool rpt_backward = true;
 int rpt_max_backward_consumers = 4;
 int rpt_max_chain_depth = 4;
 
-static void vertex(RptTransferMgr &mgr, int id, int rows, bool filtered)
+static void vertex(RptTransferMgr &mgr, int rtindex, int rows, bool filtered)
 {
 	RptVertexInfo v = {};
-	v.id = id;
+	v.rtindex = rtindex;
 	v.cardinality = rows;
 	v.filtered = filtered;
-	mgr.by_rti[id] = mgr.vertices.size();
+	mgr.vertex_index_by_rtindex[rtindex] = mgr.vertices.size();
 	mgr.vertices.push_back(v);
 }
 
@@ -133,8 +134,8 @@ static RptEdgeInfo edge(int a, int b, bool protect_a = false,
 						bool protect_b = false, int col_a = 1, int col_b = 1)
 {
 	RptEdgeInfo e = {};
-	e.left_v = a;
-	e.right_v = b;
+	e.left_rtindex = a;
+	e.right_rtindex = b;
 	e.key_type = 23;
 	e.protect_left = protect_a;
 	e.protect_right = protect_b;
@@ -146,8 +147,8 @@ static RptEdgeInfo edge(int a, int b, bool protect_a = false,
 static void connect(RptTransferMgr &mgr, const RptEdgeInfo &e)
 {
 	rpt_upsert_edge(&mgr, e);
-	mgr.vertices[mgr.by_rti[e.left_v]].join_keys.insert(e.clauses[0].first);
-	mgr.vertices[mgr.by_rti[e.right_v]].join_keys.insert(e.clauses[0].second);
+	mgr.vertices[mgr.vertex_index_by_rtindex[e.left_rtindex]].join_keys.insert(e.clauses[0].first);
+	mgr.vertices[mgr.vertex_index_by_rtindex[e.right_rtindex]].join_keys.insert(e.clauses[0].second);
 }
 
 static void bypass_direction(bool reverse)
@@ -182,10 +183,10 @@ static RptTransferMgr star(int cap)
 {
 	RptTransferMgr mgr;
 	rpt_max_chain_depth = cap;
-	for (int id = 1; id <= 4; ++id)
-		vertex(mgr, id, 100 / id, true);
-	for (int id = 2; id <= 4; ++id)
-		connect(mgr, edge(1, id));
+	for (int rtindex = 1; rtindex <= 4; ++rtindex)
+		vertex(mgr, rtindex, 100 / rtindex, true);
+	for (int rtindex = 2; rtindex <= 4; ++rtindex)
+		connect(mgr, edge(1, rtindex));
 	RptBuildClasses(&mgr);
 	RptBuildTransferPlan(NULL, &mgr);
 	return mgr;
@@ -195,14 +196,14 @@ static void asymmetric_shape()
 {
 	auto mgr = star(4);
 	CHECK(mgr.groups.size() == 1);
-	CHECK(mgr.transfer_order == std::vector<int>({1, 2, 3, 4}));
-	CHECK(mgr.reducer_order == std::vector<int>({4, 3, 2}));
-	for (int id = 2; id <= 4; ++id)
+	CHECK(mgr.transfer_order_rtindexes == std::vector<int>({1, 2, 3, 4}));
+	CHECK(mgr.reducer_order_rtindexes == std::vector<int>({4, 3, 2}));
+	for (int rtindex = 2; rtindex <= 4; ++rtindex)
 	{
-		CHECK(mgr.graph[id].forward_stage.out.size() == 1);
-		CHECK(mgr.graph[id].forward_stage.out[0].destination == id - 1);
-		CHECK(mgr.graph[id].backward_stage.in.size() == 1);
-		CHECK(mgr.graph[id].backward_stage.in[0].destination == 1);
+		CHECK(mgr.graph[rtindex].forward_stage.out.size() == 1);
+		CHECK(mgr.graph[rtindex].forward_stage.out[0].other_rtindex == rtindex - 1);
+		CHECK(mgr.graph[rtindex].backward_stage.in.size() == 1);
+		CHECK(mgr.graph[rtindex].backward_stage.in[0].other_rtindex == 1);
 	}
 	CHECK(mgr.graph[1].forward_stage.out.empty());
 	CHECK(mgr.graph[1].backward_stage.out.size() == 3);
@@ -215,8 +216,8 @@ static void asymmetric_shape()
 static void unfiltered_cycle()
 {
 	RptTransferMgr mgr;
-	for (int id = 1; id <= 4; ++id)
-		vertex(mgr, id, 10, id == 1);
+	for (int rtindex = 1; rtindex <= 4; ++rtindex)
+		vertex(mgr, rtindex, 10, rtindex == 1);
 	connect(mgr, edge(1, 2));
 	connect(mgr, edge(2, 3));
 	connect(mgr, edge(3, 4));
@@ -300,12 +301,12 @@ static void strict_backward_eligibility()
 	CHECK(plan.mgr.backward_consumers.size() == 1);
 	auto decision = plan.mgr.backward_consumers[0];
 	CHECK(decision.eligible && decision.rule9 && decision.defer_first);
-	CHECK(decision.producer == 2 && decision.consumer == 1);
+	CHECK(decision.producer_rtindex == 2 && decision.consumer_rtindex == 1);
 	CHECK(decision.consumer_attno == 1 && decision.producer_attno == 1);
 	CHECK(decision.consumer_parent == (Plan *) &plan.join);
 	CHECK(decision.producer_parent == (Plan *) &plan.motion);
-	CHECK(decision.producer_slice == 1 && decision.consumer_slice == 0);
-	CHECK(plan.mgr.consumer_ok[1]);
+	CHECK(decision.producer_slice_index == 1 && decision.consumer_slice_index == 0);
+	CHECK(plan.mgr.consumer_ok_by_rtindex[1]);
 
 	for (NodeTag tag : {T_Sort, T_Agg, T_Material, T_Unique, T_WindowAgg, T_Hash, T_SetOp})
 	{
@@ -368,7 +369,7 @@ static void strict_backward_eligibility()
 	RptCheckBackwardConsumers(&plan.stmt, &plan.mgr);
 	CHECK(plan.mgr.backward_consumers[0].reason == "same or unknown slice");
 	plan.motion.motionID = 1;
-	plan.mgr.roots.clear();
+	plan.mgr.root_rtindexes.clear();
 	RptCheckBackwardConsumers(&plan.stmt, &plan.mgr);
 	CHECK(plan.mgr.backward_consumers[0].reason == "bridge-led class is deferred");
 	plan.mgr.graph[2].backward_stage.out[0].local = true;
@@ -417,21 +418,21 @@ static void every_global_producer_is_required()
 	RptTransferMgr mgr;
 	vertex(mgr, 1, 100, false);
 	RptBackwardConsumer first;
-	first.consumer = 1;
-	first.producer = 2;
+	first.consumer_rtindex = 1;
+	first.producer_rtindex = 2;
 	first.eligible = true;
 	RptBackwardConsumer second = first;
-	second.producer = 3;
+	second.producer_rtindex = 3;
 	second.eligible = false;
 	mgr.backward_consumers = {first, second};
 	rpt_consumer_verdicts(&mgr);
-	CHECK(!mgr.consumer_ok[1]);
+	CHECK(!mgr.consumer_ok_by_rtindex[1]);
 	mgr.backward_consumers[1].local = true;
 	rpt_consumer_verdicts(&mgr);
-	CHECK(mgr.consumer_ok[1]);
+	CHECK(mgr.consumer_ok_by_rtindex[1]);
 	mgr.backward_consumers[0].local = true;
 	rpt_consumer_verdicts(&mgr);
-	CHECK(!mgr.consumer_ok[1]);
+	CHECK(!mgr.consumer_ok_by_rtindex[1]);
 }
 
 static void backward_consumer_cap()
@@ -442,7 +443,7 @@ static void backward_consumer_cap()
 		vertex(mgr, i, 100 * i, false);
 		RptBackwardConsumer decision;
 		decision.class_key = {9, 1};
-		decision.consumer = i;
+		decision.consumer_rtindex = i;
 		decision.strict_eligible = decision.eligible = true;
 		decision.estimated_rows_removed = 100 * i;
 		mgr.backward_consumers.push_back(decision);
@@ -468,8 +469,13 @@ static void bridges_and_locality()
 	rpt_max_chain_depth = 4;
 	RptBuildTransferPlan(NULL, &mgr);
 	CHECK(mgr.groups.size() == 2);
-	CHECK(mgr.bridges == std::set<int>({2}));
-	CHECK(mgr.reducer_order == std::vector<int>({3, 2}));
+	CHECK(mgr.bridge_rtindexes == std::set<int>({2}));
+	CHECK(mgr.reducer_order_rtindexes == std::vector<int>({3, 2}));
+	RptTransferMgr runtime;
+	RptBuildForwardPlan(&mgr, &runtime);
+	CHECK(runtime.root_rtindexes.count(1));
+	CHECK(runtime.bridge_rtindexes.count(2));
+	CHECK(!runtime.graph.at(2).backward_stage.out.empty());
 	for (auto &v : mgr.vertices)
 	{
 		v.numsegments = 3;
@@ -477,7 +483,7 @@ static void bridges_and_locality()
 		v.distopclasses = {1978};
 	}
 	RptGraphEdge hop = {};
-	hop.destination = 2;
+	hop.other_rtindex = 2;
 	hop.left_keys = {{1, 1}};
 	hop.right_keys = {{2, 1}};
 	CHECK(rpt_local_hop(&mgr, 1, hop));
@@ -512,13 +518,13 @@ static void local_star_and_backward()
 		{
 			++forward;
 			CHECK(hop.local); /* Includes synthetic 4->3 and 3->2. */
-			CHECK(mgr.graph.at(hop.destination).forward_stage.in[0].local);
+			CHECK(mgr.graph.at(hop.other_rtindex).forward_stage.in[0].local);
 		}
 		for (const auto &hop : node.second.backward_stage.out)
 		{
 			++backward;
 			CHECK(hop.local);
-			CHECK(mgr.graph.at(hop.destination).backward_stage.in[0].local);
+			CHECK(mgr.graph.at(hop.other_rtindex).backward_stage.in[0].local);
 		}
 	}
 	CHECK(forward == 3 && backward == 3);
@@ -526,18 +532,46 @@ static void local_star_and_backward()
 	StringInfoData dump = {};
 	dump.data = buffer;
 	dump.maxlen = sizeof(buffer);
-	RptDumpTransferPlan(&mgr, &dump);
+	PlannedStmt stmt = {};
+	stmt.type = T_PlannedStmt;
+	RangeTblEntry entries[4] = {};
+	Alias aliases[4] = {};
+	ListCell cells[4] = {};
+	List rtable = {};
+	rtable.type = T_List;
+	rtable.length = rtable.max_length = 4;
+	rtable.elements = cells;
+	stmt.rtable = &rtable;
+	char employee[] = "employee", manager[] = "manager", other[] = "other";
+	for (int i = 0; i < 4; ++i)
+	{
+		entries[i].type = T_RangeTblEntry;
+		entries[i].relid = 99; /* Same relation, distinct query references. */
+		entries[i].eref = &aliases[i];
+		aliases[i].type = T_Alias;
+		aliases[i].aliasname = i == 0 ? employee : i == 1 ? manager : other;
+		cells[i].ptr_value = &entries[i];
+	}
+	RptDumpTransferPlan(&stmt, &mgr, &dump);
 	std::string text(buffer);
+	CHECK(text.find("vertex 1 employee rows=") != std::string::npos);
+	CHECK(text.find("vertex 2 manager rows=") != std::string::npos);
+	/* Changing the RTE after graph construction is reflected immediately. */
+	aliases[0].aliasname = manager;
+	dump.len = 0;
+	buffer[0] = '\0';
+	RptDumpTransferPlan(&stmt, &mgr, &dump);
+	CHECK(std::string(buffer).find("vertex 1 manager rows=") != std::string::npos);
 	CHECK(text.find("merge=global") == std::string::npos);
 	CHECK(text.find("forward hop 3->2 merge=local\n") != std::string::npos);
 	CHECK(text.find("forward hop 4->3 merge=local\n") != std::string::npos);
 	CHECK(text.find("backward hop 1->4 merge=local\n") != std::string::npos);
 
 	/* A class can mix local and global broadcast recipients. */
-	mgr.vertices[mgr.by_rti[4]].numsegments = 2;
+	mgr.vertices[mgr.vertex_index_by_rtindex[4]].numsegments = 2;
 	rpt_classify_hops(&mgr);
 	for (const auto &hop : mgr.graph[1].backward_stage.out)
-		CHECK(hop.local == (hop.destination != 4));
+		CHECK(hop.local == (hop.other_rtindex != 4));
 
 	/* Bypassing an unfiltered table preserves policy-local transfer too. */
 	RptTransferMgr bypass;
@@ -552,7 +586,7 @@ static void local_star_and_backward()
 	rpt_skip_unfiltered(&bypass);
 	const auto &e = bypass.neighbor_matrix.at(1).at(2);
 	RptGraphEdge hop = {};
-	hop.destination = 2;
+	hop.other_rtindex = 2;
 	hop.left_keys = {e.clauses[0].first};
 	hop.right_keys = {e.clauses[0].second};
 	CHECK(rpt_local_hop(&bypass, 1, hop));
@@ -566,7 +600,7 @@ static void replicated_and_compound_policies()
 	for (auto &v : mgr.vertices)
 		hash_policy(v);
 	RptGraphEdge hop = {};
-	hop.destination = 2;
+	hop.other_rtindex = 2;
 	hop.left_keys = {{1, 1}};
 	hop.right_keys = {{2, 1}};
 	/* No neighbor-matrix edge is needed to prove policy locality. */
@@ -682,6 +716,10 @@ static void join_protection()
 			int preserved = type == JOIN_LEFT ? 1 : 2;
 			CHECK(mgr.graph[preserved].forward_stage.in.empty());
 			CHECK(mgr.graph[preserved].backward_stage.in.empty());
+			RptTransferMgr runtime;
+			RptBuildForwardPlan(&mgr, &runtime);
+			CHECK(runtime.graph[preserved].forward_stage.in.empty());
+			CHECK(runtime.graph[preserved].backward_stage.in.empty());
 		}
 	}
 }
@@ -689,26 +727,26 @@ static void join_protection()
 static void directed_parent_choice()
 {
 	RptTransferMgr mgr;
-	for (int id = 1; id <= 3; ++id)
-		vertex(mgr, id, 100 / id, true);
+	for (int rtindex = 1; rtindex <= 3; ++rtindex)
+		vertex(mgr, rtindex, 100 / rtindex, true);
 	std::set<int> constructed = {1, 2};
 	std::set<int> remaining = {3};
 	std::map<int, int> forward_depth = {{1, 0}, {2, 3}};
 	std::map<int, int> backward_depth = forward_depth;
-	int forward_from, backward_from, to;
+	int forward_parent_rtindex, backward_parent_rtindex, target_rtindex;
 
 	connect(mgr, edge(1, 3));
 	connect(mgr, edge(2, 3, true)); /* deepest parent blocks 3 -> 2 */
 	CHECK(rpt_find_edge(&mgr, constructed, remaining, forward_depth, backward_depth,
-						&forward_from, &backward_from, &to));
-	CHECK(to == 3 && forward_from == 1 && backward_from == 1);
+						&forward_parent_rtindex, &backward_parent_rtindex, &target_rtindex));
+	CHECK(target_rtindex == 3 && forward_parent_rtindex == 1 && backward_parent_rtindex == 1);
 
 	mgr.neighbor_matrix.clear();
 	connect(mgr, edge(1, 3, false, true)); /* shallowest blocks 1 -> 3 */
 	connect(mgr, edge(2, 3));
 	CHECK(rpt_find_edge(&mgr, constructed, remaining, forward_depth, backward_depth,
-						&forward_from, &backward_from, &to));
-	CHECK(forward_from == 2 && backward_from == 2);
+						&forward_parent_rtindex, &backward_parent_rtindex, &target_rtindex));
+	CHECK(forward_parent_rtindex == 2 && backward_parent_rtindex == 2);
 
 	mgr.neighbor_matrix.clear();
 	RptEdgeInfo heavy = edge(1, 3, true);
@@ -716,22 +754,22 @@ static void directed_parent_choice()
 	connect(mgr, heavy);
 	connect(mgr, edge(2, 3));
 	CHECK(rpt_find_edge(&mgr, constructed, remaining, forward_depth, backward_depth,
-						&forward_from, &backward_from, &to));
-	CHECK(forward_from == 2 && backward_from == 1); /* lower-weight open edge */
+						&forward_parent_rtindex, &backward_parent_rtindex, &target_rtindex));
+	CHECK(forward_parent_rtindex == 2 && backward_parent_rtindex == 1); /* lower-weight open edge */
 
 	mgr.neighbor_matrix.clear();
 	connect(mgr, edge(1, 3, true));
 	connect(mgr, edge(2, 3, true));
 	CHECK(rpt_find_edge(&mgr, constructed, remaining, forward_depth, backward_depth,
-						&forward_from, &backward_from, &to));
-	CHECK(forward_from == -1 && backward_from == 1);
+						&forward_parent_rtindex, &backward_parent_rtindex, &target_rtindex));
+	CHECK(forward_parent_rtindex == -1 && backward_parent_rtindex == 1);
 
 	mgr.neighbor_matrix.clear();
 	connect(mgr, edge(1, 3, false, true));
 	connect(mgr, edge(2, 3, false, true));
 	CHECK(rpt_find_edge(&mgr, constructed, remaining, forward_depth, backward_depth,
-						&forward_from, &backward_from, &to));
-	CHECK(forward_from == 2 && backward_from == -1);
+						&forward_parent_rtindex, &backward_parent_rtindex, &target_rtindex));
+	CHECK(forward_parent_rtindex == 2 && backward_parent_rtindex == -1);
 }
 
 static void forward_root_includes_unfiltered_fact()
@@ -744,22 +782,22 @@ static void forward_root_includes_unfiltered_fact()
 	connect(analysis, edge(1, 3));
 	RptBuildClasses(&analysis);
 	RptBuildTransferPlan(NULL, &analysis);
-	CHECK(analysis.roots.count(2));
+	CHECK(analysis.root_rtindexes.count(2));
 	RptTransferMgr forward;
 	RptBuildForwardPlan(&analysis, &forward);
-	CHECK(forward.roots.size() == 1 && forward.roots.count(1));
+	CHECK(forward.root_rtindexes.size() == 1 && forward.root_rtindexes.count(1));
 	CHECK(!forward.graph.at(1).forward_stage.in.empty());
 	CHECK(forward.graph.at(1).forward_stage.out.empty());
-	CHECK(forward.reducer_order.size() == 2);
-	CHECK(analysis.roots.count(2));
-	CHECK(analysis.groups.begin()->second.leader_id == 2);
+	CHECK(forward.reducer_order_rtindexes.size() == 2);
+	CHECK(analysis.root_rtindexes.count(2));
+	CHECK(analysis.groups.begin()->second.leader_rtindex == 2);
 	CHECK(forward.backward_consumers.empty());
-	for (const auto &node : forward.graph)
-		CHECK(node.second.backward_stage.in.empty() &&
-			  node.second.backward_stage.out.empty());
+	CHECK(!forward.graph.at(1).backward_stage.out.empty());
+	for (const auto &group : forward.groups)
+		CHECK(group.second.leader_rtindex == 1);
 	/* Rebuilding must discard the previous schedule. */
 	RptBuildForwardPlan(&analysis, &forward);
-	CHECK(forward.reducer_order.size() == 2);
+	CHECK(forward.reducer_order_rtindexes.size() == 2);
 }
 
 static void error_unwinds()
@@ -830,33 +868,30 @@ static void forward_selection_star()
 	RptSelectForward(forward, forward_params(-1, 0), {}, size_one_mib, nullptr, &comps);
 	CHECK(comps.size() == 1);
 	const RptForwardComponent &c = comps[0];
-	CHECK(c.root == 1 && c.accepted && c.reason == "inject");
-	CHECK(!c.chain.empty() && !c.channels.empty());
-	CHECK(std::find(c.chain.begin(), c.chain.end(), 1) == c.chain.end());
-	std::set<uint32> ids;
+	CHECK(c.root_rtindex == 1 && c.accepted && c.reason == "inject");
+	CHECK(!c.chain_rtindexes.empty() && !c.channels.empty());
+	CHECK(std::find(c.chain_rtindexes.begin(), c.chain_rtindexes.end(), 1) == c.chain_rtindexes.end());
 	double cost = 0;
 	bool reaches_root = false;
 	for (const RptForwardChannel &ch : c.channels)
 	{
 		/* producers before consumers: a channel's source precedes its target */
-		auto from = std::find(c.chain.begin(), c.chain.end(), ch.from);
-		CHECK(from != c.chain.end());
-		if (ch.to == c.root)
+		auto source_position = std::find(c.chain_rtindexes.begin(), c.chain_rtindexes.end(), ch.source_rtindex);
+		CHECK(source_position != c.chain_rtindexes.end());
+		if (ch.target_rtindex == c.root_rtindex)
 			reaches_root = true;
 		else
 		{
-			auto to = std::find(c.chain.begin(), c.chain.end(), ch.to);
-			CHECK(to != c.chain.end() && from < to);
+			auto target_position = std::find(c.chain_rtindexes.begin(), c.chain_rtindexes.end(), ch.target_rtindex);
+			CHECK(target_position != c.chain_rtindexes.end() && source_position < target_position);
 		}
-		CHECK(ids.insert(ch.condition_id).second);
-		CHECK(ch.condition_key == "rpt_f_" + std::to_string(ch.from) + "_" + std::to_string(ch.to));
-		CHECK(ch.from_key.rtindex == ch.from && ch.to_key.rtindex == ch.to);
+		CHECK(ch.condition_key.empty()); /* assigned by the shared injector */
+		CHECK(ch.source_key.rtindex == ch.source_rtindex && ch.target_key.rtindex == ch.target_rtindex);
 		CHECK(ch.est_cost_ms > 10.49 && ch.est_cost_ms < 10.51);	/* 3.5 * 3 * 1 MiB */
 		cost += ch.est_cost_ms;
 	}
 	CHECK(reaches_root);
 	CHECK(c.est_cost_ms > cost - 1e-9 && c.est_cost_ms < cost + 1e-9);
-	CHECK(*ids.begin() == 0 && *ids.rbegin() == ids.size() - 1);
 	std::string dump;
 	RptDumpForward(comps, &dump);
 	CHECK(dump.find("forward component root=1") == 0);
@@ -910,7 +945,7 @@ static RptTransferMgr forward_chain(bool colocated)
 	vertex(analysis, 3, 50, true);
 	for (auto &v : analysis.vertices)
 		hash_policy(v);
-	analysis.vertices[analysis.by_rti[2]].distkeys = {(AttrNumber) (colocated ? 2 : 3)};
+	analysis.vertices[analysis.vertex_index_by_rtindex[2]].distkeys = {(AttrNumber) (colocated ? 2 : 3)};
 	connect(analysis, edge(1, 2));
 	connect(analysis, edge(2, 3, false, false, 2, 1));
 	RptBuildClasses(&analysis);
@@ -931,12 +966,12 @@ static bool size_recording(double rows, int64 *elems, int64 *payload, int64 *pla
 
 static double ndv_small_dims(const RptVertexInfo &v, AttrNumber)
 {
-	return v.id == 1 ? 1000 : 100;
+	return v.rtindex == 1 ? 1000 : 100;
 }
 
 static double ndv_large_dims(const RptVertexInfo &v, AttrNumber)
 {
-	return v.id == 1 ? 100 : 1000;
+	return v.rtindex == 1 ? 100 : 1000;
 }
 
 static void forward_selection_chain_and_selectivity()
@@ -952,10 +987,10 @@ static void forward_selection_chain_and_selectivity()
 	sized_rows.clear();
 	RptSelectForward(forward, params, est, size_recording, nullptr, &comps);
 	CHECK(comps.size() == 1 && comps[0].accepted);
-	CHECK(comps[0].chain == std::vector<int>({3, 2}));
+	CHECK(comps[0].chain_rtindexes == std::vector<int>({3, 2}));
 	CHECK(comps[0].channels.size() == 2);
-	CHECK(comps[0].channels[0].from == 3 && comps[0].channels[0].to == 2);
-	CHECK(comps[0].channels[1].from == 2 && comps[0].channels[1].to == 1);
+	CHECK(comps[0].channels[0].source_rtindex == 3 && comps[0].channels[0].target_rtindex == 2);
+	CHECK(comps[0].channels[1].source_rtindex == 2 && comps[0].channels[1].target_rtindex == 1);
 	/* 2 keeps 0.1 of itself times 0.5 from 3; the root keeps what 2 keeps */
 	CHECK(comps[0].est_selectivity > 0.0499 && comps[0].est_selectivity < 0.0501);
 	/* filters are sized for rows after the vertex's own reducer quals */
@@ -1004,8 +1039,8 @@ static void forward_selection_in_process()
 	CHECK(comps[0].accepted && comps[0].channels.size() == 2);
 	const RptForwardChannel &inner = comps[0].channels[0];
 	const RptForwardChannel &into_root = comps[0].channels[1];
-	CHECK(inner.to == 2 && inner.local && inner.in_process && inner.est_cost_ms == 0);
-	CHECK(into_root.to == 1 && !into_root.local && !into_root.in_process);
+	CHECK(inner.target_rtindex == 2 && inner.local && inner.in_process && inner.est_cost_ms == 0);
+	CHECK(into_root.target_rtindex == 1 && !into_root.local && !into_root.in_process);
 	CHECK(comps[0].est_cost_ms > 10.49 && comps[0].est_cost_ms < 10.51);
 	std::string dump;
 	RptDumpForward(comps, &dump);
@@ -1022,6 +1057,23 @@ static void forward_selection_in_process()
 	RptSelectForward(forward, params, {}, size_one_mib, nullptr, &comps);
 	for (const RptForwardChannel &ch : comps[0].channels)
 		CHECK(!ch.local && !ch.in_process);
+}
+
+static void forward_delivery_process_counts()
+{
+	auto schedule = forward_chain(false);
+	auto params = forward_params(-1, 0);
+	params.delivery_ms_per_mib = 0.8;
+	for (const auto &vertex : schedule.vertices)
+		params.main_consumer_processes[vertex.rtindex] = 6;
+	std::vector<RptForwardComponent> components;
+	RptSelectForward(schedule, params, {}, size_one_mib, nullptr, &components);
+	for (const auto &channel : components[0].channels)
+	{
+		double expected = 10.5 + 0.8 *
+			(channel.target_rtindex == components[0].root_rtindex ? 6 : 3);
+		CHECK(std::abs(channel.est_cost_ms - expected) < 1e-6);
+	}
 }
 
 static void qual_function_allowlist()
@@ -1070,8 +1122,93 @@ static void raw_datum_key_types()
 	CHECK(!rpt_equality_clause((Node *) &equality, &out, &in, &keytype));
 }
 
+static void backward_selection()
+{
+	RptTransferMgr schedule;
+	vertex(schedule, 1, 1000, true);
+	vertex(schedule, 2, 10000, false);
+	vertex(schedule, 3, 10000, false);
+	schedule.root_rtindexes.insert(1);
+	RptBackwardConsumer decision;
+	decision.class_key = decision.producer_key = {1, 1};
+	decision.consumer_key = {2, 1};
+	decision.producer_rtindex = 1;
+	decision.consumer_rtindex = 2;
+	decision.producer_slice_index = 1;
+	decision.consumer_slice_index = 2;
+	decision.eligible = decision.strict_eligible = true;
+	decision.estimated_rows_removed = 9000;
+	decision.reason = "eligible";
+	schedule.backward_consumers.push_back(decision);
+	RptForwardParams params = forward_params(-1, 0);
+	params.max_selectivity = 0.35;
+	params.delivery_ms_per_mib = 0.8;
+	std::vector<RptBackwardClass> classes;
+	std::map<int, int> widths = {{1, 3}, {2, 6}}; /* parallel consumer */
+	auto select = [&](RptFilterSizeFn size_fn = size_one_mib,
+					  const std::vector<RptForwardComponent> &forward = {}) {
+		RptSelectBackward(schedule, forward, params, widths, size_fn, &classes);
+	};
+	select();
+	CHECK(classes.size() == 1 && classes[0].accepted);
+	CHECK(classes[0].consumers[0].accepted);
+	CHECK(classes[0].est_cost_ms > 15.29 && classes[0].est_cost_ms < 15.31);
+	CHECK(classes[0].estimated_producer_rows == 1000);
+	params.max_exchange_ms = 15;
+	select();
+	CHECK(!classes[0].accepted && classes[0].reason.find("exchange cost") != std::string::npos);
+	CHECK(!classes[0].consumers[0].accepted);
+	params.max_exchange_ms = -1;
+	schedule.backward_consumers[0].estimated_rows_removed = 0;
+	select();
+	CHECK(!classes[0].accepted);
+	CHECK(classes[0].consumers[0].reason.find("member selectivity") != std::string::npos);
+	RptForwardComponent forward;
+	forward.root_rtindex = 1; forward.accepted = true; forward.est_selectivity = 0.1;
+	select(size_one_mib, {forward});
+	CHECK(classes[0].accepted && classes[0].estimated_producer_rows == 100);
+	CHECK(classes[0].consumers[0].estimated_rows_removed == 9000);
+	select([](double rows, int64 *elems, int64 *payload, int64 *bytes) {
+		*elems = rows; *payload = *bytes = rows * 2; return true;
+	}, {forward});
+	CHECK(classes[0].total_elems == 100 && classes[0].planned_bytes == 200);
+	forward.accepted = false;
+	select(size_one_mib, {forward});
+	CHECK(!classes[0].accepted && classes[0].estimated_producer_rows == 1000);
+	schedule.backward_consumers[0].estimated_rows_removed = -1;
+	select();
+	CHECK(!classes[0].accepted); /* unknown NDV */
+	params.max_selectivity = 1;
+	select();
+	CHECK(classes[0].accepted);
+	params.max_exchange_ms = 0;
+	select(); CHECK(!classes[0].accepted); /* unknown NDV still obeys budget */
+	params.max_exchange_ms = -1;
+	select([](double, int64 *, int64 *, int64 *) { return false; });
+	CHECK(!classes[0].accepted && classes[0].reason == "backward filter sizing declined");
+	widths[1] = 0;
+	select(); CHECK(!classes[0].accepted);
+	widths[1] = 3;
+	widths[2] = 0;
+	select(); CHECK(!classes[0].accepted);
+	widths[2] = 3;
+	schedule.root_rtindexes.clear();
+	select(); CHECK(classes[0].reason == "bridge-led class is deferred");
+	schedule.root_rtindexes.insert(1);
+	/* A refused first member must not hide a later member's producer width. */
+	auto refused = schedule.backward_consumers[0];
+	refused.eligible = false; refused.reason = "backward consumer cap exceeded";
+	refused.producer_slice_index = -1;
+	schedule.backward_consumers.insert(schedule.backward_consumers.begin(), refused);
+	select();
+	CHECK(classes[0].accepted && !classes[0].consumers[0].accepted);
+	CHECK(classes[0].consumers[1].accepted);
+}
+
 int main()
 {
+	forward_delivery_process_counts();
+	backward_selection();
 	raw_datum_key_types();
 	qual_function_allowlist();
 	forward_selection_chain_and_selectivity();

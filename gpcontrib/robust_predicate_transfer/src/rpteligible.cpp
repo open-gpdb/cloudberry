@@ -18,8 +18,7 @@
  * under the License.
  *
  * rpteligible.cpp
- *    Analysis-only backward eligibility and refusal diagnostics. These
- *    proofs are used by the backward eligibility survey.
+ *    Backward eligibility proof shared by runtime injection and the survey.
  *
  * IDENTIFICATION
  *	  gpcontrib/robust_predicate_transfer/src/rpteligible.cpp
@@ -39,7 +38,7 @@ extern "C"
 struct RptPlacement
 {
 	std::vector<Plan *> path;
-	int slice = -1;
+	int slice_index = -1;
 	bool ambiguous = false;
 	bool in_subplan = false;
 };
@@ -50,7 +49,7 @@ struct RptPlacementContext
 	std::set<const Plan *> scans;
 	std::map<const Plan *, RptPlacement> placements;
 	std::vector<Plan *> path;
-	int slice = 0;
+	int slice_index = 0;
 	bool in_subplan = false;
 };
 
@@ -63,9 +62,9 @@ rpt_placement_walker(Node *node, void *context)
 	if (node == NULL)
 		return false;
 	bool list = IsA(node, List) || IsA(node, IntList) || IsA(node, OidList);
-	int saved_slice = ctx->slice;
+	int saved_slice_index = ctx->slice_index;
 	if (IsA(node, Motion))
-		ctx->slice = ((Motion *) node)->motionID;
+		ctx->slice_index = ((Motion *) node)->motionID;
 	if (!list)
 		ctx->path.push_back((Plan *) node);
 	if (ctx->scans.count((Plan *) node))
@@ -77,7 +76,7 @@ rpt_placement_walker(Node *node, void *context)
 		else
 		{
 			placement.path = ctx->path;
-			placement.slice = ctx->slice;
+			placement.slice_index = ctx->slice_index;
 		}
 	}
 	bool result = RptPgCall([&]() {
@@ -85,7 +84,7 @@ rpt_placement_walker(Node *node, void *context)
 	});
 	if (!list)
 		ctx->path.pop_back();
-	ctx->slice = saved_slice;
+	ctx->slice_index = saved_slice_index;
 	return result;
 }
 
@@ -144,19 +143,19 @@ rpt_path_key_slot(const RptPlacement &placement, size_t top, const RptKey &key)
 }
 
 static int
-rpt_path_slice(const RptPlacement &placement, size_t top)
+rpt_path_slice_index(const RptPlacement &placement, size_t top)
 {
-	int slice = 0;
+	int slice_index = 0;
 	for (size_t i = 0; i <= top; ++i)
 		if (IsA(placement.path[i], Motion))
-			slice = ((Motion *) placement.path[i])->motionID;
-	return slice;
+			slice_index = ((Motion *) placement.path[i])->motionID;
+	return slice_index;
 }
 
 static bool
 rpt_resolve_placement(const RptPlacement &placement, size_t top,
 					  const RptKey &key, bool consumer,
-					  Plan **parent, AttrNumber *attno, int *slice)
+					  Plan **parent, AttrNumber *attno, int *slice_index)
 {
 	AttrNumber slot = rpt_path_key_slot(placement, top, key);
 	if (slot <= 0 || placement.path.size() < 2)
@@ -167,14 +166,14 @@ rpt_resolve_placement(const RptPlacement &placement, size_t top,
 	{
 		*parent = placement.path[top - 1];
 		*attno = slot;
-		*slice = placement.slice;
+		*slice_index = placement.slice_index;
 		return outerPlan(*parent) == scan;
 	}
 	bool ok = RptPgCall([&]() {
 		return AnserResolveKeyScan(placement.path[top], slot,
-			rpt_path_slice(placement, top), consumer, parent, &resolved, attno, slice);
+			rpt_path_slice_index(placement, top), consumer, parent, &resolved, attno, slice_index);
 	});
-	return ok && resolved == scan && *slice == placement.slice;
+	return ok && resolved == scan && *slice_index == placement.slice_index;
 }
 
 static const char *
@@ -242,7 +241,7 @@ rpt_prove_consumer(RptBackwardConsumer *decision, const RptKey &producer_key,
 		decision->reason = "scan has multiple plan placements";
 		return;
 	}
-	if (producer.slice < 0 || consumer.slice < 0 || producer.slice == consumer.slice)
+	if (producer.slice_index < 0 || consumer.slice_index < 0 || producer.slice_index == consumer.slice_index)
 	{
 		decision->reason = "same or unknown slice";
 		return;
@@ -276,14 +275,14 @@ rpt_prove_consumer(RptBackwardConsumer *decision, const RptKey &producer_key,
 		}
 		if (!rpt_resolve_placement(producer, build - producer.path.begin(), producer_key,
 								 false, &decision->producer_parent,
-								 &decision->producer_attno, &decision->producer_slice))
+								 &decision->producer_attno, &decision->producer_slice_index))
 		{
 			decision->reason = "unsupported producer key path";
 			continue;
 		}
 		if (!rpt_resolve_placement(consumer, i + 1, consumer_key, true,
 								 &decision->consumer_parent, &decision->consumer_attno,
-								 &decision->consumer_slice))
+								 &decision->consumer_slice_index))
 		{
 			decision->reason = "unsupported consumer key path";
 			continue;
@@ -309,10 +308,10 @@ rpt_cap_backward_consumers(RptTransferMgr *mgr)
 			const auto &left = mgr->backward_consumers[a];
 			const auto &right = mgr->backward_consumers[b];
 			double l = left.estimated_rows_removed >= 0 ? left.estimated_rows_removed :
-				mgr->vertices[mgr->by_rti.at(left.consumer)].cardinality;
+				mgr->vertices[mgr->vertex_index_by_rtindex.at(left.consumer_rtindex)].cardinality;
 			double r = right.estimated_rows_removed >= 0 ? right.estimated_rows_removed :
-				mgr->vertices[mgr->by_rti.at(right.consumer)].cardinality;
-			return l > r || (l == r && left.consumer < right.consumer);
+				mgr->vertices[mgr->vertex_index_by_rtindex.at(right.consumer_rtindex)].cardinality;
+			return l > r || (l == r && left.consumer_rtindex < right.consumer_rtindex);
 		});
 		for (size_t i = rpt_max_backward_consumers; i < indices.size(); ++i)
 		{
@@ -327,20 +326,20 @@ static void
 rpt_consumer_verdicts(RptTransferMgr *mgr)
 {
 	for (const auto &vertex : mgr->vertices)
-		mgr->consumer_ok[vertex.id] = false;
+		mgr->consumer_ok_by_rtindex[vertex.rtindex] = false;
 	std::map<int, bool> all_global;
 	for (const auto &decision : mgr->backward_consumers)
 	{
 		if (decision.local)
 			continue;
-		auto found = all_global.find(decision.consumer);
+		auto found = all_global.find(decision.consumer_rtindex);
 		if (found == all_global.end())
-			all_global[decision.consumer] = decision.eligible;
+			all_global[decision.consumer_rtindex] = decision.eligible;
 		else
 			found->second = found->second && decision.eligible;
 	}
 	for (const auto &entry : all_global)
-		mgr->consumer_ok[entry.first] = entry.second;
+		mgr->consumer_ok_by_rtindex[entry.first] = entry.second;
 }
 
 void
@@ -349,7 +348,7 @@ RptCheckBackwardConsumers(PlannedStmt *stmt, RptTransferMgr *mgr)
 	RptPlacementContext context;
 	for (const auto &vertex : mgr->vertices)
 	{
-		mgr->consumer_ok[vertex.id] = false;
+		mgr->consumer_ok_by_rtindex[vertex.rtindex] = false;
 		context.scans.insert(vertex.scan);
 	}
 	mgr->backward_consumers.clear();
@@ -360,7 +359,7 @@ RptCheckBackwardConsumers(PlannedStmt *stmt, RptTransferMgr *mgr)
 	ListCell *lc;
 	foreach(lc, stmt->subplans)
 	{
-		context.slice = -1;
+		context.slice_index = -1;
 		context.in_subplan = true; /* Motions must not clear the SubPlan refusal. */
 		rpt_placement_walker((Node *) lfirst(lc), &context);
 	}
@@ -374,32 +373,34 @@ RptCheckBackwardConsumers(PlannedStmt *stmt, RptTransferMgr *mgr)
 				RptKey source = edge.right_keys[key];
 				RptKey target = edge.left_keys[key];
 				RptKey rep = RptFindKeyRoot(source, mgr->uf_parent);
-				if (!seen.insert(std::make_pair(edge.destination, rep)).second)
+				if (!seen.insert(std::make_pair(edge.other_rtindex, rep)).second)
 					continue;
 				RptBackwardConsumer decision;
 				decision.class_key = rep;
-				decision.producer = node.first;
-				decision.consumer = edge.destination;
+				decision.producer_key = source;
+				decision.consumer_key = target;
+				decision.producer_rtindex = node.first;
+				decision.consumer_rtindex = edge.other_rtindex;
 				decision.local = edge.local;
 				auto group = mgr->groups.find(rep);
-				auto source_placement = context.placements.find(mgr->vertices[mgr->by_rti.at(node.first)].scan);
-				auto target_placement = context.placements.find(mgr->vertices[mgr->by_rti.at(edge.destination)].scan);
+				auto source_placement = context.placements.find(mgr->vertices[mgr->vertex_index_by_rtindex.at(node.first)].scan);
+				auto target_placement = context.placements.find(mgr->vertices[mgr->vertex_index_by_rtindex.at(edge.other_rtindex)].scan);
 				if ((source_placement != context.placements.end() && source_placement->second.in_subplan) ||
 					(target_placement != context.placements.end() && target_placement->second.in_subplan))
 					decision.reason = "scan inside a SubPlan";
 				else if (edge.local)
 					decision.reason = "local edge uses core runtime filtering";
-				else if (group == mgr->groups.end() || group->second.leader_id != node.first)
+				else if (group == mgr->groups.end() || group->second.leader_rtindex != node.first)
 					decision.reason = "edge has no unprotected equivalence class";
-				else if (!mgr->roots.count(node.first))
+				else if (!mgr->root_rtindexes.count(node.first))
 					decision.reason = "bridge-led class is deferred";
-				else if (!context.placements.count(mgr->vertices[mgr->by_rti.at(node.first)].scan) ||
-						 !context.placements.count(mgr->vertices[mgr->by_rti.at(edge.destination)].scan))
+				else if (!context.placements.count(mgr->vertices[mgr->vertex_index_by_rtindex.at(node.first)].scan) ||
+						 !context.placements.count(mgr->vertices[mgr->vertex_index_by_rtindex.at(edge.other_rtindex)].scan))
 					decision.reason = "scan placement not found";
 				else
 				{
-					const auto &producer = mgr->vertices[mgr->by_rti.at(node.first)];
-					const auto &consumer = mgr->vertices[mgr->by_rti.at(edge.destination)];
+					const auto &producer = mgr->vertices[mgr->vertex_index_by_rtindex.at(node.first)];
+					const auto &consumer = mgr->vertices[mgr->vertex_index_by_rtindex.at(edge.other_rtindex)];
 					rpt_prove_consumer(&decision, source, target,
 						context.placements.at(producer.scan), context.placements.at(consumer.scan));
 					if (decision.strict_eligible)

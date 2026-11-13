@@ -24,6 +24,7 @@
 -- Faults live in rpt_forward_faults.
 CREATE EXTENSION robust_predicate_transfer;
 SET anser.runtime_filter = off;
+SET rpt.backward = off;
 SET statement_timeout = '120s';
 -- Star: two dimensions on two different fact keys (two hops into the root).
 CREATE TABLE rpt_fwd_fact (id int, d1 int, d2 int, v int) DISTRIBUTED RANDOMLY;
@@ -350,4 +351,5 @@ DROP TABLE rpt_fwd_fact, rpt_fwd_d1, rpt_fwd_d2, rpt_fwd_empty,
            rpt_fwd_dl, rpt_fwd_dr, rpt_fwd_sub;
 DROP EXTENSION robust_predicate_transfer;
 RESET anser.runtime_filter;
+RESET rpt.backward;
 RESET statement_timeout;

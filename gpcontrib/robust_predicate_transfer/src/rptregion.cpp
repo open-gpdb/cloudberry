@@ -124,27 +124,25 @@ rpt_scan_is_filtered(const Plan *plan)
 static RptVertexInfo *
 rpt_vertex_for_scan(PlannedStmt *stmt, RptTransferMgr *mgr, Plan *scan)
 {
-	int			rti = ((Scan *) scan)->scanrelid;
+	int			rtindex = ((Scan *) scan)->scanrelid;
 	std::map<int, int>::iterator it;
 	RptVertexInfo v;
 
-	it = mgr->by_rti.find(rti);
-	if (it != mgr->by_rti.end())
+	it = mgr->vertex_index_by_rtindex.find(rtindex);
+	if (it != mgr->vertex_index_by_rtindex.end())
 		return &mgr->vertices[it->second];
 
-	v.id = rti;
+	v.rtindex = rtindex;
 	v.scan = scan;
 	v.cardinality = (int64) scan->plan_rows;
 	v.filtered = rpt_scan_is_filtered(scan);
 	v.intermediate = false;
 	v.unfiltered = false;
 
-	if (rti >= 1 && rti <= list_length(stmt->rtable))
+	if (rtindex >= 1 && rtindex <= list_length(stmt->rtable))
 	{
-		RangeTblEntry *rte = rt_fetch(rti, stmt->rtable);
+		RangeTblEntry *rte = rt_fetch(rtindex, stmt->rtable);
 
-		if (rte->eref != NULL)
-			v.relname = rte->eref->aliasname;
 		if (rte->rtekind == RTE_RELATION)
 		{
 			v.relid = rte->relid;
@@ -160,7 +158,7 @@ rpt_vertex_for_scan(PlannedStmt *stmt, RptTransferMgr *mgr, Plan *scan)
 		}
 	}
 
-	mgr->by_rti[rti] = (int) mgr->vertices.size();
+	mgr->vertex_index_by_rtindex[rtindex] = (int) mgr->vertices.size();
 	mgr->vertices.push_back(v);
 	return &mgr->vertices.back();
 }
@@ -391,7 +389,7 @@ rpt_equality_clause(Node *clause, Var **outer_var, Var **inner_var,
  * Resolve one validated equijoin clause to its two base scans and record the
  * edge between their vertices.
  *
- * left_v/right_v are canonicalized (lower rtindex on the left), not the
+ * left_rtindex/right_rtindex are canonicalized (lower rtindex on the left), not the
  * join's outer/inner: every clause of a vertex pair merges into one
  * RptEdgeInfo and the neighbor matrix is symmetric, so a second join over
  * the same pair with the opposite orientation must land on the same edge
@@ -417,15 +415,15 @@ rpt_add_edge(PlannedStmt *stmt, RptTransferMgr *mgr, JoinType jointype,
 	Plan	   *inner_scan;
 	AttrNumber	outer_key;
 	AttrNumber	inner_key;
-	int			outer_id;
-	int			inner_id;
+	int			outer_rtindex;
+	int			inner_rtindex;
 	RptVertexInfo *outer_v;
 	RptVertexInfo *inner_v;
-	int			left_id;
-	int			right_id;
+	int			left_rtindex;
+	int			right_rtindex;
 	RptKey		left_key;
 	RptKey		right_key;
-	int			protect_id = 0;
+	int			protected_rtindex = 0;
 	RptEdgeInfo *edge;
 
 	/* ANTI, FULL and the GP extras make no usable edge at all. */
@@ -440,8 +438,8 @@ rpt_add_edge(PlannedStmt *stmt, RptTransferMgr *mgr, JoinType jointype,
 							  &inner_scan, &inner_key))
 		return;
 
-	outer_id = ((Scan *) outer_scan)->scanrelid;
-	inner_id = ((Scan *) inner_scan)->scanrelid;
+	outer_rtindex = ((Scan *) outer_scan)->scanrelid;
+	inner_rtindex = ((Scan *) inner_scan)->scanrelid;
 
 	/*
 	 * Create both vertices before taking pointers into mgr.vertices: creating
@@ -449,54 +447,54 @@ rpt_add_edge(PlannedStmt *stmt, RptTransferMgr *mgr, JoinType jointype,
 	 */
 	rpt_vertex_for_scan(stmt, mgr, outer_scan);
 	rpt_vertex_for_scan(stmt, mgr, inner_scan);
-	outer_v = &mgr->vertices[mgr->by_rti[outer_id]];
-	inner_v = &mgr->vertices[mgr->by_rti[inner_id]];
+	outer_v = &mgr->vertices[mgr->vertex_index_by_rtindex[outer_rtindex]];
+	inner_v = &mgr->vertices[mgr->vertex_index_by_rtindex[inner_rtindex]];
 
 	/* The preserved side of an outer join is protected from reduction. */
 	if (jointype == JOIN_LEFT)
-		protect_id = outer_id;
+		protected_rtindex = outer_rtindex;
 	else if (jointype == JOIN_RIGHT)
-		protect_id = inner_id;
+		protected_rtindex = inner_rtindex;
 
-	if (outer_id <= inner_id)
+	if (outer_rtindex <= inner_rtindex)
 	{
-		left_id = outer_id;
-		left_key.rtindex = outer_id;
+		left_rtindex = outer_rtindex;
+		left_key.rtindex = outer_rtindex;
 		left_key.attno = outer_key;
-		right_id = inner_id;
-		right_key.rtindex = inner_id;
+		right_rtindex = inner_rtindex;
+		right_key.rtindex = inner_rtindex;
 		right_key.attno = inner_key;
 	}
 	else
 	{
-		left_id = inner_id;
-		left_key.rtindex = inner_id;
+		left_rtindex = inner_rtindex;
+		left_key.rtindex = inner_rtindex;
 		left_key.attno = inner_key;
-		right_id = outer_id;
-		right_key.rtindex = outer_id;
+		right_rtindex = outer_rtindex;
+		right_key.rtindex = outer_rtindex;
 		right_key.attno = outer_key;
 	}
 
-	edge = &mgr->neighbor_matrix[left_id][right_id];
+	edge = &mgr->neighbor_matrix[left_rtindex][right_rtindex];
 	if (edge->clauses.empty())
 	{
-		edge->left_v = left_id;
-		edge->right_v = right_id;
+		edge->left_rtindex = left_rtindex;
+		edge->right_rtindex = right_rtindex;
 		edge->key_type = key_type;
 		edge->protect_left = false;
 		edge->protect_right = false;
 	}
 	edge->clauses.push_back(std::make_pair(left_key, right_key));
-	if (protect_id == left_id)
+	if (protected_rtindex == left_rtindex)
 		edge->protect_left = true;
-	else if (protect_id == right_id)
+	else if (protected_rtindex == right_rtindex)
 		edge->protect_right = true;
 
-	outer_v->join_keys.insert(outer_id == left_id ? left_key : right_key);
-	inner_v->join_keys.insert(inner_id == left_id ? left_key : right_key);
+	outer_v->join_keys.insert(outer_rtindex == left_rtindex ? left_key : right_key);
+	inner_v->join_keys.insert(inner_rtindex == left_rtindex ? left_key : right_key);
 
 	/* The matrix is symmetric: both directions name the same edge value. */
-	mgr->neighbor_matrix[right_id][left_id] = *edge;
+	mgr->neighbor_matrix[right_rtindex][left_rtindex] = *edge;
 }
 
 /*

@@ -25,7 +25,7 @@
  * first: the AnserXxx entry points we call are resolved at load time from
  * the global symbol table (dfmgr loads modules RTLD_GLOBAL).
  *
- * The planner hook builds forward reducers and logs transfer decisions at
+ * The planner hook injects forward and backward filters and logs decisions at
  * DEBUG1 when rpt.debug is on. rpt_transfer_plan() exposes analysis without
  * injecting filters. debug_noop_initplan adds an empty distributed InitPlan
  * for overhead measurement.
@@ -75,6 +75,7 @@ bool		rpt_forward = true;
 int			rpt_forward_apply = RPT_FORWARD_APPLY_ROOT;
 /* Measured 2026-11-10 on one host with three primaries. */
 double		rpt_forward_ms_per_mib_part = 3.5;
+double		rpt_delivery_ms_per_mib = 0.8;
 double		rpt_forward_max_exchange_ms = 100.0;
 double		rpt_forward_min_root_rows = 10000.0;
 /* The RPT+ paper's lambda (its Algorithm 2 threshold). */
@@ -117,13 +118,13 @@ rpt_analyze(PlannedStmt *stmt, StringInfo out)
 		{
 			RptBuildClasses(&mgr);
 			RptBuildTransferPlan(stmt, &mgr);
-			RptDumpTransferPlan(&mgr, out);
+			RptDumpTransferPlan(stmt, &mgr, out);
 
-			/* What the forward pass would do with this plan, built nothing. */
-			std::string forward_trace;
+			/* Dry-run the configured runtime passes without changing the plan. */
+			std::string injection_trace;
 
-			(void) RptInjectForward(stmt, false, &forward_trace);
-			RptPgCall([&]() { appendStringInfoString(out, forward_trace.c_str()); });
+			(void) RptInject(stmt, false, &injection_trace);
+			RptPgCall([&]() { appendStringInfoString(out, injection_trace.c_str()); });
 		}
 		return;
 	}
@@ -186,7 +187,7 @@ static void
 rpt_define_gucs(void)
 {
 	DefineCustomBoolVariable("rpt.enable",
-							 "Enables RPT+ transfer-plan analysis over Anser.",
+							 "Enables RPT+ runtime filters over Anser.",
 							 "When disabled the planner hook is a pass-through.",
 							 &rpt_enable,
 							 false,
@@ -210,8 +211,8 @@ rpt_define_gucs(void)
 							 NULL, NULL, NULL);
 
 	DefineCustomBoolVariable("rpt.backward",
-							 "Reserves the backward runtime switch.",
-							 "QD-only; backward runtime injection is not implemented.",
+							 "Builds root-to-member backward runtime filters.",
+							 "QD-only; only consumers proven safe to wait are injected.",
 							 &rpt_backward, true, PGC_USERSET, 0,
 							 NULL, NULL, NULL);
 
@@ -235,13 +236,19 @@ rpt_define_gucs(void)
 							 NULL, NULL, NULL);
 
 	DefineCustomRealVariable("rpt.forward_ms_per_mib_part",
-							 "Estimated cost of one global hop per MiB of bitset per producer.",
-							 "The c in c * n_producers * filter_MiB; QD-only.",
+							 "Estimated collection cost per MiB of bitset per producer.",
+							 "Shared by forward and backward exchanges; QD-only.",
 							 &rpt_forward_ms_per_mib_part, 3.5, 0.0, 1.0e6,
 							 PGC_USERSET, 0, NULL, NULL, NULL);
 
+	DefineCustomRealVariable("rpt.delivery_ms_per_mib",
+							 "Estimated delivery cost per consumer process per MiB.",
+							 "Shared by forward and backward exchanges; QD-only.",
+							 &rpt_delivery_ms_per_mib, 0.8, 0.0, 1.0e6,
+							 PGC_USERSET, 0, NULL, NULL, NULL);
+
 	DefineCustomRealVariable("rpt.forward_max_exchange_ms",
-							 "Skips a forward chain whose estimated exchange cost is higher.",
+							 "Skips a forward chain or backward class above this exchange cost.",
 							 "-1 disables the limit; QD-only.",
 							 &rpt_forward_max_exchange_ms, 100.0, -1.0, 1.0e9,
 							 PGC_USERSET, 0, NULL, NULL, NULL);
@@ -253,8 +260,8 @@ rpt_define_gucs(void)
 							 PGC_USERSET, 0, NULL, NULL, NULL);
 
 	DefineCustomRealVariable("rpt.forward_max_selectivity",
-							 "Skips a forward chain expected to keep at least this fraction of the root's rows.",
-							 "Estimated from the reducer quals and column NDVs; 1 disables the check; QD-only.",
+							 "Skips transfers expected to keep at least this fraction of target rows.",
+							 "Shared selectivity threshold for forward roots and backward members; 1 disables the check; QD-only.",
 							 &rpt_forward_max_selectivity, 0.35, 0.0, 1.0,
 							 PGC_USERSET, 0, NULL, NULL, NULL);
 
@@ -394,7 +401,7 @@ rpt_try_noop_initplan(PlannedStmt *stmt)
 
 /* Contain C++ exceptions before returning to the PostgreSQL error handler. */
 static PlannedStmt *
-rpt_build_forward(PlannedStmt *stmt)
+rpt_build_injection(PlannedStmt *stmt)
 {
 	bool pg_error = false;
 	bool out_of_memory = false;
@@ -403,10 +410,10 @@ rpt_build_forward(PlannedStmt *stmt)
 	try
 	{
 		std::string trace;
-		PlannedStmt *result = RptInjectForward(stmt, true, &trace);
+		PlannedStmt *result = RptInject(stmt, true, &trace);
 
 		if (rpt_debug)
-			RptPgCall([&]() { elog(DEBUG1, "rpt forward:\n%s", trace.c_str()); });
+			RptPgCall([&]() { elog(DEBUG1, "rpt injection:\n%s", trace.c_str()); });
 		return result;
 	}
 	catch (const RptPgError &)
@@ -428,15 +435,15 @@ rpt_build_forward(PlannedStmt *stmt)
 		PG_RE_THROW();
 	if (out_of_memory)
 		ereport(ERROR, (errcode(ERRCODE_OUT_OF_MEMORY),
-						errmsg("out of memory building the RPT forward reducer")));
-	ereport(ERROR, (errmsg("RPT forward reducer failed: %s", message)));
+						errmsg("out of memory building the RPT runtime filters")));
+	ereport(ERROR, (errmsg("RPT runtime filters failed: %s", message)));
 	return NULL;
 }
 
 /* Same contract as rpt_try_noop_initplan: the original plan survives any
  * failure, which is reported as a WARNING; only cancellation propagates. */
 static PlannedStmt *
-rpt_try_forward(PlannedStmt *stmt)
+rpt_try_injection(PlannedStmt *stmt)
 {
 	MemoryContext saved_context = CurrentMemoryContext;
 	MemoryContext volatile build_context = NULL;
@@ -445,10 +452,10 @@ rpt_try_forward(PlannedStmt *stmt)
 	PG_TRY();
 	{
 		build_context = AllocSetContextCreate(saved_context,
-											 "RPT forward reducer",
+											 "RPT runtime filters",
 											 ALLOCSET_DEFAULT_SIZES);
 		MemoryContextSwitchTo(build_context);
-		result = rpt_build_forward(stmt);
+		result = rpt_build_injection(stmt);
 		MemoryContextSwitchTo(saved_context);
 		/* Nothing injected: the scratch context holds only garbage. */
 		if (result == stmt)
@@ -467,7 +474,7 @@ rpt_try_forward(PlannedStmt *stmt)
 			MemoryContextDelete(build_context);
 		if (error->sqlerrcode == ERRCODE_QUERY_CANCELED)
 			ReThrowError(error);
-		ereport(WARNING, (errmsg("RPT forward reducer skipped: %s", error->message)));
+		ereport(WARNING, (errmsg("RPT runtime filters skipped: %s", error->message)));
 		FreeErrorData(error);
 		result = stmt;
 	}
@@ -501,12 +508,12 @@ rpt_planner(Query *parse, const char *query_string, int cursorOptions,
 		result->planTree != NULL)
 		rpt_log_analysis(result);
 
-	if (rpt_enable && rpt_forward && !rpt_suppress_injection &&
+	if (rpt_enable && (rpt_forward || rpt_backward) && !rpt_suppress_injection &&
 		Gp_role == GP_ROLE_DISPATCH &&
 		result != NULL && result->commandType == CMD_SELECT &&
 		result->planTree != NULL && result->intoClause == NULL &&
 		result->copyIntoClause == NULL && result->refreshClause == NULL)
-		result = rpt_try_forward(result);
+		result = rpt_try_injection(result);
 
 	if (rpt_debug_noop_initplan && Gp_role == GP_ROLE_DISPATCH &&
 		result != NULL && result->commandType == CMD_SELECT && result->planTree != NULL)

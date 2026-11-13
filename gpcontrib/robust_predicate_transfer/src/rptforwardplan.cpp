@@ -51,26 +51,26 @@ extern "C"
 
 /* Every vertex whose filters can reach `root` through forward edges. */
 static std::set<int>
-rpt_forward_members(const RptTransferMgr &forward, int root)
+rpt_forward_member_rtindexes(const RptTransferMgr &forward, int root_rtindex)
 {
-	std::set<int> members;
-	std::vector<int> queue(1, root);
+	std::set<int> member_rtindexes;
+	std::vector<int> pending_rtindexes(1, root_rtindex);
 
-	members.insert(root);
-	while (!queue.empty())
+	member_rtindexes.insert(root_rtindex);
+	while (!pending_rtindexes.empty())
 	{
-		int			node = queue.back();
-		auto		it = forward.graph.find(node);
+		int			rtindex = pending_rtindexes.back();
+		auto		it = forward.graph.find(rtindex);
 
-		queue.pop_back();
+		pending_rtindexes.pop_back();
 		if (it == forward.graph.end())
 			continue;
-		/* An in-edge's destination field names the producing side. */
+		/* An in-edge's other_rtindex names the producing side. */
 		for (const RptGraphEdge &in : it->second.forward_stage.in)
-			if (members.insert(in.destination).second)
-				queue.push_back(in.destination);
+			if (member_rtindexes.insert(in.other_rtindex).second)
+				pending_rtindexes.push_back(in.other_rtindex);
 	}
-	return members;
+	return member_rtindexes;
 }
 
 /* The fraction of `to` rows a filter from `from` keeps. */
@@ -78,10 +78,10 @@ static double
 rpt_transfer_keep(const RptTransferMgr &forward, const RptForwardChannel &ch,
 				  double from_keep, RptNdvFn ndv_fn)
 {
-	double		d = ndv_fn ? ndv_fn(forward.vertices[forward.by_rti.at(ch.from)],
-									ch.from_key.attno) : -1;
-	double		n = ndv_fn ? ndv_fn(forward.vertices[forward.by_rti.at(ch.to)],
-									ch.to_key.attno) : -1;
+	double		d = ndv_fn ? ndv_fn(forward.vertices[forward.vertex_index_by_rtindex.at(ch.source_rtindex)],
+									ch.source_key.attno) : -1;
+	double		n = ndv_fn ? ndv_fn(forward.vertices[forward.vertex_index_by_rtindex.at(ch.target_rtindex)],
+									ch.target_key.attno) : -1;
 
 	if (d > 0 && n > 0 && d < n)
 		return from_keep * d / n;
@@ -94,38 +94,37 @@ RptSelectForward(const RptTransferMgr &forward, const RptForwardParams &params,
 				 RptFilterSizeFn size_fn, RptNdvFn ndv_fn,
 				 std::vector<RptForwardComponent> *out)
 {
-	uint32		next_condition = 0;
 
 	out->clear();
-	for (int root : forward.roots)
+	for (int root_rtindex : forward.root_rtindexes)
 	{
 		RptForwardComponent comp;
-		std::set<int> members = rpt_forward_members(forward, root);
+		std::set<int> member_rtindexes = rpt_forward_member_rtindexes(forward, root_rtindex);
 		std::map<int, double> keep;	/* chain vertex -> fraction it keeps */
 		bool		sized = true;
 
-		comp.root = root;
+		comp.root_rtindex = root_rtindex;
 
 		/* reducer_order is already topological: producers before consumers. */
-		for (int id : forward.reducer_order)
-			if (id != root && members.count(id))
-				comp.chain.push_back(id);
+		for (int rtindex : forward.reducer_order_rtindexes)
+			if (rtindex != root_rtindex && member_rtindexes.count(rtindex))
+				comp.chain_rtindexes.push_back(rtindex);
 
-		for (int id : comp.chain)
+		for (int rtindex : comp.chain_rtindexes)
 		{
-			const RptGraphNode &node = forward.graph.at(id);
-			const RptVertexInfo &source = forward.vertices[forward.by_rti.at(id)];
-			auto		e = est.find(id);
+			const RptGraphNode &node = forward.graph.at(rtindex);
+			const RptVertexInfo &source = forward.vertices[forward.vertex_index_by_rtindex.at(rtindex)];
+			auto		e = est.find(rtindex);
 			double		rows = (e != est.end() && e->second.rows >= 0)
 				? e->second.rows : (double) source.cardinality;
 			double		own = e != est.end() ? e->second.selectivity : 1.0;
 			double		k = own;
 
-			/* In-channels of id were made by earlier chain vertices. */
+			/* In-channels of this rtindex were made by earlier chain vertices. */
 			for (const RptForwardChannel &in : comp.channels)
-				if (in.to == id)
-					k *= rpt_transfer_keep(forward, in, keep[in.from], ndv_fn);
-			keep[id] = k;
+				if (in.target_rtindex == rtindex)
+					k *= rpt_transfer_keep(forward, in, keep[in.source_rtindex], ndv_fn);
+			keep[rtindex] = k;
 
 			for (const RptGraphEdge &edge : node.forward_stage.out)
 			{
@@ -133,12 +132,12 @@ RptSelectForward(const RptTransferMgr &forward, const RptForwardParams &params,
 
 				if (edge.left_keys.empty() || edge.right_keys.empty())
 					continue;
-				ch.from = id;
-				ch.to = edge.destination;
-				ch.from_key = edge.left_keys[0];	/* out-edge: left = this side */
-				ch.to_key = edge.right_keys[0];
+				ch.source_rtindex = rtindex;
+				ch.target_rtindex = edge.other_rtindex;
+				ch.source_key = edge.left_keys[0];	/* out-edge: left = this side */
+				ch.target_key = edge.right_keys[0];
 				ch.local = edge.local;
-				ch.in_process = ch.local && ch.to != root && !params.apply_all;
+				ch.in_process = ch.local && ch.target_rtindex != root_rtindex && !params.apply_all;
 
 				/* Sized for what the reducer scan inserts: its rows after its
 				 * own quals -- all of them when the quals were dropped. */
@@ -146,13 +145,24 @@ RptSelectForward(const RptTransferMgr &forward, const RptForwardParams &params,
 							 &ch.max_payload, &ch.planned_bytes))
 				{
 					comp.reason = "filter sizing declined for " +
-						std::to_string(ch.from) + "->" + std::to_string(ch.to);
+						std::to_string(ch.source_rtindex) + "->" + std::to_string(ch.target_rtindex);
 					sized = false;
 					break;
 				}
 				if (!ch.in_process)
-					ch.est_cost_ms = params.ms_per_mib_part * params.width *
+					{
+					/* One reducer consumer, plus a main-plan consumer for
+					 * root edges or forward_apply=all. */
+					auto processes = params.main_consumer_processes.find(ch.target_rtindex);
+					int main_width = processes == params.main_consumer_processes.end()
+						? params.width : processes->second;
+					int deliveries = (ch.target_rtindex != root_rtindex ? params.width : 0) +
+						(ch.target_rtindex == root_rtindex || params.apply_all ? main_width : 0);
+					ch.est_cost_ms =
+						(params.ms_per_mib_part * params.width +
+						 params.delivery_ms_per_mib * deliveries) *
 						((double) ch.planned_bytes / (1024.0 * 1024.0));
+				}
 				comp.est_cost_ms += ch.est_cost_ms;
 				comp.channels.push_back(ch);
 			}
@@ -161,10 +171,10 @@ RptSelectForward(const RptTransferMgr &forward, const RptForwardParams &params,
 		}
 
 		for (const RptForwardChannel &ch : comp.channels)
-			if (ch.to == root)
-				comp.est_selectivity *= rpt_transfer_keep(forward, ch, keep[ch.from], ndv_fn);
+			if (ch.target_rtindex == root_rtindex)
+				comp.est_selectivity *= rpt_transfer_keep(forward, ch, keep[ch.source_rtindex], ndv_fn);
 
-		const RptVertexInfo &rootv = forward.vertices[forward.by_rti.at(root)];
+		const RptVertexInfo &rootv = forward.vertices[forward.vertex_index_by_rtindex.at(root_rtindex)];
 
 		if (!sized)
 			;					/* reason already set */
@@ -182,12 +192,6 @@ RptSelectForward(const RptTransferMgr &forward, const RptForwardParams &params,
 		{
 			comp.accepted = true;
 			comp.reason = "inject";
-			for (RptForwardChannel &ch : comp.channels)
-			{
-				ch.condition_id = next_condition++;
-				ch.condition_key = "rpt_f_" + std::to_string(ch.from) + "_" +
-					std::to_string(ch.to);
-			}
 		}
 		out->push_back(comp);
 	}
@@ -201,16 +205,16 @@ RptDumpForward(const std::vector<RptForwardComponent> &components, std::string *
 	text << std::fixed << std::setprecision(3);
 	for (const RptForwardComponent &comp : components)
 	{
-		text << "forward component root=" << comp.root << " chain=[";
-		for (size_t i = 0; i < comp.chain.size(); ++i)
-			text << (i ? " " : "") << comp.chain[i];
+		text << "forward component root=" << comp.root_rtindex << " chain=[";
+		for (size_t i = 0; i < comp.chain_rtindexes.size(); ++i)
+			text << (i ? " " : "") << comp.chain_rtindexes[i];
 		text << "] channels=" << comp.channels.size()
 			 << " est_cost_ms=" << comp.est_cost_ms
 			 << " est_sel=" << comp.est_selectivity
 			 << " decision=" << comp.reason << '\n';
 		for (const RptForwardChannel &ch : comp.channels)
-			text << "forward channel " << ch.from_key.rtindex << '.' << ch.from_key.attno
-				 << "->" << ch.to_key.rtindex << '.' << ch.to_key.attno
+			text << "forward channel " << ch.source_key.rtindex << '.' << ch.source_key.attno
+				 << "->" << ch.target_key.rtindex << '.' << ch.target_key.attno
 				 << " key=" << (ch.condition_key.empty() ? "-" : ch.condition_key)
 				 << " bytes=" << ch.planned_bytes
 				 << " est_ms=" << ch.est_cost_ms

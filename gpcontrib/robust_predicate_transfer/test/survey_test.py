@@ -55,6 +55,19 @@ class SurveyTests(unittest.TestCase):
         self.assertEqual(metrics["anser_optimizer_used"], "GPORCA")
         self.assertEqual(metrics["known_rows_removed"], 250)
 
+    def test_largest_root_runtime_metrics_are_separate(self):
+        dump = ("survey classes=1 root_classes=1 global_edges=1 rule9=1 strict=1 eligible=1 "
+                "known_rows_removed=90 unknown_estimates=0\n"
+                "runtime survey classes=2 root_classes=1 strict=2 eligible=1\n"
+                "backward consumer 2 root=1 rep=1.1 decision=inject\n"
+                "backward consumer 3 root=1 rep=1.1 decision=backward consumer cap exceeded\n")
+        result = survey.parse_dump(dump)
+        self.assertEqual(result["classes"], 1)
+        self.assertEqual(result["runtime_classes"], 2)
+        self.assertEqual(result["runtime_strict"], 2)
+        self.assertEqual(result["runtime_injected_consumers"], 1)
+        self.assertEqual(result["runtime_refusals"], {"backward consumer cap exceeded": 1})
+
     def test_incomplete_output_cannot_be_reported_as_zero(self):
         with self.assertRaises(ValueError):
             survey.parse_output(survey.BEGIN_DUMP + "\nno transfer regions\n")
@@ -66,7 +79,7 @@ class SurveyTests(unittest.TestCase):
         sql = survey.survey_sql("SELECT 'O''Brien' -- trailing comment", "on", 1000, "imdb,public")
         self.assertIn("BEGIN READ ONLY;", sql)
         self.assertIn("SET LOCAL rpt.enable = off;", sql)
-        self.assertIn("SET LOCAL rpt.backward = off;", sql)
+        self.assertIn("SET LOCAL rpt.backward = on;", sql)
         self.assertIn("SET LOCAL anser.runtime_filter = on;", sql)
         self.assertIn("EXPLAIN (FORMAT JSON) SELECT 'O''Brien' -- trailing comment\n;", sql)
         self.assertNotIn("EXPLAIN ANALYZE", sql)

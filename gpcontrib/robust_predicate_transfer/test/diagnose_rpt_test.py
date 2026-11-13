@@ -26,8 +26,8 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "scripts" / "diagnose_forward.py"
-spec = importlib.util.spec_from_file_location("diagnose_forward", SCRIPT)
+SCRIPT = ROOT / "scripts" / "diagnose_rpt.py"
+spec = importlib.util.spec_from_file_location("diagnose_rpt", SCRIPT)
 diag = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(diag)
 
@@ -40,12 +40,33 @@ class DiagnosticTest(unittest.TestCase):
         self.assertIn("RPT STEP explain analyze=% SQL=%", output)
         self.assertIn("RPT STEP results rpt=% SQL=%", output)
         self.assertIn("RPT STEP transfer_plan SQL=%", output)
-        self.assertIn("RETURN public.rpt_transfer_plan(q);", output)
+        self.assertIn("dump := public.rpt_transfer_plan(q);", output)
         self.assertIn("RPT STEP SPI local chain", output)
 
     def test_changed_fixture_fails_instead_of_silently_losing_markers(self):
         with self.assertRaises(ValueError):
             diag.instrument_sql("SELECT 1;")
+
+    def test_backward_decision_summary(self):
+        dump = """backward consumer 2 producer 1 eligible=yes reason=eligible
+backward class root=1 rep=1.2 consumers=1 bytes=1048576 est_cost_ms=12.900 decision=inject
+backward consumer 2 root=1 rep=1.2 key=rpt_b_1_1_2 defer_first=yes rows_removed=98 decision=inject
+backward consumer 3 root=1 rep=1.2 key=- defer_first=no rows_removed=-1 decision=sort between consumer and join
+"""
+        report = diag.summarize_dump(dump)
+        self.assertEqual(report["classes"], 1)
+        self.assertEqual(report["injected_consumers"], 1)
+        self.assertEqual(report["refused_consumers"], {"sort between consumer and join": 1})
+        self.assertAlmostEqual(report["estimated_cost_ms"], 12.9)
+        log = "NOTICE: RPT DUMP BEGIN SQL=SELECT 1\nNOTICE: " + dump + "NOTICE: RPT DUMP END\n"
+        self.assertEqual(diag.summarize_log(log), [dict(sql="SELECT 1", **report)])
+
+    def test_backward_instrumentation(self):
+        for suite in ("backward", "backward_faults"):
+            output = diag.instrument_sql((ROOT / "sql" / ("rpt_" + suite + ".sql")).read_text(), suite)
+            self.assertIn("RPT DUMP BEGIN SQL=%", output)
+            self.assertIn("RPT STEP results SQL=%", output)
+            self.assertIn("RAISE EXCEPTION", output)
 
     def run_fixture(self, hangs):
         with tempfile.TemporaryDirectory() as directory:

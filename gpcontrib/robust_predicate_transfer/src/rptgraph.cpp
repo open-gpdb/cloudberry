@@ -81,18 +81,18 @@ RptKey
 RptFindKeyRoot(const RptKey &key, std::map<RptKey, RptKey> &uf_parent)
 {
 	std::map<RptKey, RptKey>::iterator it = uf_parent.find(key);
-	RptKey		root;
+	RptKey		representative_key;
 
 	if (it == uf_parent.end())
 		return key;
 
-	root = it->second;
-	if (!(root == key))
+	representative_key = it->second;
+	if (!(representative_key == key))
 	{
-		root = RptFindKeyRoot(root, uf_parent);
-		uf_parent[key] = root;	/* path compression */
+		representative_key = RptFindKeyRoot(representative_key, uf_parent);
+		uf_parent[key] = representative_key;	/* path compression */
 	}
-	return root;
+	return representative_key;
 }
 
 /*
@@ -122,9 +122,9 @@ rpt_union_keys(const RptKey &a, const RptKey &b, Oid key_type,
 	{
 		RptKeyGroup	group;
 
-		group.leader_id = -1;
+		group.leader_rtindex = -1;
 		group.key_type = key_type;
-		group.members.insert(a.rtindex);
+		group.member_rtindexes.insert(a.rtindex);
 		ga = mgr->groups.insert(std::make_pair(root_a, group)).first;
 	}
 
@@ -133,14 +133,14 @@ rpt_union_keys(const RptKey &a, const RptKey &b, Oid key_type,
 	{
 		RptKeyGroup	group;
 
-		group.leader_id = -1;
+		group.leader_rtindex = -1;
 		group.key_type = key_type;
-		group.members.insert(b.rtindex);
+		group.member_rtindexes.insert(b.rtindex);
 		gb = mgr->groups.insert(std::make_pair(root_b, group)).first;
 	}
 
-	ga->second.members.insert(gb->second.members.begin(),
-							  gb->second.members.end());
+	ga->second.member_rtindexes.insert(gb->second.member_rtindexes.begin(),
+							  gb->second.member_rtindexes.end());
 	mgr->groups.erase(root_b);
 }
 
@@ -199,27 +199,27 @@ rpt_classify_tables(RptTransferMgr *mgr)
 
 /* Helper: check whether data can flow from one table to another */
 static bool
-rpt_can_flow(const RptEdgeInfo *e, int from_v, int to_v)
+rpt_can_flow(const RptEdgeInfo *e, int source_rtindex, int target_rtindex)
 {
-	if (e->left_v == from_v && e->right_v == to_v)
+	if (e->left_rtindex == source_rtindex && e->right_rtindex == target_rtindex)
 		return !e->protect_right;	/* Left → Right allowed if not protected */
-	if (e->right_v == from_v && e->left_v == to_v)
+	if (e->right_rtindex == source_rtindex && e->left_rtindex == target_rtindex)
 		return !e->protect_left;	/* Right → Left allowed if not protected */
 	return false;
 }
 
 /* Helper: get the key on vertex t's side of one clause of edge e */
 static const RptKey &
-rpt_key_at(const RptEdgeInfo *e, size_t clause, int t)
+rpt_key_at(const RptEdgeInfo *e, size_t clause, int rtindex)
 {
-	return (e->left_v == t) ? e->clauses[clause].first : e->clauses[clause].second;
+	return (e->left_rtindex == rtindex) ? e->clauses[clause].first : e->clauses[clause].second;
 }
 
 /* Helper: get the key on the side opposite vertex t in one clause of edge e */
 static const RptKey &
-rpt_key_opposite(const RptEdgeInfo *e, size_t clause, int t)
+rpt_key_opposite(const RptEdgeInfo *e, size_t clause, int rtindex)
 {
-	return (e->left_v == t) ? e->clauses[clause].second : e->clauses[clause].first;
+	return (e->left_rtindex == rtindex) ? e->clauses[clause].second : e->clauses[clause].first;
 }
 
 /*
@@ -263,8 +263,8 @@ rpt_merge_clauses(RptEdgeInfo *old, const RptEdgeInfo &other, bool reversed)
 static bool
 rpt_upsert_edge(RptTransferMgr *mgr, const RptEdgeInfo &ne)
 {
-	int			i = ne.left_v;
-	int			j = ne.right_v;
+	int			i = ne.left_rtindex;
+	int			j = ne.right_rtindex;
 	std::map<int, RptEdgeInfo>::iterator ij;
 	bool		exists = false;
 	bool		changed = false;
@@ -280,10 +280,10 @@ rpt_upsert_edge(RptTransferMgr *mgr, const RptEdgeInfo &ne)
 		 */
 		RptEdgeInfo before = ij->second;
 
-		bool		same = (ij->second.left_v == ne.left_v &&
-							ij->second.right_v == ne.right_v);
-		bool		rev = (ij->second.left_v == ne.right_v &&
-						   ij->second.right_v == ne.left_v);
+		bool		same = (ij->second.left_rtindex == ne.left_rtindex &&
+							ij->second.right_rtindex == ne.right_rtindex);
+		bool		rev = (ij->second.left_rtindex == ne.right_rtindex &&
+						   ij->second.right_rtindex == ne.left_rtindex);
 
 		if (same)
 		{
@@ -328,31 +328,31 @@ rpt_upsert_edge(RptTransferMgr *mgr, const RptEdgeInfo &ne)
 static void
 rpt_skip_unfiltered(RptTransferMgr *mgr)
 {
-	std::vector<int> unfiltered_ids;
-	std::vector<int> intermediate_ids;
+	std::vector<int> unfiltered_rtindexes;
+	std::vector<int> intermediate_rtindexes;
 	size_t		i;
 	bool		changed;
 
-	/* Sorted id lists keep the iteration (and hence the dumps) deterministic. */
+	/* Sorted range-table indexes keep iteration and dumps deterministic. */
 	for (i = 0; i < mgr->vertices.size(); i++)
 	{
 		if (mgr->vertices[i].unfiltered)
-			unfiltered_ids.push_back(mgr->vertices[i].id);
+			unfiltered_rtindexes.push_back(mgr->vertices[i].rtindex);
 		else if (mgr->vertices[i].intermediate)
-			intermediate_ids.push_back(mgr->vertices[i].id);
+			intermediate_rtindexes.push_back(mgr->vertices[i].rtindex);
 	}
-	std::sort(unfiltered_ids.begin(), unfiltered_ids.end());
-	std::sort(intermediate_ids.begin(), intermediate_ids.end());
+	std::sort(unfiltered_rtindexes.begin(), unfiltered_rtindexes.end());
+	std::sort(intermediate_rtindexes.begin(), intermediate_rtindexes.end());
 
 	/* 1) Iteratively skip unfiltered tables until no new edges are added. */
 	do
 	{
 		changed = false;
 
-		for (i = 0; i < unfiltered_ids.size(); i++)
+		for (i = 0; i < unfiltered_rtindexes.size(); i++)
 		{
-			int			t = unfiltered_ids[i];
-			std::map<int, RptEdgeInfo> &adj = mgr->neighbor_matrix[t];
+			int			rtindex = unfiltered_rtindexes[i];
+			std::map<int, RptEdgeInfo> &adj = mgr->neighbor_matrix[rtindex];
 			std::map<RptKey, std::vector<RptEdgeClause> > incoming_by_col;
 			std::vector<RptEdgeInfo *> outgoing;
 			std::map<int, RptEdgeInfo>::iterator pit;
@@ -365,8 +365,8 @@ rpt_skip_unfiltered(RptTransferMgr *mgr)
 				RptEdgeInfo *e = &pit->second;
 				size_t		c;
 
-				if (mgr->vertices[mgr->by_rti[pit->first]].unfiltered ||
-					!rpt_can_flow(e, pit->first, t))
+				if (mgr->vertices[mgr->vertex_index_by_rtindex[pit->first]].unfiltered ||
+					!rpt_can_flow(e, pit->first, rtindex))
 					continue;
 				for (c = 0; c < e->clauses.size(); c++)
 				{
@@ -374,14 +374,14 @@ rpt_skip_unfiltered(RptTransferMgr *mgr)
 
 					ref.edge = e;
 					ref.clause = c;
-					incoming_by_col[rpt_key_at(e, c, t)].push_back(ref);
+					incoming_by_col[rpt_key_at(e, c, rtindex)].push_back(ref);
 				}
 			}
 
 			/* ---- Step 2: collect all outgoing edges t → neighbor ---- */
 			for (pit = adj.begin(); pit != adj.end(); ++pit)
 			{
-				if (rpt_can_flow(&pit->second, t, pit->first))
+				if (rpt_can_flow(&pit->second, rtindex, pit->first))
 					outgoing.push_back(&pit->second);
 			}
 
@@ -405,32 +405,32 @@ rpt_skip_unfiltered(RptTransferMgr *mgr)
 						int			src_v;
 						int			dst_v;
 
-						if (!(rpt_key_at(out_e, oc, t) == git->first))
+						if (!(rpt_key_at(out_e, oc, rtindex) == git->first))
 							continue;	/* must be same join key */
 
 						/* src is the carrier: in_e's side opposite t */
-						src_v = (in_e->left_v == t) ? in_e->right_v : in_e->left_v;
+						src_v = (in_e->left_rtindex == rtindex) ? in_e->right_rtindex : in_e->left_rtindex;
 
-						ne.left_v = src_v;
+						ne.left_rtindex = src_v;
 						ne.key_type = out_e->key_type;
 						ne.protect_left = false;
 						ne.protect_right = false;
 
-						if (out_e->left_v == t)
+						if (out_e->left_rtindex == rtindex)
 						{
 							/* t is left side of out_e */
-							dst_v = out_e->right_v;
-							ne.right_v = dst_v;
-							ne.clauses.push_back(std::make_pair(rpt_key_opposite(in_e, rep.clause, t),
+							dst_v = out_e->right_rtindex;
+							ne.right_rtindex = dst_v;
+							ne.clauses.push_back(std::make_pair(rpt_key_opposite(in_e, rep.clause, rtindex),
 																out_e->clauses[oc].second));
 							ne.protect_left = true; /* disable reverse flow (R → L) */
 						}
 						else
 						{
 							/* t is right side of out_e */
-							dst_v = out_e->left_v;
-							ne.right_v = dst_v;
-							ne.clauses.push_back(std::make_pair(rpt_key_opposite(in_e, rep.clause, t),
+							dst_v = out_e->left_rtindex;
+							ne.right_rtindex = dst_v;
+							ne.clauses.push_back(std::make_pair(rpt_key_opposite(in_e, rep.clause, rtindex),
 																out_e->clauses[oc].first));
 
 							ne.protect_left = true; /* disable dst -> src */
@@ -449,7 +449,7 @@ rpt_skip_unfiltered(RptTransferMgr *mgr)
 			{
 				RptEdgeInfo *e = outgoing[j];
 
-				if (e->left_v == t)
+				if (e->left_rtindex == rtindex)
 				{
 					if (!e->protect_right)
 					{
@@ -476,14 +476,14 @@ rpt_skip_unfiltered(RptTransferMgr *mgr)
 				if (e->protect_left && e->protect_right)
 				{
 					++pit;
-					mgr->neighbor_matrix[t].erase(nbr);
-					mgr->neighbor_matrix[nbr].erase(t);
+					mgr->neighbor_matrix[rtindex].erase(nbr);
+					mgr->neighbor_matrix[nbr].erase(rtindex);
 					changed = true;
 				}
 				else
 				{
 					/* keep the reverse matrix entry in sync */
-					mgr->neighbor_matrix[nbr][t] = *e;
+					mgr->neighbor_matrix[nbr][rtindex] = *e;
 					++pit;
 				}
 			}
@@ -495,10 +495,10 @@ rpt_skip_unfiltered(RptTransferMgr *mgr)
 	 * should not have out-edge.  (The artifact's comment says "any in-edge"
 	 * but its code -- and ours -- does this when no in-edge is left.)
 	 */
-	for (i = 0; i < intermediate_ids.size(); i++)
+	for (i = 0; i < intermediate_rtindexes.size(); i++)
 	{
-		int			t = intermediate_ids[i];
-		std::map<int, RptEdgeInfo> &adj = mgr->neighbor_matrix[t];
+		int			rtindex = intermediate_rtindexes[i];
+		std::map<int, RptEdgeInfo> &adj = mgr->neighbor_matrix[rtindex];
 		std::map<RptKey, std::vector<RptEdgeClause> > incoming_by_col;
 		std::map<int, RptEdgeInfo>::iterator pit;
 		size_t		c;
@@ -508,7 +508,7 @@ rpt_skip_unfiltered(RptTransferMgr *mgr)
 		{
 			RptEdgeInfo *e = &pit->second;
 
-			if (!rpt_can_flow(e, pit->first, t))
+			if (!rpt_can_flow(e, pit->first, rtindex))
 				continue;
 			for (c = 0; c < e->clauses.size(); c++)
 			{
@@ -516,7 +516,7 @@ rpt_skip_unfiltered(RptTransferMgr *mgr)
 
 				ref.edge = e;
 				ref.clause = c;
-				incoming_by_col[rpt_key_at(e, c, t)].push_back(ref);
+				incoming_by_col[rpt_key_at(e, c, rtindex)].push_back(ref);
 			}
 		}
 
@@ -526,9 +526,9 @@ rpt_skip_unfiltered(RptTransferMgr *mgr)
 			{
 				RptEdgeInfo *e = &pit->second;
 
-				if (!rpt_can_flow(e, t, pit->first))
+				if (!rpt_can_flow(e, rtindex, pit->first))
 					continue;
-				if (e->left_v == t)
+				if (e->left_rtindex == rtindex)
 					e->protect_right = true;	/* block Left→Right */
 				else
 					e->protect_left = true; /* block Right→Left */
@@ -542,13 +542,13 @@ rpt_skip_unfiltered(RptTransferMgr *mgr)
 				if (e->protect_left && e->protect_right)
 				{
 					++pit;
-					mgr->neighbor_matrix[t].erase(nbr);
-					mgr->neighbor_matrix[nbr].erase(t);
+					mgr->neighbor_matrix[rtindex].erase(nbr);
+					mgr->neighbor_matrix[nbr].erase(rtindex);
 				}
 				else
 				{
 					/* keep the reverse matrix entry in sync */
-					mgr->neighbor_matrix[nbr][t] = *e;
+					mgr->neighbor_matrix[nbr][rtindex] = *e;
 					++pit;
 				}
 			}
@@ -610,18 +610,18 @@ RptBuildClasses(RptTransferMgr *mgr)
 				if (keys[i].rtindex == keys[j].rtindex)
 					continue;
 				RptEdgeInfo edge;
-				edge.left_v = keys[i].rtindex;
-				edge.right_v = keys[j].rtindex;
+				edge.left_rtindex = keys[i].rtindex;
+				edge.right_rtindex = keys[j].rtindex;
 				edge.key_type = group.second.key_type;
 				edge.protect_left = edge.protect_right = false;
 				edge.clauses.push_back(std::make_pair(keys[i], keys[j]));
-				const auto &existing_row = mgr->neighbor_matrix.find(edge.left_v);
+				const auto &existing_row = mgr->neighbor_matrix.find(edge.left_rtindex);
 				if (existing_row != mgr->neighbor_matrix.end())
 				{
-					const auto &existing = existing_row->second.find(edge.right_v);
+					const auto &existing = existing_row->second.find(edge.right_rtindex);
 					if (existing != existing_row->second.end())
 					{
-						bool reversed = existing->second.left_v != edge.left_v;
+						bool reversed = existing->second.left_rtindex != edge.left_rtindex;
 						auto clause = reversed ? std::make_pair(keys[j], keys[i]) :
 							std::make_pair(keys[i], keys[j]);
 						if (std::find(existing->second.clauses.begin(),
