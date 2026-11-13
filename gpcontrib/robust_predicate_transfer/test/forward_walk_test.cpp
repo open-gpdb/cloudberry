@@ -93,6 +93,18 @@ int main()
 	CHECK(!rpt_has_runtime_filters(&stmt));
 	anser_node = &marker.scan.plan;
 	CHECK(rpt_has_runtime_filters(&stmt));
+	/* The parent walk shares the statement lookup context and preserves
+	 * ambiguous placements as refusals rather than choosing the last one. */
+	std::set<Plan *> targets = {&marker.scan.plan};
+	std::map<Plan *, int> slices;
+	auto parents = rpt_find_parents(&stmt, targets, &slices);
+	CHECK(parents.empty()); /* SubPlan lookup does not enter its plan. */
+	root.plan.lefttree = &marker.scan.plan;
+	parents = rpt_find_parents(&stmt, targets, &slices);
+	CHECK(parents.at(&marker.scan.plan) == &root.plan);
+	root.plan.righttree = &marker.scan.plan;
+	parents = rpt_find_parents(&stmt, targets, &slices);
+	CHECK(parents.at(&marker.scan.plan) == NULL);
 	CHECK(PG_exception_stack == NULL && error_context_stack == NULL);
 	return 0;
 }

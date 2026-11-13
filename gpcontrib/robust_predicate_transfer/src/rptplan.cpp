@@ -59,6 +59,7 @@ extern "C"
 #include "postgres.h"
 
 #include "optimizer/walkers.h"
+#include "parser/parsetree.h"
 }
 
 
@@ -69,7 +70,7 @@ extern "C"
  * given stage and direction.
  */
 static RptGraphEdge *
-rpt_node_add(RptGraphNode *node, int other, bool is_forward, bool is_in_edge)
+rpt_node_add(RptGraphNode *node, int other_rtindex, bool is_forward, bool is_in_edge)
 {
 	std::vector<RptGraphEdge> &edges = is_forward
 		? (is_in_edge ? node->forward_stage.in : node->forward_stage.out)
@@ -78,23 +79,23 @@ rpt_node_add(RptGraphNode *node, int other, bool is_forward, bool is_in_edge)
 
 	for (i = 0; i < edges.size(); i++)
 	{
-		if (edges[i].destination == other)
+		if (edges[i].other_rtindex == other_rtindex)
 			return &edges[i];
 	}
 	edges.push_back(RptGraphEdge());
-	edges.back().destination = other;
+	edges.back().other_rtindex = other_rtindex;
 	return &edges.back();
 }
 
 /* GraphNode::Add with keys (dag.cpp:21-28). */
 static RptGraphEdge *
-rpt_node_add_keys(RptGraphNode *node, int other,
+rpt_node_add_keys(RptGraphNode *node, int other_rtindex,
 				  const std::vector<RptKey> &left_keys,
 				  const std::vector<RptKey> &right_keys,
 				  const std::vector<Oid> &key_types,
 				  bool is_forward, bool is_in_edge)
 {
-	RptGraphEdge *edge = rpt_node_add(node, other, is_forward, is_in_edge);
+	RptGraphEdge *edge = rpt_node_add(node, other_rtindex, is_forward, is_in_edge);
 
 	edge->left_keys = left_keys;
 	edge->right_keys = right_keys;
@@ -108,9 +109,9 @@ rpt_node_add_keys(RptGraphNode *node, int other,
  * broadcast builds its single filter on.
  */
 static void
-rpt_register_leader(RptTransferMgr *mgr, int vertex_id)
+rpt_register_leader(RptTransferMgr *mgr, int rtindex)
 {
-	const RptVertexInfo &v = mgr->vertices[mgr->by_rti[vertex_id]];
+	const RptVertexInfo &v = mgr->vertices[mgr->vertex_index_by_rtindex[rtindex]];
 	std::set<RptKey>::const_iterator kit;
 
 	for (kit = v.join_keys.begin(); kit != v.join_keys.end(); ++kit)
@@ -118,9 +119,9 @@ rpt_register_leader(RptTransferMgr *mgr, int vertex_id)
 		RptKey		rep = RptFindKeyRoot(*kit, mgr->uf_parent);
 		std::map<RptKey, RptKeyGroup>::iterator git = mgr->groups.find(rep);
 
-		if (git != mgr->groups.end() && git->second.leader_id == -1)
+		if (git != mgr->groups.end() && git->second.leader_rtindex == -1)
 		{
-			git->second.leader_id = vertex_id;
+			git->second.leader_rtindex = rtindex;
 			git->second.leader_key = *kit;
 		}
 	}
@@ -136,26 +137,26 @@ rpt_find_edge(const RptTransferMgr *mgr, const std::set<int> &constructed,
 			  const std::set<int> &unconstructed,
 			  const std::map<int, int> &forward_depth,
 			  const std::map<int, int> &backward_depth,
-			  int *forward_from, int *backward_from, int *to)
+			  int *forward_parent_rtindex, int *backward_parent_rtindex, int *target_rtindex)
 {
 	size_t best_weight = 0;
 	int64 best_rows = -1;
 	bool found = false;
 
 	/* Algorithm 1: select the frontier vertex, then each tree's parent. */
-	for (int candidate : unconstructed)
+	for (int candidate_rtindex : unconstructed)
 	{
-		for (int parent : constructed)
+		for (int parent_rtindex : constructed)
 		{
-			const auto &row = mgr->neighbor_matrix.find(parent);
+			const auto &row = mgr->neighbor_matrix.find(parent_rtindex);
 			if (row == mgr->neighbor_matrix.end())
 				continue;
-			const auto &eit = row->second.find(candidate);
+			const auto &eit = row->second.find(candidate_rtindex);
 			if (eit == row->second.end() ||
 				(eit->second.protect_left && eit->second.protect_right))
 				continue;
 			size_t weight = eit->second.clauses.size();
-			int64 rows = mgr->vertices[mgr->by_rti.find(candidate)->second].cardinality;
+			int64 rows = mgr->vertices[mgr->vertex_index_by_rtindex.find(candidate_rtindex)->second].cardinality;
 
 			if (!found || weight > best_weight ||
 				(weight == best_weight && rows > best_rows))
@@ -163,44 +164,44 @@ rpt_find_edge(const RptTransferMgr *mgr, const std::set<int> &constructed,
 				found = true;
 				best_weight = weight;
 				best_rows = rows;
-				*to = candidate;
+				*target_rtindex = candidate_rtindex;
 			}
 		}
 	}
 	if (!found)
 		return false;
 
-	*forward_from = *backward_from = -1;
+	*forward_parent_rtindex = *backward_parent_rtindex = -1;
 	size_t forward_weight = 0;
 	size_t backward_weight = 0;
-	for (int parent : constructed)
+	for (int parent_rtindex : constructed)
 	{
-		const auto &row = mgr->neighbor_matrix.find(parent);
+		const auto &row = mgr->neighbor_matrix.find(parent_rtindex);
 		if (row == mgr->neighbor_matrix.end())
 			continue;
-		const auto &eit = row->second.find(*to);
+		const auto &eit = row->second.find(*target_rtindex);
 		if (eit == row->second.end() ||
 			(eit->second.protect_left && eit->second.protect_right))
 			continue;
 		const RptEdgeInfo &edge = eit->second;
 		size_t weight = edge.clauses.size();
-		bool forward_open = edge.left_v == *to ? !edge.protect_right : !edge.protect_left;
-		bool backward_open = edge.left_v == parent ? !edge.protect_right : !edge.protect_left;
+		bool forward_open = edge.left_rtindex == *target_rtindex ? !edge.protect_right : !edge.protect_left;
+		bool backward_open = edge.left_rtindex == parent_rtindex ? !edge.protect_right : !edge.protect_left;
 
 		/* A protected edge is not a parent candidate for that stage. Prefer
 		 * its best open alternative, even if it has lower weight. */
-		if (forward_open && (*forward_from == -1 || weight > forward_weight ||
+		if (forward_open && (*forward_parent_rtindex == -1 || weight > forward_weight ||
 			(weight == forward_weight &&
-			 forward_depth.at(parent) > forward_depth.at(*forward_from))))
+			 forward_depth.at(parent_rtindex) > forward_depth.at(*forward_parent_rtindex))))
 		{
-			*forward_from = parent;
+			*forward_parent_rtindex = parent_rtindex;
 			forward_weight = weight;
 		}
-		if (backward_open && (*backward_from == -1 || weight > backward_weight ||
+		if (backward_open && (*backward_parent_rtindex == -1 || weight > backward_weight ||
 			(weight == backward_weight &&
-			 backward_depth.at(parent) < backward_depth.at(*backward_from))))
+			 backward_depth.at(parent_rtindex) < backward_depth.at(*backward_parent_rtindex))))
 		{
-			*backward_from = parent;
+			*backward_parent_rtindex = parent_rtindex;
 			backward_weight = weight;
 		}
 	}
@@ -211,7 +212,7 @@ rpt_find_edge(const RptTransferMgr *mgr, const std::set<int> &constructed,
  * LargestRootUpdated (transfer_graph_manager.cpp:557-626): grow one
  * component of the spanning forest by Prim's algorithm, rooted at the
  * largest filtered-or-intermediate vertex, falling back to the largest
- * vertex.  sorted_ids lists every vertex by ascending cardinality; only
+ * vertex.  sorted_rtindexes lists every vertex by ascending cardinality; only
  * those still in `remaining` are candidates, and placed vertices are removed
  * from it (the artifact instead erases from its operator map and can pick a
  * stale root from its sorted list on the next component; keeping `remaining`
@@ -219,7 +220,7 @@ rpt_find_edge(const RptTransferMgr *mgr, const std::set<int> &constructed,
  */
 static void
 rpt_largest_root_updated(RptTransferMgr *mgr, std::set<int> &remaining,
-						 const std::vector<int> &sorted_ids,
+						 const std::vector<int> &sorted_rtindexes,
 						 std::vector<std::pair<int, int> > &forward_edges,
 						 std::vector<std::pair<int, int> > &backward_edges,
 						 int32 &next_order, bool largest_relation)
@@ -230,80 +231,80 @@ rpt_largest_root_updated(RptTransferMgr *mgr, std::set<int> &remaining,
 	std::set<int> unconstructed_set;
 	std::vector<int>::const_reverse_iterator rit;
 	std::set<int>::iterator sit;
-	int			root = -1;
+	int			root_rtindex = -1;
 
 	/* Try to choose the largest filtered or intermediate table as the root */
-	for (rit = sorted_ids.rbegin(); rit != sorted_ids.rend(); ++rit)
+	for (rit = sorted_rtindexes.rbegin(); rit != sorted_rtindexes.rend(); ++rit)
 	{
-		const RptVertexInfo &v = mgr->vertices[mgr->by_rti[*rit]];
+		const RptVertexInfo &v = mgr->vertices[mgr->vertex_index_by_rtindex[*rit]];
 
 		if (remaining.count(*rit) &&
 			(largest_relation || v.filtered || v.intermediate))
 		{
-			root = *rit;
+			root_rtindex = *rit;
 			break;
 		}
 	}
 
 	/* If we cannot find it, all tables have no filter */
-	if (root == -1)
+	if (root_rtindex == -1)
 	{
-		for (rit = sorted_ids.rbegin(); rit != sorted_ids.rend(); ++rit)
+		for (rit = sorted_rtindexes.rbegin(); rit != sorted_rtindexes.rend(); ++rit)
 		{
 			if (remaining.count(*rit))
 			{
-				root = *rit;
+				root_rtindex = *rit;
 				break;
 			}
 		}
 	}
-	Assert(root != -1);
+	Assert(root_rtindex != -1);
 
 	/* Initialize nodes */
 	for (sit = remaining.begin(); sit != remaining.end(); ++sit)
 	{
-		if (*sit == root)
+		if (*sit == root_rtindex)
 			constructed_set.insert(*sit);
 		else
 			unconstructed_set.insert(*sit);
 
-		mgr->graph[*sit].id = *sit;
+		mgr->graph[*sit].rtindex = *sit;
 		mgr->graph[*sit].cardinality_order = -1;
 	}
 
 	/* Add root */
-	mgr->roots.insert(root);
-	forward_depth[root] = backward_depth[root] = 0;
-	mgr->graph[root].cardinality_order = next_order++;
-	mgr->transfer_order.push_back(root);
-	rpt_register_leader(mgr, root);
-	remaining.erase(root);
+	mgr->root_rtindexes.insert(root_rtindex);
+	forward_depth[root_rtindex] = backward_depth[root_rtindex] = 0;
+	mgr->graph[root_rtindex].cardinality_order = next_order++;
+	mgr->transfer_order_rtindexes.push_back(root_rtindex);
+	rpt_register_leader(mgr, root_rtindex);
+	remaining.erase(root_rtindex);
 
 	/* Build graph */
 	while (!unconstructed_set.empty())
 	{
-		int			forward_from;
-		int			backward_from;
-		int			to_id;
+		int			forward_parent_rtindex;
+		int			backward_parent_rtindex;
+		int			target_rtindex;
 
 		if (!rpt_find_edge(mgr, constructed_set, unconstructed_set,
 						   forward_depth, backward_depth,
-						   &forward_from, &backward_from, &to_id))
+						   &forward_parent_rtindex, &backward_parent_rtindex, &target_rtindex))
 			break;
 
-		if (forward_from != -1)
-			forward_edges.push_back(std::make_pair(forward_from, to_id));
-		if (backward_from != -1)
-			backward_edges.push_back(std::make_pair(backward_from, to_id));
-		forward_depth[to_id] = forward_from == -1 ? 0 : forward_depth[forward_from] + 1;
-		backward_depth[to_id] = backward_from == -1 ? 0 : backward_depth[backward_from] + 1;
-		mgr->graph[to_id].cardinality_order = next_order++;
-		mgr->transfer_order.push_back(to_id);
-		rpt_register_leader(mgr, to_id);
+		if (forward_parent_rtindex != -1)
+			forward_edges.push_back(std::make_pair(forward_parent_rtindex, target_rtindex));
+		if (backward_parent_rtindex != -1)
+			backward_edges.push_back(std::make_pair(backward_parent_rtindex, target_rtindex));
+		forward_depth[target_rtindex] = forward_parent_rtindex == -1 ? 0 : forward_depth[forward_parent_rtindex] + 1;
+		backward_depth[target_rtindex] = backward_parent_rtindex == -1 ? 0 : backward_depth[backward_parent_rtindex] + 1;
+		mgr->graph[target_rtindex].cardinality_order = next_order++;
+		mgr->transfer_order_rtindexes.push_back(target_rtindex);
+		rpt_register_leader(mgr, target_rtindex);
 
-		unconstructed_set.erase(to_id);
-		constructed_set.insert(to_id);
-		remaining.erase(to_id);
+		unconstructed_set.erase(target_rtindex);
+		constructed_set.insert(target_rtindex);
+		remaining.erase(target_rtindex);
 	}
 
 	/*
@@ -345,8 +346,8 @@ rpt_create_transfer_plan(RptTransferMgr *mgr,
 			continue;
 		edge = &eit->second;
 
-		left_node = &mgr->graph[edge->left_v];
-		right_node = &mgr->graph[edge->right_v];
+		left_node = &mgr->graph[edge->left_rtindex];
+		right_node = &mgr->graph[edge->right_rtindex];
 		protect_left = edge->protect_left;
 		protect_right = edge->protect_right;
 
@@ -366,13 +367,13 @@ rpt_create_transfer_plan(RptTransferMgr *mgr,
 		}
 
 		/* forward: from the smaller to the larger */
-		if (forward && !protect_right && !mgr->roots.count(left_node->id) &&
-			(mgr->vertices[mgr->by_rti[left_node->id]].filtered ||
-			 mgr->bridges.count(left_node->id)))
+		if (forward && !protect_right && !mgr->root_rtindexes.count(left_node->rtindex) &&
+			(mgr->vertices[mgr->vertex_index_by_rtindex[left_node->rtindex]].filtered ||
+			 mgr->bridge_rtindexes.count(left_node->rtindex)))
 		{
-			rpt_node_add_keys(left_node, right_node->id, left_keys, right_keys,
+			rpt_node_add_keys(left_node, right_node->rtindex, left_keys, right_keys,
 							  key_types, true, false);
-			rpt_node_add_keys(right_node, left_node->id, left_keys, right_keys,
+			rpt_node_add_keys(right_node, left_node->rtindex, left_keys, right_keys,
 							  key_types, true, true);
 		}
 
@@ -394,23 +395,23 @@ rpt_create_transfer_plan(RptTransferMgr *mgr,
 			{
 				RptKey		rep = RptFindKeyRoot(right_keys[c], mgr->uf_parent);
 				std::map<RptKey, RptKeyGroup>::iterator git = mgr->groups.find(rep);
-				int			dest;
+				int			target_rtindex;
 				RptKey		dest_key;
 				RptGraphEdge *bucket;
 
-				if (git != mgr->groups.end() && git->second.leader_id != -1)
+				if (git != mgr->groups.end() && git->second.leader_rtindex != -1)
 				{
-					dest = git->second.leader_id;
+					target_rtindex = git->second.leader_rtindex;
 					dest_key = git->second.leader_key;
 				}
 				else
 				{
-					dest = right_node->id;
+					target_rtindex = right_node->rtindex;
 					dest_key = right_keys[c];
 				}
 
-				bucket = &by_dest[dest];
-				bucket->destination = dest;
+				bucket = &by_dest[target_rtindex];
+				bucket->other_rtindex = target_rtindex;
 				bucket->left_keys.push_back(left_keys[c]);
 				bucket->right_keys.push_back(dest_key);
 				bucket->key_types.push_back(key_types[c]);
@@ -420,10 +421,10 @@ rpt_create_transfer_plan(RptTransferMgr *mgr,
 			{
 				const RptGraphEdge &bucket = dit->second;
 
-				rpt_node_add_keys(left_node, bucket.destination,
+				rpt_node_add_keys(left_node, bucket.other_rtindex,
 								  bucket.left_keys, bucket.right_keys,
 								  bucket.key_types, false, true);
-				rpt_node_add_keys(&mgr->graph[bucket.destination], left_node->id,
+				rpt_node_add_keys(&mgr->graph[bucket.other_rtindex], left_node->rtindex,
 								  bucket.left_keys, bucket.right_keys,
 								  bucket.key_types, false, false);
 			}
@@ -436,10 +437,10 @@ rpt_create_transfer_plan(RptTransferMgr *mgr,
  * change where the reducer reads a key. Parallel workers still need a
  * segment-local fold (or a non-parallel reducer). */
 static bool
-rpt_local_hop(const RptTransferMgr *mgr, int source, const RptGraphEdge &hop)
+rpt_local_hop(const RptTransferMgr *mgr, int source_rtindex, const RptGraphEdge &hop)
 {
-	const auto &src = mgr->vertices[mgr->by_rti.at(source)];
-	const auto &dst = mgr->vertices[mgr->by_rti.at(hop.destination)];
+	const auto &src = mgr->vertices[mgr->vertex_index_by_rtindex.at(source_rtindex)];
+	const auto &dst = mgr->vertices[mgr->vertex_index_by_rtindex.at(hop.other_rtindex)];
 
 	/* A replicated destination needs the complete key set on every segment. */
 	if (dst.replicated || src.numsegments <= 0 || dst.numsegments <= 0)
@@ -458,10 +459,10 @@ rpt_local_hop(const RptTransferMgr *mgr, int source, const RptGraphEdge &hop)
 		{
 			const RptKey &a = hop.left_keys[key];
 			const RptKey &b = hop.right_keys[key];
-			if ((a == RptKey{source, src.distkeys[col]} &&
-				 b == RptKey{hop.destination, dst.distkeys[col]}) ||
-				(b == RptKey{source, src.distkeys[col]} &&
-				 a == RptKey{hop.destination, dst.distkeys[col]}))
+			if ((a == RptKey{source_rtindex, src.distkeys[col]} &&
+				 b == RptKey{hop.other_rtindex, dst.distkeys[col]}) ||
+				(b == RptKey{source_rtindex, src.distkeys[col]} &&
+				 a == RptKey{hop.other_rtindex, dst.distkeys[col]}))
 				matched = true;
 		}
 		if (!matched)
@@ -471,7 +472,7 @@ rpt_local_hop(const RptTransferMgr *mgr, int source, const RptGraphEdge &hop)
 }
 
 /* Persist the decision on both copies of every stage edge. In/out edges
- * carry the same key pairs, but destination means producer for an in-edge. */
+ * carry the same key pairs; other_rtindex is the producer on an in-edge. */
 static void
 rpt_classify_hops(RptTransferMgr *mgr)
 {
@@ -483,10 +484,10 @@ rpt_classify_hops(RptTransferMgr *mgr)
 			for (auto &edge : outs)
 			{
 				edge.local = rpt_local_hop(mgr, node.first, edge);
-				auto &dest = mgr->graph.at(edge.destination);
-				auto &ins = forward ? dest.forward_stage.in : dest.backward_stage.in;
+				auto &target_rtindex = mgr->graph.at(edge.other_rtindex);
+				auto &ins = forward ? target_rtindex.forward_stage.in : target_rtindex.backward_stage.in;
 				for (auto &in : ins)
-					if (in.destination == node.first)
+					if (in.other_rtindex == node.first)
 						in.local = edge.local;
 			}
 		}
@@ -503,22 +504,22 @@ rpt_build_transfer_plan(PlannedStmt *stmt, RptTransferMgr *mgr,
 {
 	std::vector<std::pair<int, int> > forward_edges;
 	std::vector<std::pair<int, int> > backward_edges;
-	std::vector<int> sorted_ids;
+	std::vector<int> sorted_rtindexes;
 	std::set<int> remaining;
 	int32		next_order = 0;
 	size_t		i;
 
-	/* vertices by ascending cardinality, ties by id, for a stable plan */
+	/* vertices by ascending cardinality, ties by rtindex, for a stable plan */
 	for (i = 0; i < mgr->vertices.size(); i++)
 	{
-		sorted_ids.push_back(mgr->vertices[i].id);
-		remaining.insert(mgr->vertices[i].id);
+		sorted_rtindexes.push_back(mgr->vertices[i].rtindex);
+		remaining.insert(mgr->vertices[i].rtindex);
 	}
-	std::sort(sorted_ids.begin(), sorted_ids.end(),
+	std::sort(sorted_rtindexes.begin(), sorted_rtindexes.end(),
 			  [&mgr] (int a, int b)
 	{
-		const RptVertexInfo &va = mgr->vertices[mgr->by_rti[a]];
-		const RptVertexInfo &vb = mgr->vertices[mgr->by_rti[b]];
+		const RptVertexInfo &va = mgr->vertices[mgr->vertex_index_by_rtindex[a]];
+		const RptVertexInfo &vb = mgr->vertices[mgr->vertex_index_by_rtindex[b]];
 
 		if (va.cardinality != vb.cardinality)
 			return va.cardinality < vb.cardinality;
@@ -531,12 +532,12 @@ rpt_build_transfer_plan(PlannedStmt *stmt, RptTransferMgr *mgr,
 	 * forest -- one tree per connected component of the join graph.
 	 */
 	while (!remaining.empty())
-		rpt_largest_root_updated(mgr, remaining, sorted_ids, forward_edges, backward_edges,
+		rpt_largest_root_updated(mgr, remaining, sorted_rtindexes, forward_edges, backward_edges,
 								 next_order, largest_relation);
 
 	for (const auto &group : mgr->groups)
-		if (group.second.leader_id != -1 && !mgr->roots.count(group.second.leader_id))
-			mgr->bridges.insert(group.second.leader_id);
+		if (group.second.leader_rtindex != -1 && !mgr->root_rtindexes.count(group.second.leader_rtindex))
+			mgr->bridge_rtindexes.insert(group.second.leader_rtindex);
 
 	rpt_create_transfer_plan(mgr, forward_edges, true);
 	rpt_create_transfer_plan(mgr, backward_edges, false);
@@ -544,27 +545,27 @@ rpt_build_transfer_plan(PlannedStmt *stmt, RptTransferMgr *mgr,
 	/* Transfers run in reverse insertion order. Cap actual dependency hops,
 	 * keeping every inbound edge mirrored in its producer's out list. */
 	std::map<int, int> depth;
-	for (auto it = mgr->transfer_order.rbegin(); it != mgr->transfer_order.rend(); ++it)
+	for (auto it = mgr->transfer_order_rtindexes.rbegin(); it != mgr->transfer_order_rtindexes.rend(); ++it)
 	{
 		auto &outs = mgr->graph[*it].forward_stage.out;
 		for (auto edge = outs.begin(); edge != outs.end();)
 		{
-			int dest = edge->destination;
+			int target_rtindex = edge->other_rtindex;
 			if (depth[*it] >= rpt_max_chain_depth)
 			{
-				auto &ins = mgr->graph[dest].forward_stage.in;
+				auto &ins = mgr->graph[target_rtindex].forward_stage.in;
 				ins.erase(std::remove_if(ins.begin(), ins.end(),
-					[&](const RptGraphEdge &in) { return in.destination == *it; }), ins.end());
+					[&](const RptGraphEdge &in) { return in.other_rtindex == *it; }), ins.end());
 				edge = outs.erase(edge);
 			}
 			else
 			{
-				depth[dest] = std::max(depth[dest], depth[*it] + 1);
+				depth[target_rtindex] = std::max(depth[target_rtindex], depth[*it] + 1);
 				++edge;
 			}
 		}
 		if (!outs.empty())
-			mgr->reducer_order.push_back(*it);
+			mgr->reducer_order_rtindexes.push_back(*it);
 	}
 
 	rpt_classify_hops(mgr);
@@ -579,31 +580,24 @@ RptBuildTransferPlan(PlannedStmt *stmt, RptTransferMgr *mgr)
 	rpt_build_transfer_plan(stmt, mgr, false);
 }
 
-/* The reducer targets the largest relation, including an unfiltered fact.
- * Build a separate schedule: changing the backward leaders would change the
- * eligibility survey and its independently gated injection decisions. */
+/* Runtime transfers use one largest-relation forest for both passes.
+ * Keep the filtered-root survey schedule separate for diagnostic continuity.
+ * Eligibility is evaluated by the caller against this forest before surgery. */
 void
 RptBuildForwardPlan(const RptTransferMgr *analysis, RptTransferMgr *forward)
 {
 	*forward = *analysis;
 	forward->graph.clear();
-	forward->roots.clear();
-	forward->bridges.clear();
-	forward->reducer_order.clear();
-	forward->transfer_order.clear();
-	forward->consumer_ok.clear();
+	forward->root_rtindexes.clear();
+	forward->bridge_rtindexes.clear();
+	forward->reducer_order_rtindexes.clear();
+	forward->transfer_order_rtindexes.clear();
+	forward->consumer_ok_by_rtindex.clear();
 	forward->backward_consumers.clear();
 	for (auto &group : forward->groups)
-		group.second.leader_id = -1;
+		group.second.leader_rtindex = -1;
 	rpt_build_transfer_plan(NULL, forward, true);
-	/* This schedule is not a backward eligibility decision. */
-	forward->consumer_ok.clear();
-	forward->backward_consumers.clear();
-	for (auto &node : forward->graph)
-	{
-		node.second.backward_stage.in.clear();
-		node.second.backward_stage.out.clear();
-	}
+
 }
 
 /*
@@ -615,8 +609,8 @@ RptBuildForwardPlan(const RptTransferMgr *analysis, RptTransferMgr *forward)
 static bool
 rpt_edge_less(const RptGraphEdge &a, const RptGraphEdge &b)
 {
-	if (a.destination != b.destination)
-		return a.destination < b.destination;
+	if (a.other_rtindex != b.other_rtindex)
+		return a.other_rtindex < b.other_rtindex;
 	if (a.left_keys != b.left_keys)
 		return a.left_keys < b.left_keys;
 	return a.right_keys < b.right_keys;
@@ -636,7 +630,7 @@ rpt_dump_key_pairs(std::ostream &out, const RptGraphEdge &edge)
 
 /* A stage's sorted build/apply entries, preserving the diagnostic format. */
 static void
-rpt_dump_stage(std::ostream &out, int vertex_id, const char *stage,
+rpt_dump_stage(std::ostream &out, int rtindex, const char *stage,
 			   const std::vector<RptGraphEdge> &in_edges,
 			   const std::vector<RptGraphEdge> &out_edges)
 {
@@ -646,17 +640,17 @@ rpt_dump_stage(std::ostream &out, int vertex_id, const char *stage,
 
 	std::sort(outs.begin(), outs.end(), rpt_edge_less);
 	std::sort(ins.begin(), ins.end(), rpt_edge_less);
-	out << "vertex " << vertex_id << ' ' << stage << ':';
+	out << "vertex " << rtindex << ' ' << stage << ':';
 	for (const auto &edge : outs)
 	{
-		out << (any ? "; " : " ") << "build for " << edge.destination << " on (";
+		out << (any ? "; " : " ") << "build for " << edge.other_rtindex << " on (";
 		rpt_dump_key_pairs(out, edge);
 		out << ')';
 		any = true;
 	}
 	for (const auto &edge : ins)
 	{
-		out << (any ? "; " : " ") << "apply from " << edge.destination << " on (";
+		out << (any ? "; " : " ") << "apply from " << edge.other_rtindex << " on (";
 		rpt_dump_key_pairs(out, edge);
 		out << ')';
 		any = true;
@@ -669,33 +663,43 @@ rpt_dump_stage(std::ostream &out, int vertex_id, const char *stage,
 /* Build in C++ storage, then cross the PostgreSQL allocation boundary once.
  * RptPgCall ensures a failed append unwinds the stream and string owners. */
 void
-RptDumpTransferPlan(const RptTransferMgr *mgr, StringInfo output)
+RptDumpTransferPlan(const PlannedStmt *stmt, const RptTransferMgr *mgr, StringInfo output)
 {
 	std::ostringstream out;
-	std::vector<int> ids;
+	std::vector<int> rtindexes;
 
 	out.exceptions(std::ios::badbit | std::ios::failbit);
 	out.imbue(std::locale::classic());
 	for (const auto &vertex : mgr->vertices)
-		ids.push_back(vertex.id);
-	std::sort(ids.begin(), ids.end());
+		rtindexes.push_back(vertex.rtindex);
+	std::sort(rtindexes.begin(), rtindexes.end());
 
 	out << "transfer order:";
-	for (int id : mgr->transfer_order)
-		out << ' ' << id;
+	for (int rtindex : mgr->transfer_order_rtindexes)
+		out << ' ' << rtindex;
 	out << "\nforward depth limit: " << rpt_max_chain_depth << "\nreducer order:";
-	for (int id : mgr->reducer_order)
-		out << ' ' << id;
+	for (int rtindex : mgr->reducer_order_rtindexes)
+		out << ' ' << rtindex;
 	out << "\nbridge tables:";
-	for (int id : mgr->bridges)
-		out << ' ' << id;
+	for (int rtindex : mgr->bridge_rtindexes)
+		out << ' ' << rtindex;
 	out << '\n';
 
-	for (int id : ids)
+	for (int rtindex : rtindexes)
 	{
-		const auto &v = mgr->vertices[mgr->by_rti.at(id)];
+		const auto &v = mgr->vertices[mgr->vertex_index_by_rtindex.at(rtindex)];
+		const char *alias = "";
 
-		out << "vertex " << v.id << ' ' << v.relname << " rows=" << v.cardinality
+		/* Use the query alias, so self-join references remain distinct. No
+		 * name is copied or looked up until a diagnostic dump is requested. */
+		if (stmt != NULL && rtindex > 0 && rtindex <= list_length(stmt->rtable))
+		{
+			RangeTblEntry *rte = rt_fetch(rtindex, stmt->rtable);
+
+			if (rte->eref != NULL && rte->eref->aliasname != NULL)
+				alias = rte->eref->aliasname;
+		}
+		out << "vertex " << v.rtindex << ' ' << alias << " rows=" << v.cardinality
 			<< ' ' << (v.filtered ? "filtered" : v.intermediate ? "intermediate" : "unfiltered")
 			<< '\n';
 	}
@@ -704,44 +708,44 @@ RptDumpTransferPlan(const RptTransferMgr *mgr, StringInfo output)
 		bool first = true;
 
 		out << "class " << group.first.rtindex << '.' << group.first.attno << ": members=";
-		for (int member : group.second.members)
+		for (int member_rtindex : group.second.member_rtindexes)
 		{
 			if (!first)
 				out << ',';
-			out << member;
+			out << member_rtindex;
 			first = false;
 		}
-		out << " leader=" << group.second.leader_id << '\n';
+		out << " leader=" << group.second.leader_rtindex << '\n';
 	}
-	for (int id : ids)
+	for (int rtindex : rtindexes)
 	{
-		const auto &node = mgr->graph.find(id);
+		const auto &node = mgr->graph.find(rtindex);
 
 		if (node == mgr->graph.end())
 		{
-			out << "vertex " << id << " forward: none\n"
-				<< "vertex " << id << " backward: none\n";
+			out << "vertex " << rtindex << " forward: none\n"
+				<< "vertex " << rtindex << " backward: none\n";
 			continue;
 		}
-		rpt_dump_stage(out, id, "forward", node->second.forward_stage.in,
+		rpt_dump_stage(out, rtindex, "forward", node->second.forward_stage.in,
 					   node->second.forward_stage.out);
-		rpt_dump_stage(out, id, "backward", node->second.backward_stage.in,
+		rpt_dump_stage(out, rtindex, "backward", node->second.backward_stage.in,
 					   node->second.backward_stage.out);
 	}
 	for (const auto &node : mgr->graph)
 	{
 		for (const auto &edge : node.second.forward_stage.out)
-			out << "forward hop " << node.first << "->" << edge.destination
+			out << "forward hop " << node.first << "->" << edge.other_rtindex
 				<< " merge=" << (edge.local ? "local" : "global") << '\n';
 		for (const auto &edge : node.second.backward_stage.out)
-			out << "backward hop " << node.first << "->" << edge.destination
+			out << "backward hop " << node.first << "->" << edge.other_rtindex
 				<< " merge=" << (edge.local ? "local" : "global") << '\n';
 	}
 	int global_edges = 0, rule9 = 0, strict = 0, eligible = 0, root_classes = 0;
 	int unknown_estimates = 0;
 	double rows_removed = 0;
 	for (const auto &group : mgr->groups)
-		if (mgr->roots.count(group.second.leader_id))
+		if (mgr->root_rtindexes.count(group.second.leader_rtindex))
 			++root_classes;
 	for (const auto &decision : mgr->backward_consumers)
 	{
@@ -756,15 +760,15 @@ RptDumpTransferPlan(const RptTransferMgr *mgr, StringInfo output)
 			else
 				rows_removed += decision.estimated_rows_removed;
 		}
-		out << "backward consumer " << decision.consumer << " producer " << decision.producer
+		out << "backward consumer " << decision.consumer_rtindex << " producer " << decision.producer_rtindex
 			<< " class " << decision.class_key.rtindex << '.' << decision.class_key.attno
 			<< " merge=" << (decision.local ? "local" : "global")
 			<< " rule9=" << (decision.rule9 ? "yes" : "no")
 			<< " strict=" << (decision.strict_eligible ? "yes" : "no")
 			<< " eligible=" << (decision.eligible ? "yes" : "no")
 			<< " defer_first=" << (decision.defer_first ? "yes" : "no")
-			<< " producer_slice=" << decision.producer_slice
-			<< " consumer_slice=" << decision.consumer_slice
+			<< " producer_slice=" << decision.producer_slice_index
+			<< " consumer_slice=" << decision.consumer_slice_index
 			<< " producer_attno=" << decision.producer_attno
 			<< " consumer_attno=" << decision.consumer_attno
 			<< " rows_removed=";
@@ -778,16 +782,16 @@ RptDumpTransferPlan(const RptTransferMgr *mgr, StringInfo output)
 		<< " global_edges=" << global_edges << " rule9=" << rule9 << " strict=" << strict
 		<< " eligible=" << eligible << " known_rows_removed=" << rows_removed
 		<< " unknown_estimates=" << unknown_estimates << '\n';
-	for (int id : ids)
+	for (int rtindex : rtindexes)
 	{
-		const auto &consumer = mgr->consumer_ok.find(id);
-		bool ok = consumer != mgr->consumer_ok.end() && consumer->second;
-		out << "consumer_ok " << id << ' ' << (ok ? "yes" : "no");
+		const auto &consumer = mgr->consumer_ok_by_rtindex.find(rtindex);
+		bool ok = consumer != mgr->consumer_ok_by_rtindex.end() && consumer->second;
+		out << "consumer_ok " << rtindex << ' ' << (ok ? "yes" : "no");
 		if (!ok)
 		{
 			std::string reason = "no backward edge";
 			for (const auto &decision : mgr->backward_consumers)
-				if (decision.consumer == id && !decision.eligible)
+				if (decision.consumer_rtindex == rtindex && !decision.eligible)
 				{
 					reason = decision.reason;
 					if (!decision.local)

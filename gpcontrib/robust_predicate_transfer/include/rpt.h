@@ -144,10 +144,9 @@ operator==(const RptKey &a, const RptKey &b)
  */
 struct RptVertexInfo
 {
-	int			id;				/* rtindex of the scan, the vertex identity */
+	int			rtindex;		/* range-table index of the scan */
 	Plan	   *scan;			/* the base scan node */
 	Oid relid = InvalidOid;
-	std::string relname;		/* RTE alias, for dumps */
 	int64		cardinality;	/* scan->plan_rows */
 	bool		filtered;		/* the scan carries restriction quals */
 	bool		intermediate;	/* touches >1 equivalence class */
@@ -172,8 +171,8 @@ struct RptVertexInfo
  */
 struct RptEdgeInfo
 {
-	int			left_v;
-	int			right_v;		/* vertex ids (RptVertexInfo.id) */
+	int			left_rtindex;
+	int			right_rtindex;		/* range-table indexes (RptVertexInfo.rtindex) */
 	Oid			key_type;		/* the equality operator's input type */
 	std::vector<std::pair<RptKey, RptKey> > clauses;
 	bool		protect_left;
@@ -188,8 +187,8 @@ struct RptEdgeInfo
  */
 struct RptKeyGroup
 {
-	std::set<int> members;
-	int			leader_id;		/* -1 until registered */
+	std::set<int> member_rtindexes;
+	int			leader_rtindex;		/* -1 until registered */
 	RptKey		leader_key;
 	Oid			key_type;
 };
@@ -197,7 +196,7 @@ struct RptKeyGroup
 /* Ports dag.hpp's GraphEdge: one transfer edge of the built plan. */
 struct RptGraphEdge
 {
-	int			destination;
+	int			other_rtindex;	/* producer for in-edges, consumer for out-edges */
 	std::vector<RptKey> left_keys;	/* keys on the smaller table's side */
 	std::vector<RptKey> right_keys; /* keys on the larger table's side */
 	std::vector<Oid>	key_types;
@@ -207,7 +206,7 @@ struct RptGraphEdge
 /* Ports dag.hpp's GraphNode: one vertex's full transfer plan. */
 struct RptGraphNode
 {
-	int			id;
+	int			rtindex;
 	int32_t		cardinality_order;	/* Prim insertion order (0 = root) */
 
 	struct
@@ -223,14 +222,16 @@ struct RptGraphNode
 struct RptBackwardConsumer
 {
 	RptKey class_key = {0, 0};
-	int producer = 0;
-	int consumer = 0;
+	RptKey producer_key = {0, 0};
+	RptKey consumer_key = {0, 0};
+	int producer_rtindex = 0;
+	int consumer_rtindex = 0;
 	Plan *producer_parent = NULL;
 	Plan *consumer_parent = NULL;
 	AttrNumber producer_attno = 0;
 	AttrNumber consumer_attno = 0;
-	int producer_slice = -1;
-	int consumer_slice = -1;
+	int producer_slice_index = -1;
+	int consumer_slice_index = -1;
 	bool local = false;
 	bool rule9 = false;
 	bool strict_eligible = false;
@@ -248,8 +249,9 @@ struct RptTransferMgr
 {
 	/* rptregion.cpp fills these from the PlannedStmt. */
 	std::vector<RptVertexInfo> vertices;
-	std::map<int, int>	by_rti;		/* vertex id -> index in vertices */
-	/* vertex id -> (vertex id -> edge) */
+	/* rtindex -> vector index in vertices */
+	std::map<int, int> vertex_index_by_rtindex;
+	/* rtindex -> (rtindex -> edge) */
 	std::map<int, std::map<int, RptEdgeInfo> > neighbor_matrix;
 
 	/* rptgraph.cpp: classes and classification. */
@@ -258,33 +260,33 @@ struct RptTransferMgr
 
 	/* rptplan.cpp: the transfer plan. */
 	std::map<int, RptGraphNode> graph;
-	std::set<int> roots;
-	std::set<int> bridges;
-	std::vector<int> reducer_order;
-	std::vector<int> transfer_order;	/* Prim insertion order of vertex ids */
+	std::set<int> root_rtindexes;
+	std::set<int> bridge_rtindexes;
+	std::vector<int> reducer_order_rtindexes;
+	std::vector<int> transfer_order_rtindexes;	/* Prim insertion order of range-table indexes */
 
 	/* Eligibility for blocking global backward consumers only. Every global
 	 * producer must be on a hash join's build side in a different slice from
 	 * the probe-side consumer. Local edges never wait and do not participate;
-	 * a vertex with no global in-edges has consumer_ok=false. */
-	std::map<int, bool> consumer_ok;
+	 * a vertex with no global in-edges has consumer_ok_by_rtindex=false. */
+	std::map<int, bool> consumer_ok_by_rtindex;
 	std::vector<RptBackwardConsumer> backward_consumers;
 };
 
 /*
  * Forward reducer.  A channel is one forward transfer edge: the
- * reducer scan of `from` builds a bloom filter on from_key, and every scan of
- * `to` (in the reducer, and the root's scan in the main plan) applies it on
- * to_key.  Only the first clause of a multi-key edge is transferred; one key
- * of a conjunctive equality still over-approximates, so this loses
+ * reducer scan of source_rtindex builds a bloom filter on source_key, and
+ * every scan of target_rtindex (in the reducer or main plan) applies it on
+ * target_key.  Only the first clause of a multi-key edge is transferred;
+ * one key of a conjunctive equality still over-approximates, so this loses
  * selectivity, never rows.
  */
 struct RptForwardChannel
 {
-	int			from = 0;
-	int			to = 0;
-	RptKey		from_key = {0, 0};
-	RptKey		to_key = {0, 0};
+	int			source_rtindex = 0;
+	int			target_rtindex = 0;
+	RptKey		source_key = {0, 0};
+	RptKey		target_key = {0, 0};
 	bool		local = false;		/* policy-local (rptplan.cpp, rpt_local_hop) */
 	bool		in_process = false; /* local and consumed only inside the reducer:
 									 * handed over in-process, no Anser channel */
@@ -299,8 +301,8 @@ struct RptForwardChannel
 /* One root's forward chain and the decision about it. */
 struct RptForwardComponent
 {
-	int			root = 0;
-	std::vector<int> chain;			/* reducer scans, producers before consumers */
+	int			root_rtindex = 0;
+	std::vector<int> chain_rtindexes;			/* reducer scans, producers before consumers */
 	std::vector<RptForwardChannel> channels;
 	double		est_cost_ms = 0;	/* sum of hop estimates */
 	double		est_selectivity = 1;	/* estimated fraction of root rows kept */
@@ -311,10 +313,12 @@ struct RptForwardComponent
 struct RptForwardParams
 {
 	int			width = 0;			/* reducer gang size: producers per channel */
+	double		delivery_ms_per_mib = 0;
 	double		ms_per_mib_part = 0;	/* c in c * n_producers * filter_MiB */
 	double		max_exchange_ms = 0;	/* component budget; < 0 disables the limit */
 	double		min_root_rows = 0;	/* root scan plan_rows below this: no reducer */
 	double		max_selectivity = 1;	/* lambda; >= 1 disables the check */
+	std::map<int, int> main_consumer_processes; /* rtindex -> main scan width */
 	bool		apply_all = false;	/* chain scans of the main plan consume too */
 };
 
@@ -339,6 +343,43 @@ typedef double (*RptNdvFn) (const RptVertexInfo &vertex, AttrNumber attno);
 typedef bool (*RptFilterSizeFn) (double est_rows, int64 *total_elems,
 								  int64 *max_payload, int64 *planned_bytes);
 
+/* Backward selection preserves the survey's per-edge proof and refusal. */
+struct RptBackwardTarget
+{
+	RptBackwardConsumer proof;
+	int processes = 0;
+	double estimated_rows_removed = -1;
+	bool accepted = false;
+	std::string reason;
+};
+
+struct RptBackwardClass
+{
+	RptKey class_key = {0, 0};
+	int producer_rtindex = 0;
+	RptKey producer_key = {0, 0};
+	int producer_processes = 0;
+	int64 total_elems = 0;
+	int64 max_payload = 0;
+	int64 planned_bytes = 0;
+	uint32 condition_id = 0;
+	std::string condition_key;
+	double estimated_producer_rows = 0;
+	double est_cost_ms = 0;
+	bool accepted = false;
+	std::string reason;
+	std::vector<RptBackwardTarget> consumers;
+};
+
+extern void RptSelectBackward(const RptTransferMgr &schedule,
+							 const std::vector<RptForwardComponent> &forward,
+							 const RptForwardParams &params,
+							 const std::map<int, int> &slice_processes,
+							 RptFilterSizeFn size_fn,
+							 std::vector<RptBackwardClass> *out);
+extern void RptDumpBackward(const std::vector<RptBackwardClass> &classes,
+						   std::string *out);
+
 /* rptforwardplan.cpp: pure selection over a forward schedule. */
 extern void RptSelectForward(const RptTransferMgr &forward,
 							 const RptForwardParams &params,
@@ -351,13 +392,14 @@ extern void RptDumpForward(const std::vector<RptForwardComponent> &components,
 /* rptforward.cpp: the planner-hook pass.  Returns a new statement, or stmt
  * itself when nothing is injected; *trace receives the decision dump.  May
  * throw; the caller fails open. */
-extern PlannedStmt *RptInjectForward(PlannedStmt *stmt, bool materialize,
+extern PlannedStmt *RptInject(PlannedStmt *stmt, bool materialize,
 									 std::string *trace);
 
 /* Forward reducer GUCs (rptinit.cpp). */
 extern bool rpt_forward;
 extern int	rpt_forward_apply;			/* RPT_FORWARD_APPLY_* */
 extern double rpt_forward_ms_per_mib_part;
+extern double rpt_delivery_ms_per_mib;
 extern double rpt_forward_max_exchange_ms;
 extern double rpt_forward_min_root_rows;
 extern double rpt_forward_max_selectivity;
@@ -382,6 +424,7 @@ extern void RptBuildForwardPlan(const RptTransferMgr *analysis,
 extern void RptAttachReducerInitPlan(PlannedStmt *stmt, List *children, int width);
 extern void RptCheckBackwardConsumers(PlannedStmt *stmt, RptTransferMgr *mgr);
 extern double RptEstimateDistinct(const RptVertexInfo &vertex, AttrNumber attno);
-extern void RptDumpTransferPlan(const RptTransferMgr *mgr, StringInfo out);
+extern void RptDumpTransferPlan(const PlannedStmt *stmt,
+								const RptTransferMgr *mgr, StringInfo out);
 
 #endif							/* RPT_H */

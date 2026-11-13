@@ -47,37 +47,37 @@ RptAttachReducerInitPlan(PlannedStmt *stmt, List *children, int width)
 			(stmt->subplans != NIL && !stmt->subplan_sliceIds))
 			elog(ERROR, "invalid RPT reducer InitPlan input");
 
-		int max_id = AnserMaxPlanNodeId(stmt);
+		int max_plan_node_id = AnserMaxPlanNodeId(stmt);
 		ListCell *lc;
 		foreach(lc, children)
 		{
 			PlannedStmt child_stmt = {};
 			child_stmt.planTree = (Plan *) lfirst(lc);
-			max_id = Max(max_id, AnserMaxPlanNodeId(&child_stmt));
+			max_plan_node_id = Max(max_plan_node_id, AnserMaxPlanNodeId(&child_stmt));
 		}
-		int next_id = max_id + 1;
-		int root_slice = stmt->numSlices;
-		int sender_slice = root_slice + 1;
+		int next_plan_node_id = max_plan_node_id + 1;
+		int root_slice_index = stmt->numSlices;
+		int sender_slice_index = root_slice_index + 1;
 		int old_subplans = list_length(stmt->subplans);
-		int param_id = list_length(stmt->paramExecTypes);
+		int param_exec_id = list_length(stmt->paramExecTypes);
 		Flow *distributed = makeNode(Flow);
 		distributed->flotype = FLOW_PARTITIONED;
 		distributed->locustype = CdbLocusType_Strewn;
 		distributed->numsegments = width;
 		Result *empty = makeNode(Result);
-		empty->plan.plan_node_id = next_id++;
+		empty->plan.plan_node_id = next_plan_node_id++;
 		empty->plan.flow = distributed;
 		/* ExecInitResult passes this field to ExecInitQual as implicit AND. */
 		empty->resconstantqual = (Node *) list_make1(makeBoolConst(false, false));
 		Sequence *sequence = makeNode(Sequence);
-		sequence->plan.plan_node_id = next_id++;
+		sequence->plan.plan_node_id = next_plan_node_id++;
 		sequence->plan.flow = distributed;
 		sequence->subplans = lappend(list_copy(children), empty);
 		Motion *gather = makeNode(Motion);
-		gather->plan.plan_node_id = next_id++;
+		gather->plan.plan_node_id = next_plan_node_id++;
 		gather->plan.lefttree = (Plan *) sequence;
 		gather->motionType = MOTIONTYPE_GATHER;
-		gather->motionID = sender_slice;
+		gather->motionID = sender_slice_index;
 		Flow *singleton = makeNode(Flow);
 		singleton->flotype = FLOW_SINGLETON;
 		singleton->locustype = CdbLocusType_Entry;
@@ -88,19 +88,19 @@ RptAttachReducerInitPlan(PlannedStmt *stmt, List *children, int width)
 		PlanSlice *slices = (PlanSlice *) palloc0(
 			 sizeof(PlanSlice) * (stmt->numSlices + 2));
 		memcpy(slices, stmt->slices, sizeof(PlanSlice) * stmt->numSlices);
-		slices[root_slice].sliceIndex = root_slice;
-		slices[root_slice].parentIndex = -1;
-		slices[root_slice].gangType = GANGTYPE_UNALLOCATED;
-		slices[root_slice].segindex = -1;
-		slices[sender_slice].sliceIndex = sender_slice;
-		slices[sender_slice].parentIndex = root_slice;
-		slices[sender_slice].gangType = GANGTYPE_PRIMARY_READER;
-		slices[sender_slice].segindex = 0;
-		slices[sender_slice].numsegments = width;
-		int *slice_ids = (int *) palloc(sizeof(int) * (old_subplans + 1));
+		slices[root_slice_index].sliceIndex = root_slice_index;
+		slices[root_slice_index].parentIndex = -1;
+		slices[root_slice_index].gangType = GANGTYPE_UNALLOCATED;
+		slices[root_slice_index].segindex = -1;
+		slices[sender_slice_index].sliceIndex = sender_slice_index;
+		slices[sender_slice_index].parentIndex = root_slice_index;
+		slices[sender_slice_index].gangType = GANGTYPE_PRIMARY_READER;
+		slices[sender_slice_index].segindex = 0;
+		slices[sender_slice_index].numsegments = width;
+		int *subplan_slice_indexes = (int *) palloc(sizeof(int) * (old_subplans + 1));
 		if (old_subplans)
-			memcpy(slice_ids, stmt->subplan_sliceIds, sizeof(int) * old_subplans);
-		slice_ids[old_subplans] = root_slice;
+			memcpy(subplan_slice_indexes, stmt->subplan_sliceIds, sizeof(int) * old_subplans);
+		subplan_slice_indexes[old_subplans] = root_slice_index;
 
 		SubPlan *subplan = makeNode(SubPlan);
 		subplan->subLinkType = EXISTS_SUBLINK;
@@ -109,11 +109,11 @@ RptAttachReducerInitPlan(PlannedStmt *stmt, List *children, int width)
 		subplan->firstColType = VOIDOID;
 		subplan->firstColTypmod = -1;
 		subplan->is_initplan = true;
-		subplan->setParam = list_make1_int(param_id);
+		subplan->setParam = list_make1_int(param_exec_id);
 		stmt->subplans = lappend(stmt->subplans, gather);
 		stmt->paramExecTypes = lappend_oid(stmt->paramExecTypes, BOOLOID);
 		stmt->planTree->initPlan = lappend(stmt->planTree->initPlan, subplan);
-		stmt->subplan_sliceIds = slice_ids;
+		stmt->subplan_sliceIds = subplan_slice_indexes;
 		stmt->slices = slices;
 		stmt->numSlices += 2;
 	});

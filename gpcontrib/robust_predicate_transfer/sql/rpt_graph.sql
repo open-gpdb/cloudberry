@@ -23,10 +23,10 @@ DECLARE
     opt text;
     dump text;
     q text;
-    distributed_id text;
-    replicated_id text;
+    distributed_rtindex text;
+    replicated_rtindex text;
     preserved_name text;
-    preserved_id text;
+    preserved_rtindex text;
     expected_members text;
     member_count int;
 BEGIN
@@ -43,12 +43,12 @@ BEGIN
             'SELECT * FROM rpt_a JOIN rpt_b ON rpt_a.a = rpt_b.a JOIN rpt_c ON rpt_b.a = rpt_c.a AND rpt_a.a = rpt_c.a WHERE rpt_a.b > 50'
         ] LOOP
             dump := rpt_transfer_plan(q);
-            distributed_id := substring(dump FROM 'vertex ([0-9]+) rpt_a rows=');
+            distributed_rtindex := substring(dump FROM 'vertex ([0-9]+) rpt_a rows=');
             SELECT count(*), string_agg(parts[1], ',' ORDER BY parts[1]::int)
                 INTO member_count, expected_members
                 FROM regexp_matches(dump, 'vertex ([0-9]+) (rpt_a|rpt_b|rpt_c) rows=', 'g') AS vertices(parts);
-            IF distributed_id IS NULL OR member_count <> 3 OR
-               dump NOT LIKE ('%members=' || expected_members || ' leader=' || distributed_id || chr(10) || '%') THEN
+            IF distributed_rtindex IS NULL OR member_count <> 3 OR
+               dump NOT LIKE ('%members=' || expected_members || ' leader=' || distributed_rtindex || chr(10) || '%') THEN
                 RAISE EXCEPTION 'class/root mismatch (optimizer=%): %', opt, dump;
             END IF;
             IF dump NOT LIKE ('%reducer order:' || chr(10) || '%') THEN
@@ -67,11 +67,11 @@ BEGIN
         -- Replicated -> hash is local; the reverse broadcast stays global.
         dump := rpt_transfer_plan('SELECT * FROM rpt_a JOIN rpt_r ON rpt_a.a = rpt_r.a WHERE rpt_a.b > 0 AND rpt_r.a > 0');
         -- Resolve table names from vertex records: ORCA can reorder rtindexes.
-        distributed_id := substring(dump FROM 'vertex ([0-9]+) rpt_a rows=');
-        replicated_id := substring(dump FROM 'vertex ([0-9]+) rpt_r rows=');
-        IF distributed_id IS NULL OR replicated_id IS NULL OR
-           dump NOT LIKE ('%forward hop ' || replicated_id || '->' || distributed_id || ' merge=local%') OR
-           dump NOT LIKE ('%backward hop ' || distributed_id || '->' || replicated_id || ' merge=global%') THEN
+        distributed_rtindex := substring(dump FROM 'vertex ([0-9]+) rpt_a rows=');
+        replicated_rtindex := substring(dump FROM 'vertex ([0-9]+) rpt_r rows=');
+        IF distributed_rtindex IS NULL OR replicated_rtindex IS NULL OR
+           dump NOT LIKE ('%forward hop ' || replicated_rtindex || '->' || distributed_rtindex || ' merge=local%') OR
+           dump NOT LIKE ('%backward hop ' || distributed_rtindex || '->' || replicated_rtindex || ' merge=global%') THEN
             RAISE EXCEPTION 'replicated direction mismatch (optimizer=%): %', opt, dump;
         END IF;
         dump := rpt_transfer_plan('SELECT * FROM rpt_a JOIN rpt_d ON rpt_a.a = rpt_d.x AND rpt_a.b = rpt_d.y WHERE rpt_a.b > 50');
@@ -91,12 +91,12 @@ BEGIN
             ) AS cases(query, preserved)
         LOOP
             dump := rpt_transfer_plan(q);
-            preserved_id := substring(dump FROM ('vertex ([0-9]+) ' || preserved_name || ' rows='));
-            IF preserved_id IS NULL THEN
+            preserved_rtindex := substring(dump FROM ('vertex ([0-9]+) ' || preserved_name || ' rows='));
+            IF preserved_rtindex IS NULL THEN
                 RAISE EXCEPTION 'missing preserved table % (optimizer=%): %', preserved_name, opt, dump;
             END IF;
             IF EXISTS (SELECT FROM regexp_split_to_table(dump, chr(10)) line
-                       WHERE line LIKE ('vertex ' || preserved_id || ' %')
+                       WHERE line LIKE ('vertex ' || preserved_rtindex || ' %')
                          AND line LIKE '%apply from%') THEN
                 RAISE EXCEPTION 'preserved side reduced: %', dump;
             END IF;

@@ -27,6 +27,8 @@
 MODULE_big = robust_predicate_transfer
 OBJS = \
 	$(WIN32RES) \
+	src/rptbackward.o \
+	src/rptbackwardplan.o \
 	src/rptgraph.o \
 	src/rpteligible.o \
 	src/rptforward.o \
@@ -42,7 +44,7 @@ PGFILEDESC = "robust_predicate_transfer - RPT+ transfer plans over Anser"
 EXTENSION = robust_predicate_transfer
 DATA = robust_predicate_transfer--1.0.sql
 
-REGRESS = rpt_regions rpt_graph rpt_backward_eligibility rpt_key_types rpt_forward rpt_forward_faults
+REGRESS = rpt_regions rpt_graph rpt_backward_eligibility rpt_key_types rpt_forward rpt_forward_faults rpt_backward rpt_backward_faults
 
 # Anser is a sibling module, not a linked library: it is preloaded and dfmgr.c
 # loads modules RTLD_GLOBAL, so the AnserXxx entry points resolve at load time.
@@ -117,8 +119,9 @@ unitcheck: test/graph_test test/inject_test test/forward_walk_test
 test/graph_test: $(srcdir)/test/graph_test.cpp $(wildcard $(srcdir)/src/*.cpp) $(srcdir)/include/rpt.h $(srcdir)/include/rptqual.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(PG_CPPFLAGS) $< -o $@
 
-test/inject_test: $(srcdir)/test/inject_test.cpp $(srcdir)/src/rptinject.cpp $(srcdir)/include/rpt.h
-	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(PG_CPPFLAGS) $< -o $@
+test/inject_test: $(srcdir)/test/inject_test.cpp $(wildcard $(srcdir)/src/*.cpp) $(srcdir)/include/rpt.h $(srcdir)/include/rptinject.h
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(PG_CPPFLAGS) -ffunction-sections -fdata-sections \
+	  $(WALK_TEST_LDFLAGS) $< -o $@
 
 EXTRA_CLEAN += test/graph_test test/inject_test
 
@@ -138,7 +141,7 @@ endif
 test/forward_walk_backend.o: $(top_srcdir)/src/backend/optimizer/util/walkers.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(PG_CPPFLAGS) -ffunction-sections -fdata-sections -c $< -o $@
 
-test/forward_walk_test: $(srcdir)/test/forward_walk_test.cpp $(srcdir)/src/rptforward.cpp $(srcdir)/include/rpt.h test/forward_walk_backend.o
+test/forward_walk_test: $(srcdir)/test/forward_walk_test.cpp $(srcdir)/src/rptforward.cpp $(srcdir)/include/rpt.h $(srcdir)/include/rptinject.h test/forward_walk_backend.o
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(PG_CPPFLAGS) -ffunction-sections -fdata-sections \
 	  $(WALK_TEST_LDFLAGS) $< test/forward_walk_backend.o -o $@
 
@@ -146,4 +149,4 @@ EXTRA_CLEAN += test/forward_walk_test test/forward_walk_backend.o
 
 .PHONY: diagnosticcheck
 diagnosticcheck:
-	PYTHONDONTWRITEBYTECODE=1 $(SURVEY_PYTHON) $(srcdir)/test/diagnose_forward_test.py
+	PYTHONDONTWRITEBYTECODE=1 $(SURVEY_PYTHON) $(srcdir)/test/diagnose_rpt_test.py

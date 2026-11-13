@@ -147,7 +147,7 @@ def survey_sql(query, optimizer, timeout_ms, search_path):
         "SET LOCAL optimizer = " + sql_literal(optimizer) + ";",
         "SELECT set_config('search_path', " + sql_literal(search_path) + ", true);",
         "SET LOCAL rpt.enable = off;",
-        "SET LOCAL rpt.backward = off;",
+        "SET LOCAL rpt.backward = on;",
         "SET LOCAL anser.enable = on;",
         "SET LOCAL anser.runtime_filter = off;",
         "SELECT " + sql_literal(BEGIN_DUMP) + ";",
@@ -164,7 +164,9 @@ def parse_dump(dump):
     if dump.strip() == "no transfer regions":
         return dict(classes=0, root_classes=0, global_edges=0, rule9=0,
                     strict=0, eligible=0, known_rows_removed=0.0,
-                    unknown_estimates=0)
+                    unknown_estimates=0, runtime_survey_available=True,
+                    runtime_classes=0, runtime_root_classes=0, runtime_strict=0,
+                    runtime_eligible=0, runtime_injected_consumers=0, runtime_refusals={})
     lines = [line for line in dump.splitlines() if line.startswith("survey ")]
     if len(lines) != 1:
         raise ValueError("missing survey metrics; install the analysis/survey build")
@@ -178,6 +180,23 @@ def parse_dump(dump):
             not result["eligible"] <= result["strict"] <= result["rule9"] <= result["global_edges"] or
             result["unknown_estimates"] > result["strict"]):
         raise ValueError("inconsistent survey metrics")
+    runtime = [line for line in dump.splitlines() if line.startswith("runtime survey ")]
+    result["runtime_survey_available"] = bool(runtime)
+    if runtime:
+        if len(runtime) != 1:
+            raise ValueError("duplicate runtime survey metrics")
+        fields = dict(re.findall(r"([a-z_]+)=([0-9]+)", runtime[0]))
+        for key in ("classes", "root_classes", "strict", "eligible"):
+            result["runtime_" + key] = int(fields[key])
+        consumers = [line for line in dump.splitlines()
+                     if line.startswith("backward consumer ") and " decision=" in line]
+        result["runtime_injected_consumers"] = sum(line.endswith(" decision=inject") for line in consumers)
+        reasons = {}
+        for line in consumers:
+            reason = line.split(" decision=", 1)[1]
+            if reason != "inject":
+                reasons[reason] = reasons.get(reason, 0) + 1
+        result["runtime_refusals"] = reasons
     return result
 
 
@@ -249,6 +268,19 @@ def summarize(records, complete):
               "table. unknown_estimates counts missing statistics; it is not zero benefit.", "",
               "The survey is evidence for the plan's go/no-go decision; this "
               "script never authorizes runtime injection."]
+    runtime = [row for row in records if row.get("runtime_survey_available")]
+    if runtime:
+        lines += ["", "Largest-root runtime schedule (successful runtime dumps only):", "",
+                  "| Suite | Optimizer | Queries | Root classes | Proven consumers | Selected consumers |",
+                  "| --- | --- | --- | --- | --- | --- |"]
+        for suite in sorted({row["suite"] for row in runtime}):
+            for optimizer in ("off", "on"):
+                group = [row for row in runtime if row["suite"] == suite and row["optimizer"] == optimizer]
+                lines.append("| %s | %s | %d | %d | %d | %d |" % (
+                    suite, optimizer, len(group), sum(row["runtime_root_classes"] for row in group),
+                    sum(row["runtime_strict"] for row in group),
+                    sum(row["runtime_injected_consumers"] for row in group)))
+        lines += ["", "Runtime refusal reasons are retained per query in results.json."]
     return "\n".join(lines) + "\n"
 
 

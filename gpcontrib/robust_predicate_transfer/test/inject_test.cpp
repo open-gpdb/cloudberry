@@ -27,6 +27,9 @@
  *-------------------------------------------------------------------------
  */
 #include "../src/rptinject.cpp"
+#include "../src/rptforward.cpp"
+#include "../src/rptbackwardplan.cpp"
+#include "../src/rptbackward.cpp"
 #include <cstdlib>
 #include <cstdarg>
 #include <set>
@@ -36,6 +39,17 @@
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "check failed: %s:%d: %s\n", __FILE__, __LINE__, #c); abort(); } } while (0)
 
 static std::vector<void *> allocations;
+struct BuiltFilter
+{
+	bool producer;
+	Plan *child;
+	AttrNumber attno;
+	uint32 condition_id;
+	int processes;
+	bool defer_first;
+};
+static std::vector<BuiltFilter> built_filters;
+
 extern "C" {
 sigjmp_buf *PG_exception_stack = NULL;
 ErrorContextCallback *error_context_stack = NULL;
@@ -80,34 +94,54 @@ Node *makeBoolConst(bool value, bool isnull)
 	Const *c = makeNode(Const); c->consttype = BOOLOID; c->constvalue = BoolGetDatum(value);
 	c->constisnull = isnull; return (Node *) c;
 }
-static int max_id(Plan *p)
+static int max_plan_node_id(Plan *p)
 {
 	if (!p) return 0;
-	int m = Max(p->plan_node_id, Max(max_id(p->lefttree), max_id(p->righttree)));
+	int m = Max(p->plan_node_id, Max(max_plan_node_id(p->lefttree), max_plan_node_id(p->righttree)));
 	if (IsA(p, Sequence))
 	{
 		ListCell *lc;
-		foreach(lc, ((Sequence *) p)->subplans) m = Max(m, max_id((Plan *) lfirst(lc)));
+		foreach(lc, ((Sequence *) p)->subplans) m = Max(m, max_plan_node_id((Plan *) lfirst(lc)));
 	}
 	return m;
 }
+int AnserSliceProducers(PlannedStmt *, int slice_index)
+{
+	return slice_index >= 0 ? 3 : 0;
+}
+CustomScan *AnserBuildBloomProducerScan(Plan *child, AttrNumber attno, uint32 condition_id,
+	const char *, int64, Size, int64, int processes)
+{
+	built_filters.push_back({true, child, attno, condition_id, processes, false});
+	CustomScan *cs = makeNode(CustomScan);
+	cs->custom_plans = list_make1(child);
+	return cs;
+}
+CustomScan *AnserBuildBloomConsumerScan(Plan *child, AttrNumber attno, uint32 condition_id,
+	const char *, int64, Size, int64, int processes, bool defer_first)
+{
+	built_filters.push_back({false, child, attno, condition_id, processes, defer_first});
+	CustomScan *cs = makeNode(CustomScan);
+	cs->custom_plans = list_make1(child);
+	return cs;
+}
 int AnserMaxPlanNodeId(PlannedStmt *s)
 {
-	int m = max_id(s->planTree); ListCell *lc;
-	foreach(lc, s->subplans) m = Max(m, max_id((Plan *) lfirst(lc)));
+	int m = max_plan_node_id(s->planTree); ListCell *lc;
+	foreach(lc, s->subplans) m = Max(m, max_plan_node_id((Plan *) lfirst(lc)));
 	return m;
 }
 }
 
-static void collect_ids(Plan *p, std::set<int> &ids)
+static void collect_plan_node_ids(Plan *p, std::set<int> &plan_node_ids)
 {
 	if (!p) return;
-	CHECK(ids.insert(p->plan_node_id).second);
-	collect_ids(p->lefttree, ids); collect_ids(p->righttree, ids);
+	CHECK(plan_node_ids.insert(p->plan_node_id).second);
+	collect_plan_node_ids(p->lefttree, plan_node_ids); collect_plan_node_ids(p->righttree, plan_node_ids);
 	if (IsA(p, Sequence))
 	{
 		ListCell *lc;
-		foreach(lc, ((Sequence *) p)->subplans) collect_ids((Plan *) lfirst(lc), ids);
+		foreach(lc, ((Sequence *) p)->subplans) collect_plan_node_ids((Plan *) lfirst(lc), plan_node_ids);
 	}
 }
 
@@ -174,16 +208,141 @@ static void layout(bool existing, bool noop)
 	Const *qual = (Const *) linitial(quals);
 	CHECK(qual->consttype == BOOLOID && !qual->constisnull);
 	CHECK(!DatumGetBool(qual->constvalue));
-	std::set<int> ids;
-	collect_ids(stmt.planTree, ids);
-	ListCell *lc; foreach(lc, stmt.subplans) collect_ids((Plan *) lfirst(lc), ids);
-	CHECK(ids.size() == (existing ? 6U : 5U) - (noop ? 1U : 0U));
+	std::set<int> plan_node_ids;
+	collect_plan_node_ids(stmt.planTree, plan_node_ids);
+	ListCell *lc; foreach(lc, stmt.subplans) collect_plan_node_ids((Plan *) lfirst(lc), plan_node_ids);
+	CHECK(plan_node_ids.size() == (existing ? 6U : 5U) - (noop ? 1U : 0U));
 	int previous_max = noop ? (existing ? 90 : 5) : 110;
 	CHECK(empty->plan.plan_node_id > previous_max &&
 		  seq->plan.plan_node_id > previous_max && motion->plan.plan_node_id > previous_max);
 }
+static void backward_stacks(bool refused, bool materialize, bool with_forward)
+{
+	RptTransferMgr schedule;
+	SeqScan scans[2] = {};
+	TargetEntry entries[2] = {};
+	Var keys[2] = {};
+	Hash hash = {}; hash.plan.type = T_Hash;
+	Motion motion = {}; motion.plan.type = T_Motion;
+	HashJoin join = {}; join.join.plan.type = T_HashJoin;
+	join.join.plan.righttree = &hash.plan;
+	join.join.plan.lefttree = &motion.plan;
+	PlannedStmt stmt = {}; stmt.type = T_PlannedStmt;
+	stmt.planTree = &join.join.plan;
+	PlanSlice slices[3] = {}; stmt.slices = slices; stmt.numSlices = 3;
+	for (int i = 0; i < 2; ++i)
+	{
+		scans[i].scan.plan.type = T_SeqScan;
+		scans[i].scan.scanrelid = i + 1;
+		keys[i].xpr.type = T_Var;
+		keys[i].varno = i + 1; keys[i].varattno = 2;
+		entries[i].xpr.type = T_TargetEntry; entries[i].expr = (Expr *) &keys[i];
+		entries[i].resno = 1; /* physical attno differs from output position */
+		scans[i].scan.plan.targetlist = list_make1(&entries[i]);
+		RptVertexInfo vertex = {};
+		vertex.rtindex = i + 1; vertex.scan = &scans[i].scan.plan;
+		vertex.cardinality = i == 0 ? 1000 : 10000;
+		schedule.vertex_index_by_rtindex[i + 1] = i;
+		schedule.vertices.push_back(vertex);
+	}
+	hash.plan.lefttree = &scans[0].scan.plan;
+	motion.plan.lefttree = &scans[1].scan.plan;
+	schedule.root_rtindexes.insert(1);
+	RptBackwardConsumer decision;
+	decision.class_key = decision.producer_key = {1, 2};
+	decision.consumer_key = {2, 2};
+	decision.producer_rtindex = 1; decision.consumer_rtindex = 2;
+	decision.producer_parent = &hash.plan; decision.consumer_parent = &motion.plan;
+	decision.producer_attno = decision.consumer_attno = 1;
+	decision.producer_slice_index = 1; decision.consumer_slice_index = 2;
+	decision.eligible = true; decision.defer_first = true;
+	decision.estimated_rows_removed = 9000;
+	schedule.backward_consumers.push_back(decision);
+	/* A second class on the same scans exercises repeated stacking/relinking. */
+	decision.class_key.attno = 3;
+	schedule.backward_consumers.push_back(decision);
+	RptInjectionState state;
+	state.parents[&scans[0].scan.plan] = &hash.plan;
+	state.parents[&scans[1].scan.plan] = &motion.plan;
+	for (auto &scan : scans) state.tops[&scan.scan.plan] = &scan.scan.plan;
+	state.next_plan_node_id = 100;
+	std::vector<RptForwardComponent> forward_components(1);
+	forward_components[0].accepted = true;
+	for (int i = 0; i < 7; ++i)
+	{
+		RptForwardChannel channel;
+		channel.source_rtindex = i + 1; channel.target_rtindex = i + 2;
+		forward_components[0].channels.push_back(channel);
+	}
+	rpt_assign_forward_channels(forward_components, state);
+	CHECK(state.next_condition_id == 7);
+	for (int i = 0; i < 7; ++i)
+		CHECK(forward_components[0].channels[i].condition_id == uint32(i));
+	CustomScan forward[2] = {};
+	if (with_forward)
+		for (int i = 0; i < 2; ++i)
+		{
+			forward[i].scan.plan.type = T_CustomScan;
+			forward[i].custom_plans = list_make1(&scans[i]);
+			RptRelinkStack(&state, &scans[i].scan.plan, &forward[i].scan.plan);
+		}
+	if (refused)
+		schedule.backward_consumers[0].consumer_attno =
+			schedule.backward_consumers[1].consumer_attno = 99;
+	Hash hash_before = hash; Motion motion_before = motion;
+	auto tops_before = state.tops;
+	PlanSlice slices_before[3]; memcpy(slices_before, slices, sizeof(slices));
+	size_t allocations_before = allocations.size();
+	built_filters.clear();
+	RptForwardParams params; params.max_exchange_ms = -1;
+	std::string trace;
+	bool injected = false;
+	RptInjectBackward(&stmt, schedule, {}, params,
+		[](double, int64 *elems, int64 *payload, int64 *bytes) {
+			*elems = 1000; *payload = *bytes = 1024; return true;
+		}, materialize, &state, &trace, &injected);
+	CHECK(stmt.slices == slices && stmt.numSlices == 3);
+	CHECK(memcmp(slices_before, slices, sizeof(slices)) == 0);
+	CHECK(stmt.subplans == NIL && stmt.paramExecTypes == NIL);
+	if (refused || !materialize)
+	{
+		CHECK(!injected && built_filters.empty());
+		CHECK(memcmp(&hash_before, &hash, sizeof(hash)) == 0);
+		CHECK(memcmp(&motion_before, &motion, sizeof(motion)) == 0);
+		CHECK(state.tops == tops_before && allocations.size() == allocations_before);
+		CHECK(state.next_plan_node_id == 100);
+		CHECK(trace.find(refused ? "placement changed" : "decision=inject") != std::string::npos);
+	}
+	else
+	{
+		CHECK(injected && built_filters.size() == 4);
+		CHECK(state.next_condition_id == 9 && state.next_plan_node_id == 104);
+		for (int i = 0; i < 2; ++i)
+		{
+			CHECK(built_filters[2*i].producer && !built_filters[2*i+1].producer);
+			CHECK(built_filters[2*i].condition_id == uint32(7+i));
+			CHECK(built_filters[2*i+1].condition_id == uint32(7+i));
+			CHECK(built_filters[2*i].processes == 3 && built_filters[2*i+1].defer_first);
+			CHECK(built_filters[2*i].attno == 1 && built_filters[2*i+1].attno == 1);
+		}
+		Plan *producer = hash.plan.lefttree, *consumer = motion.plan.lefttree;
+		CHECK(producer == state.tops.at(&scans[0].scan.plan));
+		CHECK(consumer == state.tops.at(&scans[1].scan.plan));
+		CHECK(producer->plan_node_id == 102 && consumer->plan_node_id == 103);
+		producer = (Plan *) linitial(((CustomScan *) producer)->custom_plans);
+		consumer = (Plan *) linitial(((CustomScan *) consumer)->custom_plans);
+		CHECK(producer->plan_node_id == 100 && consumer->plan_node_id == 101);
+		CHECK(linitial(((CustomScan *) producer)->custom_plans) == tops_before.at(&scans[0].scan.plan));
+		CHECK(linitial(((CustomScan *) consumer)->custom_plans) == tops_before.at(&scans[1].scan.plan));
+	}
+}
+
 int main()
 {
+	backward_stacks(false, true, true);
+	backward_stacks(false, true, false);
+	backward_stacks(true, true, true);
+	backward_stacks(false, false, true);
 	layout(false, false); layout(true, false);
 	layout(false, true); layout(true, true);
 	for (void *p : allocations) free(p);

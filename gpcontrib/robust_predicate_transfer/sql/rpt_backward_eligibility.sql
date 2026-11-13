@@ -56,17 +56,17 @@ CREATE FUNCTION pg_temp.rpt_expect(q text, producer text, consumer text,
 RETURNS text LANGUAGE plpgsql AS $$
 DECLARE
     dump text := rpt_transfer_plan(q);
-    producer_id text;
-    consumer_id text;
+    producer_rtindex text;
+    consumer_rtindex text;
     decision text;
 BEGIN
-    producer_id := substring(dump FROM ('vertex ([0-9]+) ' || producer || ' rows='));
-    consumer_id := substring(dump FROM ('vertex ([0-9]+) ' || consumer || ' rows='));
-    IF producer_id IS NULL OR consumer_id IS NULL THEN
+    producer_rtindex := substring(dump FROM ('vertex ([0-9]+) ' || producer || ' rows='));
+    consumer_rtindex := substring(dump FROM ('vertex ([0-9]+) ' || consumer || ' rows='));
+    IF producer_rtindex IS NULL OR consumer_rtindex IS NULL THEN
         RAISE EXCEPTION 'missing fixture scans % / %: %', producer, consumer, dump;
     END IF;
     SELECT line INTO decision FROM regexp_split_to_table(dump, chr(10)) line
-        WHERE line LIKE ('backward consumer ' || consumer_id || ' producer ' || producer_id || ' %')
+        WHERE line LIKE ('backward consumer ' || consumer_rtindex || ' producer ' || producer_rtindex || ' %')
           AND substring(line FROM ' reason=(.*)$') = ANY(reasons)
           AND (accepted IS NULL OR line LIKE ('% eligible=' || CASE WHEN accepted THEN 'yes' ELSE 'no' END || ' %'))
         LIMIT 1;
@@ -102,7 +102,7 @@ DECLARE
     path text[];
     producer_path text[];
     split_at integer;
-    producer_id text;
+    producer_rtindex text;
     correlated text;
 BEGIN
     FOREACH opt IN ARRAY ARRAY['off', 'on'] LOOP
@@ -201,13 +201,13 @@ BEGIN
         END IF;
         PERFORM set_config('rpt.max_backward_consumers', '1', true);
         dump := rpt_transfer_plan('SELECT * FROM rpt_elig_root JOIN rpt_elig_member ON rpt_elig_root.k = rpt_elig_member.k JOIN rpt_elig_member2 ON rpt_elig_root.k = rpt_elig_member2.k JOIN rpt_elig_member3 ON rpt_elig_root.k = rpt_elig_member3.k WHERE rpt_elig_root.v < 100');
-        producer_id := substring(dump FROM 'vertex ([0-9]+) rpt_elig_root rows=');
-        IF producer_id IS NULL OR
+        producer_rtindex := substring(dump FROM 'vertex ([0-9]+) rpt_elig_root rows=');
+        IF producer_rtindex IS NULL OR
            NOT EXISTS (SELECT FROM regexp_split_to_table(dump, chr(10)) line
-                       WHERE line LIKE ('backward consumer % producer ' || producer_id || ' %')
+                       WHERE line LIKE ('backward consumer % producer ' || producer_rtindex || ' %')
                          AND line LIKE '% reason=backward consumer cap exceeded') OR
            (SELECT count(*) FROM regexp_split_to_table(dump, chr(10)) line
-            WHERE line LIKE ('backward consumer % producer ' || producer_id || ' %')
+            WHERE line LIKE ('backward consumer % producer ' || producer_rtindex || ' %')
               AND line LIKE '% eligible=yes %') <> 1 THEN
             RAISE EXCEPTION 'fan-out cap fixture did not retain exactly one consumer (optimizer=%): %', opt, dump;
         END IF;
