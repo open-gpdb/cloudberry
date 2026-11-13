@@ -73,7 +73,12 @@ COMPILER = $(CXX) $(CXXFLAGS)
 # resolves AnserIsRuntimeFilterScan from it at load time (RTLD_NOW), and
 # load order must be anser first.  Mirrors gpcontrib/anser's preload
 # machinery.
-installcheck: preload-rpt
+# Backward fault tests use anser_test, which Anser's normal install omits.
+installcheck: install-anser-test preload-rpt
+
+.PHONY: install-anser-test
+install-anser-test:
+	$(MAKE) -C ../anser install-anser-test
 
 .PHONY: preload-rpt
 preload-rpt:
