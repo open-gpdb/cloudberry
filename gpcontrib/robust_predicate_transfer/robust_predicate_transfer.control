@@ -1,0 +1,5 @@
+# robust_predicate_transfer extension
+comment = 'RPT+ transfer-plan analysis over Anser runtime filters'
+default_version = '1.0'
+module_pathname = '$libdir/robust_predicate_transfer'
+relocatable = true
