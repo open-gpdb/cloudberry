@@ -766,6 +766,10 @@ void
 check_control_data(ControlData *oldctrl,
 				   ControlData *newctrl)
 {
+	bool		old_varlena_layout_known =
+		oldctrl->ctrl_ver >= VARLENA_LAYOUT_PG_CONTROL_VER;
+	bool		old_varlena_bigendian = oldctrl->varlena_bigendian;
+
 	if (oldctrl->align == 0 || oldctrl->align != newctrl->align)
 		pg_fatal("old and new pg_controldata alignments are invalid or do not match\n"
 				 "Likely one cluster is a 32-bit install, the other 64-bit\n");
@@ -795,13 +799,23 @@ check_control_data(ControlData *oldctrl,
 
 	/*
 	 * On-disk varlena header layout (bigendian_varlena) is recorded in
-	 * pg_control only since VARLENA_LAYOUT_PG_CONTROL_VER.  Older clusters
-	 * (GPDB6, pre-feature Cloudberry) don't report it, so only enforce the
-	 * match when the old cluster actually carries the field.  A mismatch means
-	 * every variable-length datum would be misread, so this must be fatal.
+	 * pg_control only since VARLENA_LAYOUT_PG_CONTROL_VER.  GPDB6 predates
+	 * that field, but always stores varlena headers in network byte order.
+	 * Identify it by both product and PostgreSQL version; other older sources
+	 * must not be assumed to use the GPDB6 layout.  The product is available
+	 * from get_bin_version() before the server has been started.
 	 */
-	if (oldctrl->ctrl_ver >= VARLENA_LAYOUT_PG_CONTROL_VER &&
-		oldctrl->varlena_bigendian != newctrl->varlena_bigendian)
+	if (!old_varlena_layout_known &&
+		old_cluster.version.type == Greenplum &&
+		GET_MAJOR_VERSION(old_cluster.major_version) == 904)
+	{
+		old_varlena_layout_known = true;
+		old_varlena_bigendian = true;
+	}
+
+	/* A mismatch would make transferred variable-length data unreadable. */
+	if (old_varlena_layout_known &&
+		old_varlena_bigendian != newctrl->varlena_bigendian)
 		pg_fatal("old and new clusters use different on-disk varlena header layouts\n"
 				 "The new cluster must be built to match the old cluster's layout\n"
 				 "(rebuild with or without -DFORCE_BIGENDIAN_VARLENA to match).\n");
