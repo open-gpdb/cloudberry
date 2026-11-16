@@ -60,6 +60,7 @@
 #include "common/connect.h"
 #include "common/hashfn.h"
 #include "dumputils.h"
+#include "fe_utils/legacy_partition.h"
 #include "fe_utils/string_utils.h"
 #include "getopt_long.h"
 #include "libpq/libpq-fs.h"
@@ -8153,6 +8154,68 @@ getLegacyExternalPartitions(Archive *fout, TableInfo tblinfo[], int numTables)
 			tbinfo->interesting = true;
 		}
 	}
+}
+
+/*
+ * Legacy PARTITION BY creates children with their root's column layout.  A
+ * heap leaf can have a different physical layout after ADD/EXCHANGE PARTITION;
+ * dump it separately so that its files still match the restored descriptor.
+ * Keep other storage models, intermediate parents and cross-schema leaves on
+ * the existing path, where pg_upgrade's compatibility check rejects a mismatch.
+ */
+void
+getLegacyPartitionLayouts(Archive *fout)
+{
+	PQExpBuffer query;
+	PGresult   *res;
+
+	if (!fout->dopt->binary_upgrade ||
+		fout->remoteVersion / 100 != GPDB6_MAJOR_PGVERSION / 100)
+		return;
+
+	query = createPQExpBuffer();
+	appendPQExpBufferStr(query,
+		"SELECT DISTINCT child.oid "
+		"FROM pg_catalog.pg_partition p "
+		"JOIN pg_catalog.pg_partition_rule pr ON pr.paroid = p.oid "
+		"JOIN pg_catalog.pg_class parent ON parent.oid = p.parrelid "
+		"JOIN pg_catalog.pg_class child ON child.oid = pr.parchildrelid "
+		"WHERE NOT p.paristemplate AND "
+		LEGACY_HEAP_PARTITION_REBUILDABLE
+		"  AND (parent.relnatts <> child.relnatts OR EXISTS ( "
+		"    SELECT 1 FROM pg_catalog.pg_attribute pa "
+		"    LEFT JOIN pg_catalog.pg_attribute ca "
+		"      ON ca.attrelid = child.oid AND ca.attnum = pa.attnum "
+		"    WHERE pa.attrelid = parent.oid AND pa.attnum > 0 "
+		"      AND (ca.attnum IS NULL "
+		"        OR (pa.attisdropped, pa.attlen, pa.attalign, pa.attbyval) "
+		"           IS DISTINCT FROM "
+		"           (ca.attisdropped, ca.attlen, ca.attalign, ca.attbyval) "
+		"        OR (NOT pa.attisdropped AND "
+		"            (pa.attname, pa.atttypid, pa.atttypmod, pa.attcollation) "
+		"            IS DISTINCT FROM "
+		"            (ca.attname, ca.atttypid, ca.atttypmod, ca.attcollation))))) "
+		"ORDER BY child.oid");
+	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+
+	for (int i = 0; i < PQntuples(res); i++)
+	{
+		TableInfo  *tbinfo = findTableByOid(atooid(PQgetvalue(res, i, 0)));
+		TableInfo  *root;
+
+		if (!tbinfo || tbinfo->is_part_parent)
+			continue;
+		root = findTableByOid(tbinfo->parrelid);
+		if (root && (root->dobj.dump & DUMP_COMPONENT_DEFINITION))
+		{
+			tbinfo->dobj.dump = root->dobj.dump;
+			tbinfo->interesting = true;
+			tbinfo->legacy_part_recreate = true;
+		}
+	}
+
+	PQclear(res);
+	destroyPQExpBuffer(query);
 }
 
 /*
@@ -18078,25 +18141,42 @@ appendLegacyTemplates(Archive *fout, const TableInfo *tbinfo, PQExpBuffer q)
 
 /* Replace a root-created placeholder using its normalized target bound. */
 static void
-wrapLegacyExternalPartition(Archive *fout, const TableInfo *tbinfo,
+wrapLegacyPartition(Archive *fout, const TableInfo *tbinfo,
 							PQExpBuffer q)
 {
 	TableInfo  *root = findTableByOid(tbinfo->parrelid);
 	PQExpBuffer body = createPQExpBuffer();
 	char	   *placeholder;
-	char	   *external = pg_strdup(fmtQualifiedDumpable(tbinfo));
+	char	   *leaf = pg_strdup(fmtQualifiedDumpable(tbinfo));
+	Oid			source_array_oid = InvalidOid;
 
 	if (!root || tbinfo->numParents != 1)
-		fatal("cannot identify the immediate parent of external partition %s", external);
-	for (int i = 0; i < tbinfo->numatts; i++)
-		if (tbinfo->attisdropped[i])
-			fatal("cannot restore external partition %s with dropped columns", external);
+		fatal("cannot identify the immediate parent of partition %s", leaf);
+	if (tbinfo->relstorage == 'x')
+		for (int i = 0; i < tbinfo->numatts; i++)
+			if (tbinfo->attisdropped[i])
+				fatal("cannot restore external partition %s with dropped columns", leaf);
+	if (tbinfo->legacy_part_recreate)
+	{
+		PQExpBuffer query = createPQExpBuffer();
+		PGresult   *res;
+
+		appendPQExpBuffer(query,
+			"SELECT typarray FROM pg_catalog.pg_type WHERE oid = '%u'::pg_catalog.oid",
+			tbinfo->reltype);
+		res = ExecuteSqlQueryForSingleRow(fout, query->data);
+		source_array_oid = atooid(PQgetvalue(res, 0, 0));
+		PQclear(res);
+		destroyPQExpBuffer(query);
+	}
 
 	placeholder = pg_strdup(fmtQualifiedId(root->dobj.namespace->dobj.name,
 										  tbinfo->dobj.name));
 	appendPQExpBufferStr(body,
 		"DECLARE\n  part pg_catalog.regclass;\n  parent pg_catalog.regclass;\n"
-		"  bound pg_catalog.text;\nBEGIN\n"
+		"  bound pg_catalog.text;\n"
+		"  array_oid pg_catalog.oid;\n  array_namespace pg_catalog.oid;\n"
+		"  array_name pg_catalog.name;\nBEGIN\n"
 		"  SELECT c.oid, i.inhparent, pg_catalog.pg_get_expr(c.relpartbound, c.oid)\n"
 		"    INTO STRICT part, parent, bound\n"
 		"    FROM pg_catalog.pg_class c JOIN pg_catalog.pg_inherits i ON i.inhrelid = c.oid\n"
@@ -18106,16 +18186,37 @@ wrapLegacyExternalPartition(Archive *fout, const TableInfo *tbinfo,
 		"::pg_catalog.regclass AND i.inhparent = '%u'::pg_catalog.oid\n"
 		"      AND c.relkind = 'r' AND c.relispartition AND c.oid = '%u'::pg_catalog.oid;\n"
 		"  IF bound IS NULL THEN\n"
-		"    RAISE EXCEPTION 'external partition placeholder has no bound';\n"
+		"    RAISE EXCEPTION 'partition placeholder has no bound';\n"
 		"  END IF;\n"
-		"  EXECUTE pg_catalog.format('ALTER TABLE %%s DETACH PARTITION %%s', parent, part);\n"
-		"  EXECUTE pg_catalog.format('DROP TABLE %%s', part);\n"
-		"  EXECUTE ",
+		"  EXECUTE pg_catalog.format('ALTER TABLE %%s DETACH PARTITION %%s', parent, part);\n",
 		tbinfo->parents[0]->dobj.catId.oid, tbinfo->dobj.catId.oid);
+	if (tbinfo->legacy_part_recreate)
+	{
+		appendPQExpBuffer(body,
+			"  SELECT a.oid, a.typnamespace, a.typname\n"
+			"    INTO STRICT array_oid, array_namespace, array_name\n"
+			"    FROM pg_catalog.pg_class c\n"
+			"    JOIN pg_catalog.pg_type t ON t.oid = c.reltype\n"
+			"    JOIN pg_catalog.pg_type a ON a.oid = t.typarray\n"
+			"    WHERE c.oid = part AND t.oid = '%u'::pg_catalog.oid;\n",
+			tbinfo->reltype);
+		if (OidIsValid(source_array_oid))
+			appendPQExpBuffer(body,
+				"  IF array_oid <> '%u'::pg_catalog.oid THEN\n"
+				"    RAISE EXCEPTION 'partition placeholder array OID changed';\n"
+				"  END IF;\n", source_array_oid);
+	}
+	appendPQExpBufferStr(body,
+		"  EXECUTE pg_catalog.format('DROP TABLE %s', part);\n");
+	if (tbinfo->legacy_part_recreate)
+		appendPQExpBufferStr(body,
+			"  PERFORM pg_catalog.binary_upgrade_set_next_array_pg_type_oid(\n"
+			"    array_oid, array_namespace, array_name::pg_catalog.text);\n");
+	appendPQExpBufferStr(body, "  EXECUTE ");
 	appendStringLiteralAH(body, q->data, fout);
 	appendPQExpBufferStr(body,
 		";\n  EXECUTE pg_catalog.format('ALTER TABLE %s ATTACH PARTITION %s %s', parent, ");
-	appendStringLiteralAH(body, external, fout);
+	appendStringLiteralAH(body, leaf, fout);
 	appendPQExpBufferStr(body, ", bound);\nEND");
 	resetPQExpBuffer(q);
 	appendPQExpBufferStr(q, "DO ");
@@ -18123,7 +18224,7 @@ wrapLegacyExternalPartition(Archive *fout, const TableInfo *tbinfo,
 	appendPQExpBufferStr(q, ";\n");
 
 	free(placeholder);
-	free(external);
+	free(leaf);
 	destroyPQExpBuffer(body);
 }
 
@@ -18168,7 +18269,18 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 	if (legacy_aoco)
 		appendPQExpBufferStr(q, "SET gp_binary_upgrade_legacy_aoco = on;\n");
 
-	if (dopt->binary_upgrade)
+	if (tbinfo->legacy_part_recreate)
+	{
+		/* The wrapper reuses the placeholder's actual array OID and name. */
+		simple_oid_list_append(&preassigned_oids, tbinfo->reltype);
+		appendPQExpBuffer(q,
+			"SELECT pg_catalog.binary_upgrade_set_next_pg_type_oid('%u'::pg_catalog.oid, "
+			"'%u'::pg_catalog.oid, ",
+			tbinfo->reltype, tbinfo->dobj.namespace->dobj.catId.oid);
+		appendStringLiteralAH(q, tbinfo->dobj.name, fout);
+		appendPQExpBufferStr(q, "::pg_catalog.text);\n");
+	}
+	else if (dopt->binary_upgrade)
 		binary_upgrade_set_type_oids_by_rel_oid(fout, q, 	tbinfo->dobj.catId.oid);
 
 	/* Is it a table or a view? */
@@ -18316,14 +18428,44 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 				PQExpBuffer 	partquery = createPQExpBuffer();
 				PGresult	   *partres;
 
-				appendPQExpBuffer(partquery, "SELECT DISTINCT(child.oid) "
-											 "FROM pg_catalog.pg_partition part, "
-											 "     pg_catalog.pg_partition_rule rule, "
-											 "     pg_catalog.pg_class child "
-											 "WHERE part.parrelid = '%u'::pg_catalog.oid "
-											 "  AND rule.paroid = part.oid "
-											 "  AND child.oid = rule.parchildrelid",
-											 tbinfo->dobj.catId.oid);
+				if (fout->remoteVersion >= GPDB6_MAJOR_PGVERSION)
+				{
+					/*
+					 * Legacy CREATE TABLE expands its partition hierarchy breadth
+					 * first, with DEFAULT first among each parent's children.
+					 * Reserve names in that order: long child names can share an
+					 * array-name prefix, and an exchanged child can already have
+					 * an array OID that must remain attached to its own rowtype.
+					 */
+					appendPQExpBuffer(partquery,
+						"WITH RECURSIVE parts AS ( "
+						" SELECT rule.oid, rule.parchildrelid, part.parlevel, "
+						"        ARRAY[CASE WHEN rule.parisdefault THEN 0 ELSE 1 END, "
+						"              rule.parruleord::integer] AS path "
+						" FROM pg_catalog.pg_partition part "
+						" JOIN pg_catalog.pg_partition_rule rule ON rule.paroid = part.oid "
+						" WHERE part.parrelid = '%u'::pg_catalog.oid "
+						"   AND NOT part.paristemplate AND part.parlevel = 0 "
+						" UNION ALL "
+						" SELECT rule.oid, rule.parchildrelid, part.parlevel, "
+						"        parent.path || "
+						"        ARRAY[CASE WHEN rule.parisdefault THEN 0 ELSE 1 END, "
+						"              rule.parruleord::integer] "
+						" FROM pg_catalog.pg_partition part "
+						" JOIN pg_catalog.pg_partition_rule rule ON rule.paroid = part.oid "
+						" JOIN parts parent ON parent.oid = rule.parparentrule "
+						" WHERE NOT part.paristemplate) "
+						"SELECT parchildrelid FROM parts ORDER BY parlevel, path",
+						tbinfo->dobj.catId.oid);
+				}
+				else
+					appendPQExpBuffer(partquery,
+						"SELECT DISTINCT rule.parchildrelid "
+						"FROM pg_catalog.pg_partition part "
+						"JOIN pg_catalog.pg_partition_rule rule ON rule.paroid = part.oid "
+						"WHERE part.parrelid = '%u'::pg_catalog.oid "
+						"  AND NOT part.paristemplate",
+						tbinfo->dobj.catId.oid);
 				partres = ExecuteSqlQuery(fout, partquery->data, PGRES_TUPLES_OK);
 
 				/* It really should..  */
@@ -18493,7 +18635,8 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 				ConstraintInfo *constr = &(tbinfo->checkexprs[j]);
 
 				if (constr->separate ||
-					(!constr->conislocal && !tbinfo->ispartition))
+					(!constr->conislocal && !tbinfo->ispartition &&
+					 !tbinfo->legacy_part_recreate))
 					continue;
 
 				if (actual_atts == 0)
@@ -18790,7 +18933,7 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 					appendPQExpBuffer(q, "DROP COLUMN %s;\n",
 									  fmtId(tbinfo->attnames[j]));
 				}
-				else if (!tbinfo->attislocal[j])
+				else if (!tbinfo->attislocal[j] && !tbinfo->legacy_part_recreate)
 				{
 					appendPQExpBufferStr(q, "\n-- For binary upgrade, recreate inherited column.\n");
 					appendPQExpBufferStr(q, "UPDATE pg_catalog.pg_attribute\n"
@@ -18813,7 +18956,8 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 			{
 				ConstraintInfo *constr = &(tbinfo->checkexprs[k]);
 
-				if (constr->separate || constr->conislocal || tbinfo->ispartition)
+				if (constr->separate || constr->conislocal || tbinfo->ispartition ||
+					tbinfo->legacy_part_recreate)
 					continue;
 
 				appendPQExpBufferStr(q, "\n-- For binary upgrade, set up inherited constraint.\n");
@@ -18830,7 +18974,7 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 				appendPQExpBufferStr(q, "::pg_catalog.regclass;\n");
 			}
 
-			if (numParents > 0 && !tbinfo->ispartition)
+			if (numParents > 0 && !tbinfo->ispartition && !tbinfo->legacy_part_recreate)
 			{
 				appendPQExpBufferStr(q, "\n-- For binary upgrade, set up inheritance this way.\n");
 				for (k = 0; k < numParents; k++)
@@ -19081,8 +19225,9 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 										reltypename, qrelname,
 										tbinfo->dobj.namespace->dobj.name);
 
-	if (dopt->binary_upgrade && tbinfo->parrelid && tbinfo->relstorage == 'x')
-		wrapLegacyExternalPartition(fout, tbinfo, q);
+	if (tbinfo->legacy_part_recreate ||
+		(dopt->binary_upgrade && tbinfo->parrelid && tbinfo->relstorage == 'x'))
+		wrapLegacyPartition(fout, tbinfo, q);
 	if (legacy_aoco)
 		appendPQExpBufferStr(q, "SET gp_binary_upgrade_legacy_aoco = off;\n");
 
@@ -20975,7 +21120,8 @@ setExtPartDependency(Archive *fout, TableInfo *tblinfo, int numTables)
 			exit_nicely(1);
 		}
 
-		if (fout->dopt->binary_upgrade && tbinfo->relstorage == 'x')
+		if (tbinfo->legacy_part_recreate ||
+			(fout->dopt->binary_upgrade && tbinfo->relstorage == 'x'))
 		{
 			addObjectDependency(&tbinfo->dobj, parent->dobj.dumpId);
 			removeObjectDependency(&parent->dobj, tbinfo->dobj.dumpId);
@@ -20984,6 +21130,38 @@ setExtPartDependency(Archive *fout, TableInfo *tblinfo, int numTables)
 		{
 			addObjectDependency(&parent->dobj, tbinfo->dobj.dumpId);
 			removeObjectDependency(&tbinfo->dobj, parent->dobj.dumpId);
+		}
+
+		/*
+		 * GP6 can mark an exchanged leaf's CHECK as both local and inherited.
+		 * If both copies are NOT VALID, they are dumped separately, after the
+		 * reconstructed leaf has been attached.  Add the leaf's copy first:
+		 * the root's recursive ADD can merge it, whereas a local ADD on a
+		 * declarative partition cannot merge an already inherited CHECK.
+		 * Keep both archive entries, including their comments, and enforce
+		 * this order for parallel restores too.  Here parent is the root,
+		 * whose DDL also creates any intermediate partition parents.
+		 */
+		if (tbinfo->legacy_part_recreate)
+		{
+			for (int j = 0; j < tbinfo->ncheck; j++)
+			{
+				ConstraintInfo *constr = &tbinfo->checkexprs[j];
+
+				if (!constr->separate || !constr->conislocal)
+					continue;
+				for (int k = 0; k < parent->ncheck; k++)
+				{
+					ConstraintInfo *pconstr = &parent->checkexprs[k];
+
+					if (pconstr->separate && pconstr->conislocal &&
+						strcmp(constr->dobj.name, pconstr->dobj.name) == 0)
+					{
+						addObjectDependency(&pconstr->dobj, constr->dobj.dumpId);
+						break;
+					}
+				}
+			}
 		}
 	}
 }
