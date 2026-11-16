@@ -70,6 +70,7 @@ extern "C"
 
 #include "anser.h"
 #include "anserplan.h"
+#include "anserplanutils.h"
 #include "rptlocal.h"
 }
 
@@ -139,37 +140,6 @@ rpt_find_parents(PlannedStmt *stmt, const std::set<Plan *> &targets,
 	return parents;
 }
 
-/* Replace `child` under `parent`.  Only the links key resolution can pass
- * through hold base scans here: the outer/inner trees and Anser's own nodes. */
-static bool
-rpt_relink(Plan *parent, Plan *child, Plan *replacement)
-{
-	if (parent->lefttree == child)
-	{
-		parent->lefttree = replacement;
-		return true;
-	}
-	if (parent->righttree == child)
-	{
-		parent->righttree = replacement;
-		return true;
-	}
-	if (IsA(parent, CustomScan))
-	{
-		ListCell   *lc;
-
-		foreach(lc, ((CustomScan *) parent)->custom_plans)
-		{
-			if (lfirst(lc) == child)
-			{
-				lfirst(lc) = replacement;
-				return true;
-			}
-		}
-	}
-	return false;
-}
-
 /* Output position of a base column in a scan's targetlist, or 0. */
 AttrNumber
 RptScanKeyPosition(Plan *scan, const RptKey &key)
@@ -215,7 +185,7 @@ RptRelinkStack(RptInjectionState *state, Plan *scan, Plan *top)
 {
 	Plan *parent = state->parents.at(scan);
 	if (!RptStackMatches(*state, scan, parent) ||
-		!rpt_relink(parent, state->tops.at(scan), top))
+		!AnserReplaceChildPlan(parent, state->tops.at(scan), top))
 		RptPgCall([]() { elog(ERROR, "RPT scan stack changed after preflight"); });
 	state->tops.at(scan) = top;
 }

@@ -17,7 +17,7 @@
 -- specific language governing permissions and limitations
 -- under the License.
 --
--- Run from an empty output directory; see the README's worked-example guide.
+-- Run from an empty output directory; see scripts/README.md.
 -- Use a dedicated database. Existing fixture schemas are never overwritten.
 \set ON_ERROR_STOP on
 \pset pager off

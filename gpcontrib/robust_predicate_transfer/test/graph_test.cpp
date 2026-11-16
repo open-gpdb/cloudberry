@@ -39,6 +39,8 @@
 #include <cstdlib>
 #include <new>
 #include <cstdarg>
+#include <deque>
+#include <initializer_list>
 #undef vsnprintf
 
 /* Unlike assert(), checks and their side effects remain active with NDEBUG. */
@@ -59,6 +61,8 @@ struct TestResolution
 	bool for_consumer;
 };
 static std::map<Plan *, TestResolution> test_resolutions;
+static const Plan *test_local_identity;
+static const Plan *test_anser_filter;
 
 extern "C" {
 sigjmp_buf *PG_exception_stack = NULL;
@@ -83,10 +87,17 @@ bool AnserResolveKeyScan(Plan *top, AttrNumber slot, int, bool consumer,
 }
 Oid getBaseType(Oid type) { return type; }
 bool get_typbyval(Oid) { return true; }
-TypeCacheEntry *lookup_type_cache(Oid, int) { abort(); }
+TypeCacheEntry *lookup_type_cache(Oid type, int flags)
+{
+	CHECK(type == INT4OID && flags == TYPECACHE_EQ_OPR);
+	static TypeCacheEntry entry = {};
+	entry.eq_opr = 96; /* int4eq */
+	return &entry;
+}
 GpPolicy *GpPolicyFetch(Oid) { abort(); }
 void pfree(void *) { abort(); }
-bool AnserIsRuntimeFilterScan(const Plan *) { return false; }
+bool AnserIsRuntimeFilterScan(const Plan *plan) { return plan != NULL && plan == test_anser_filter; }
+bool RptIsLocalScan(const Plan *plan) { return plan == test_local_identity; }
 
 void ExceptionalCondition(const char *, const char *, int) { abort(); }
 void exec_init_plan_tree_base(plan_tree_base_prefix *, PlannedStmt *) {}
@@ -671,6 +682,167 @@ static void index_only_endpoint()
 	CHECK(resolved == (Plan *) &scan && attno == 3);
 }
 
+/*
+ * Interface tests for the helpers RPT shares with Anser.  Their correctness
+ * is Anser's (gpcontrib/anser/test/anserapi_test.c); these check only what
+ * RPT relies on: the policy it passes, the coordinate it reads back and how
+ * it maps the answers onto its graph.
+ */
+namespace {
+struct Fixture
+{
+	std::deque<std::vector<ListCell> > cells;
+	std::deque<List> lists;
+
+	List *list(const std::vector<void *> &items)
+	{
+		cells.emplace_back(items.size());
+		for (size_t i = 0; i < items.size(); ++i)
+			cells.back()[i].ptr_value = items[i];
+		lists.emplace_back();
+		List &l = lists.back();
+		l.type = T_List;
+		l.length = l.max_length = (int) items.size();
+		l.elements = cells.back().data();
+		return &l;
+	}
+	Var *var(int varno, AttrNumber attno, Oid type = INT4OID)
+	{
+		Var *v = new Var();
+		NodeSetTag(v, T_Var);
+		v->varno = varno;
+		v->varattno = attno;
+		v->vartype = type;
+		return v;
+	}
+	List *tlist(std::initializer_list<Var *> vars)
+	{
+		std::vector<void *> entries;
+		for (Var *v : vars)
+		{
+			TargetEntry *t = new TargetEntry();
+			NodeSetTag(t, T_TargetEntry);
+			t->expr = (Expr *) v;
+			t->resno = (AttrNumber) entries.size() + 1;
+			entries.push_back(t);
+		}
+		return list(entries);
+	}
+	template <typename T> T *plan(NodeTag tag, List *tlist,
+								  Plan *left = NULL, Plan *right = NULL)
+	{
+		T *node = new T();
+		NodeSetTag(node, tag);
+		((Plan *) node)->targetlist = tlist;
+		((Plan *) node)->lefttree = left;
+		((Plan *) node)->righttree = right;
+		return node;
+	}
+	template <typename T> Plan *scan(NodeTag tag, Index rti, List *tlist)
+	{
+		T *node = plan<T>(tag, tlist);
+		((Scan *) node)->scanrelid = rti;
+		return (Plan *) node;
+	}
+};
+}
+
+/*
+ * rpt_resolve_key_scan over AnserFindKeyScan.  RPT expects: the TABLE attno
+ * back, not the scan's output position; MergeJoin, NestLoop, Sort and
+ * Material crossed in addition to Anser's set; index and bitmap scans as
+ * vertices; Anser's and RPT's own identity filters seen through; and a
+ * boundary (Result, Agg) refused at the top as well as below.
+ */
+static void rpt_key_descent_policy()
+{
+	Fixture f;
+	Plan *resolved = NULL;
+	AttrNumber attno = 0;
+	Plan *scan = f.scan<SeqScan>(T_SeqScan, 3, f.tlist({f.var(3, 5), f.var(3, 9)}));
+	Plan *other = f.scan<SeqScan>(T_SeqScan, 4, f.tlist({f.var(4, 1)}));
+	Plan *sort = (Plan *) f.plan<Sort>(T_Sort, f.tlist({f.var(OUTER_VAR, 2)}), scan);
+	Plan *mat = (Plan *) f.plan<Material>(T_Material, f.tlist({f.var(OUTER_VAR, 1)}), sort);
+	Plan *nl = (Plan *) f.plan<NestLoop>(T_NestLoop,
+		f.tlist({f.var(OUTER_VAR, 1), f.var(INNER_VAR, 1)}), other, mat);
+	Plan *mj = (Plan *) f.plan<MergeJoin>(T_MergeJoin, f.tlist({f.var(OUTER_VAR, 2)}),
+		nl, f.scan<SeqScan>(T_SeqScan, 5, f.tlist({f.var(5, 1)})));
+
+	/* MergeJoin -> NestLoop inner -> Material -> Sort -> output 2 = table attno 9. */
+	CHECK(rpt_resolve_key_scan(mj, 1, &resolved, &attno));
+	CHECK(resolved == scan && attno == 9);
+
+	CHECK(rpt_resolve_key_scan(f.scan<IndexScan>(T_IndexScan, 6, f.tlist({f.var(6, 3)})),
+							   1, &resolved, &attno) && attno == 3);
+	CHECK(rpt_resolve_key_scan(f.scan<BitmapHeapScan>(T_BitmapHeapScan, 7, f.tlist({f.var(7, 4)})),
+							   1, &resolved, &attno) && attno == 4);
+
+	/* Identity filters, Anser's and RPT's own. */
+	CustomScan *filter = f.plan<CustomScan>(T_CustomScan, f.tlist({f.var(INDEX_VAR, 1)}));
+	filter->custom_plans = f.list({scan});
+	CHECK(!rpt_resolve_key_scan(&filter->scan.plan, 1, &resolved, &attno));
+	test_anser_filter = &filter->scan.plan;
+	CHECK(rpt_resolve_key_scan(&filter->scan.plan, 1, &resolved, &attno));
+	CHECK(resolved == scan && attno == 5);
+	test_anser_filter = NULL;
+	test_local_identity = &filter->scan.plan;
+	CHECK(rpt_resolve_key_scan(&filter->scan.plan, 1, &resolved, &attno));
+	CHECK(resolved == scan && attno == 5);
+	test_local_identity = NULL;
+
+	/* Boundaries: a Result on top, an Agg below a Hash. */
+	CHECK(!rpt_resolve_key_scan((Plan *) f.plan<Result>(T_Result,
+		f.tlist({f.var(OUTER_VAR, 1)}), scan), 1, &resolved, &attno));
+	Plan *agg = (Plan *) f.plan<Agg>(T_Agg, f.tlist({f.var(OUTER_VAR, 1)}), scan);
+	CHECK(!rpt_resolve_key_scan((Plan *) f.plan<Hash>(T_Hash,
+		f.tlist({f.var(OUTER_VAR, 1)}), agg), 1, &resolved, &attno));
+}
+
+/*
+ * RptCollectGraph over AnserForEachChildPlan and AnserEqualityKeys.  RPT
+ * expects a join nested under any child list (CustomScan, SubqueryScan,
+ * Append) to be found, the equality's sides -- not its operand order --
+ * mapped onto the edge's vertices, the validated key type recorded, and an
+ * equality Anser refuses to produce no edge.
+ */
+static void rpt_graph_uses_shared_walk_and_keys()
+{
+	for (Oid type : {INT4OID, FLOAT8OID})
+	{
+		Fixture f;
+		Plan *probe = f.scan<SeqScan>(T_SeqScan, 1, f.tlist({f.var(1, 4, type)}));
+		Plan *build = f.scan<SeqScan>(T_SeqScan, 2, f.tlist({f.var(2, 6, type)}));
+		Plan *hash = (Plan *) f.plan<Hash>(T_Hash, f.tlist({f.var(OUTER_VAR, 1, type)}), build);
+		HashJoin *join = f.plan<HashJoin>(T_HashJoin, f.tlist({f.var(OUTER_VAR, 1, type)}),
+										  probe, hash);
+		OpExpr *op = new OpExpr();
+		NodeSetTag(op, T_OpExpr);
+		op->opno = 96;			/* int4eq; the stub type cache knows only int4 */
+		op->args = f.list({f.var(INNER_VAR, 1, type), f.var(OUTER_VAR, 1, type)});
+		join->hashclauses = f.list({op});
+		Append *append = f.plan<Append>(T_Append, NIL);
+		append->appendplans = f.list({&join->join.plan});
+		SubqueryScan *subquery = f.plan<SubqueryScan>(T_SubqueryScan, NIL);
+		subquery->subplan = &append->plan;
+		CustomScan *top = f.plan<CustomScan>(T_CustomScan, NIL);
+		top->custom_plans = f.list({&subquery->scan.plan});
+		PlannedStmt stmt = {};
+		stmt.planTree = &top->scan.plan;
+		RptTransferMgr mgr;
+
+		RptCollectGraph(&stmt, &mgr);
+		if (type != INT4OID)
+		{
+			CHECK(mgr.neighbor_matrix.empty());
+			continue;
+		}
+		const RptEdgeInfo &e = mgr.neighbor_matrix.at(1).at(2);
+		CHECK(e.key_type == INT4OID && e.clauses.size() == 1);
+		CHECK(e.clauses[0].first.rtindex == 1 && e.clauses[0].first.attno == 4);
+		CHECK(e.clauses[0].second.rtindex == 2 && e.clauses[0].second.attno == 6);
+	}
+}
+
 static void join_protection()
 {
 	for (JoinType type : {JOIN_INNER, JOIN_SEMI, JOIN_LEFT, JOIN_RIGHT,
@@ -1084,37 +1256,6 @@ static void qual_function_allowlist()
 	CHECK(!RptQualHashFunctionSafe(1000000));
 }
 
-static void raw_datum_key_types()
-{
-	for (Oid type : {BOOLOID, CHAROID, INT2OID, INT4OID, INT8OID, OIDOID,
-					 XIDOID, CIDOID, DATEOID, TIMEOID, TIMESTAMPOID,
-					 TIMESTAMPTZOID, MONEYOID, PG_LSNOID, XID8OID})
-		CHECK(rpt_key_type_supported(type));
-	for (Oid type : std::vector<Oid>{InvalidOid, FLOAT4OID, FLOAT8OID, TEXTOID, NUMERICOID,
-					 1000000})
-		CHECK(!rpt_key_type_supported(type));
-
-	/* Even if a custom type is by-value, refuse it before consulting its
-	 * own default equality (the type-cache stub aborts if reached). */
-	Var outer = {}, inner = {};
-	outer.xpr.type = inner.xpr.type = T_Var;
-	outer.varno = OUTER_VAR; inner.varno = INNER_VAR;
-	outer.vartype = inner.vartype = 1000000;
-	ListCell args[2] = {};
-	args[0].ptr_value = &outer; args[1].ptr_value = &inner;
-	List arguments = {};
-	arguments.type = T_List;
-	arguments.length = arguments.max_length = 2;
-	arguments.elements = args;
-	OpExpr equality = {};
-	equality.xpr.type = T_OpExpr;
-	equality.args = &arguments;
-	equality.opno = 1000001;
-	Var *out = NULL, *in = NULL;
-	Oid keytype = InvalidOid;
-	CHECK(!rpt_equality_clause((Node *) &equality, &out, &in, &keytype));
-}
-
 static void backward_selection()
 {
 	RptTransferMgr schedule;
@@ -1221,10 +1362,11 @@ static void unfiltered_backward_edges()
 
 int main()
 {
+	rpt_key_descent_policy();
+	rpt_graph_uses_shared_walk_and_keys();
 	unfiltered_backward_edges();
 	forward_delivery_process_counts();
 	backward_selection();
-	raw_datum_key_types();
 	qual_function_allowlist();
 	forward_selection_chain_and_selectivity();
 	forward_selection_in_process();

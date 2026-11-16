@@ -56,6 +56,8 @@ extern "C"
 #include "utils/typcache.h"
 
 #include "anserplan.h"
+#include "anserplanutils.h"
+#include "rptlocal.h"
 }
 
 
@@ -65,8 +67,6 @@ static RptVertexInfo *rpt_vertex_for_scan(PlannedStmt *stmt,
 										  RptTransferMgr *mgr, Plan *scan);
 static bool rpt_resolve_key_scan(Plan *top, AttrNumber key_attno,
 								 Plan **scan_out, AttrNumber *attno_out);
-static bool rpt_equality_clause(Node *clause, Var **outer_var,
-								Var **inner_var, Oid *key_type);
 static void rpt_add_edge(PlannedStmt *stmt, RptTransferMgr *mgr,
 						 JoinType jointype,
 						 Plan *outer_plan, AttrNumber outer_attno,
@@ -163,225 +163,34 @@ rpt_vertex_for_scan(PlannedStmt *stmt, RptTransferMgr *mgr, Plan *scan)
 	return &mgr->vertices.back();
 }
 
-/*
- * Follow one join-key column down to the base scan that originates it.
- * Modeled on AnserResolveKeyScan (gpcontrib/anser/src/anserplan.c) but not
- * calling it: Anser's resolver stops at SeqScan and descends only Hash,
- * Motion, HashJoin and its own nodes, where we accept the index and bitmap
- * scans as termini as well and see through MergeJoin, NestLoop, Sort and
- * Material too.  Where Anser's loop stops at the parent of the scan (it
- * needs the parent to relink the scan under a filter node), we only need the
- * scan and its key attno, so the terminus test runs on the node itself: the
- * descent steps into the scan, and the scan's own targetlist names its
- * table's columns with varno == scanrelid after set_plan_references.
- *
- * False means no single base scan holds the whole key column -- the column
- * comes from an Append, an Agg, a set operation, a SubqueryScan, a CTE, or
- * anything else not on the descent list.  That is a correctness gate, not a
- * missed optimization: a filter built on a partial source of the column
- * would reject rows that can join, so the caller drops the edge.
- */
+/* RPT's policy accepts index/bitmap scan termini and additional transparent
+ * joins and unary nodes. The shared walker handles output positions, base
+ * attributes and identity-filter children; RPT needs the table coordinate. */
+static bool
+rpt_identity_filter(const Plan *plan)
+{
+	return AnserIsRuntimeFilterScan(plan) || RptIsLocalScan(plan);
+}
+
+static bool
+rpt_key_passthrough(const Plan *plan)
+{
+	return AnserKeyPassthroughNode(plan) || IsA(plan, MergeJoin) ||
+		IsA(plan, NestLoop) || IsA(plan, Sort) || IsA(plan, Material);
+}
+
 static bool
 rpt_resolve_key_scan(Plan *top, AttrNumber key_attno,
 					 Plan **scan_out, AttrNumber *attno_out)
 {
-	Plan	   *node = top;
-	AttrNumber	attno = key_attno;
+	const AnserKeyScanPolicy policy = {rpt_is_vertex_scan,
+		rpt_key_passthrough, rpt_identity_filter, NULL};
+	AnserKeyScanResult result;
 
-	for (;;)
-	{
-		TargetEntry *tle;
-		Var		   *var;
-		Plan	   *child;
-
-		if (node == NULL ||
-			attno < 1 || attno > list_length(node->targetlist))
-			return false;
-
-		tle = (TargetEntry *) list_nth(node->targetlist, attno - 1);
-		if (tle == NULL || !IsA(tle->expr, Var))
-			return false;
-		var = (Var *) tle->expr;
-
-		if (IsA(node, IndexOnlyScan) && var->varno == INDEX_VAR)
-		{
-			IndexOnlyScan *ios = (IndexOnlyScan *) node;
-
-			if (var->varattno < 1 || var->varattno > list_length(ios->indextlist))
-				return false;
-			tle = (TargetEntry *) list_nth(ios->indextlist, var->varattno - 1);
-			if (!IsA(tle->expr, Var))
-				return false;
-			var = (Var *) tle->expr;
-		}
-
-		/*
-		 * Terminus: a base scan the reducer could replay.  The key column is
-		 * the Var's attno in the scanned relation.  A targetlist Var naming
-		 * anything but the scan's own rangetable entry (a whole-row Var, a
-		 * placeholder) is not a plain column and ends the descent.
-		 */
-		if (rpt_is_vertex_scan(node))
-		{
-			Scan	   *scan = (Scan *) node;
-
-			if (scan->scanrelid == 0 || var->varno != (int) scan->scanrelid)
-				return false;
-			*scan_out = node;
-			*attno_out = var->varattno;
-			return true;
-		}
-
-		/*
-		 * Which child supplies this column.  As in AnserResolveKeyScan, a
-		 * join is the only node here with two children; unlike it, all three
-		 * join types are descended, not just HashJoin.  An Anser filter node
-		 * is a passthrough with an identity targetlist (its Vars carry
-		 * INDEX_VAR into custom_plans), so a scan Anser already filtered
-		 * stays reachable.
-		 */
-		if (var->varno == OUTER_VAR)
-			child = outerPlan(node);
-		else if (var->varno == INNER_VAR &&
-				 (IsA(node, HashJoin) || IsA(node, MergeJoin) ||
-				  IsA(node, NestLoop)))
-			child = innerPlan(node);
-		else if (var->varno == INDEX_VAR && AnserIsRuntimeFilterScan(node))
-			child = (Plan *) linitial(((CustomScan *) node)->custom_plans);
-		else
-			return false;
-
-		if (child == NULL)
-			return false;
-
-		/*
-		 * Anything not on this list is a region boundary: Append,
-		 * MergeAppend, Agg, ProjectSet, SubqueryScan, CteScan, Unique, Limit,
-		 * SetOp, WindowAgg, Result, the dynamic scans, and the rest.  The
-		 * walk descends into them to find joins, but a key column never
-		 * crosses them.
-		 */
-		if (!rpt_is_vertex_scan(child) &&
-			!IsA(child, Hash) && !IsA(child, Motion) &&
-			!IsA(child, HashJoin) && !IsA(child, MergeJoin) &&
-			!IsA(child, NestLoop) &&
-			!IsA(child, Sort) && !IsA(child, Material) &&
-			!AnserIsRuntimeFilterScan(child))
-			return false;
-
-		node = child;
-		attno = var->varattno;
-	}
-}
-
-/* Raw Datum bytes are a valid Bloom key only for these canonical built-in
- * types. A custom by-value type can equate distinct representations even
- * through its own default equality operator. Domains are unwrapped first. */
-static bool
-rpt_key_type_supported(Oid type)
-{
-	switch (type)
-	{
-		case BOOLOID:
-		case CHAROID:
-		case INT2OID:
-		case INT4OID:
-		case INT8OID:
-		case OIDOID:
-		case XIDOID:
-		case CIDOID:
-		case DATEOID:
-		case TIMEOID:
-		case TIMESTAMPOID:
-		case TIMESTAMPTZOID:
-		case MONEYOID:
-		case PG_LSNOID:
-		case XID8OID:
-			return true;
-		default:
-			return false;
-	}
-}
-
-/*
- * Validate one equijoin clause and split it into outer/inner Vars.
- *
- * The shape and the operator validation are exactly anser_hashjoin_keys's
- * (gpcontrib/anser/src/anserplan.c), lifted from HashJoin->hashclauses to
- * any clause list: a two-argument OpExpr whose RelabelType-stripped args are
- * one OUTER_VAR and one INNER_VAR Var, over the same by-value base type on
- * both sides, restricted to trusted built-ins, with opno equal to TYPECACHE_EQ_OPR
- * equality operator.  Anser hashes raw Datum bytes, and the transfer filters
- * will too, so SQL equality must coincide with bitwise Datum equality of the
- * key; anything looser could prune rows that actually join.  A NestLoop
- * clause with a Param on either side fails the Var test, as required --
- * such a clause is not a plain col = col join.
- *
- * Unlike Anser, which accepts only single-clause equijoins, callers pass one
- * clause at a time: edge weight is the shared-attribute count, so
- * multi-clause joins must be taken apart rather than refused.
- */
-static bool
-rpt_equality_clause(Node *clause, Var **outer_var, Var **inner_var,
-					Oid *key_type)
-{
-	OpExpr	   *op;
-	Node	   *l;
-	Node	   *r;
-	Var		   *lvar;
-	Var		   *rvar;
-	Oid			keytype;
-	TypeCacheEntry *tce;
-
-	if (clause == NULL || !IsA(clause, OpExpr))
+	if (!AnserFindKeyScan(top, key_attno, &policy, NULL, &result))
 		return false;
-	op = (OpExpr *) clause;
-	if (list_length(op->args) != 2)
-		return false;
-
-	l = (Node *) linitial(op->args);
-	r = (Node *) lsecond(op->args);
-	while (l != NULL && IsA(l, RelabelType))
-		l = (Node *) ((RelabelType *) l)->arg;
-	while (r != NULL && IsA(r, RelabelType))
-		r = (Node *) ((RelabelType *) r)->arg;
-	if (l == NULL || r == NULL || !IsA(l, Var) || !IsA(r, Var))
-		return false;
-
-	if (((Var *) l)->varno == OUTER_VAR && ((Var *) r)->varno == INNER_VAR)
-	{
-		lvar = (Var *) l;
-		rvar = (Var *) r;
-	}
-	else if (((Var *) l)->varno == INNER_VAR && ((Var *) r)->varno == OUTER_VAR)
-	{
-		lvar = (Var *) r;
-		rvar = (Var *) l;
-	}
-	else
-		return false;
-	*outer_var = lvar;
-	*inner_var = rvar;
-
-	if ((*inner_var)->vartype != (*outer_var)->vartype)
-		return false;
-
-	keytype = RptPgCall([&]() { return getBaseType((*inner_var)->vartype); });
-	if (!RptPgCall([&]() { return get_typbyval(keytype); }))
-		return false;
-	if (!rpt_key_type_supported(keytype))
-		return false;
-
-	/*
-	 * The clause has to be the type's own equality rather than just some
-	 * hashable operator spelled "=". The type allowlist above supplies the
-	 * separate proof that equal keys have the same Datum representation.
-	 */
-	tce = RptPgCall([&]() { return lookup_type_cache(keytype, TYPECACHE_EQ_OPR); });
-	if (!OidIsValid(tce->eq_opr) || op->opno != tce->eq_opr)
-		return false;
-
-	*key_type = keytype;
+	*scan_out = result.scan;
+	*attno_out = result.table_attno;
 	return true;
 }
 
@@ -427,8 +236,8 @@ rpt_add_edge(PlannedStmt *stmt, RptTransferMgr *mgr, JoinType jointype,
 	RptEdgeInfo *edge;
 
 	/* ANTI, FULL and the GP extras make no usable edge at all. */
-	if (jointype != JOIN_INNER && jointype != JOIN_SEMI &&
-		jointype != JOIN_LEFT && jointype != JOIN_RIGHT)
+	if (!AnserJoinSideReducible(jointype, false) &&
+		!AnserJoinSideReducible(jointype, true))
 		return;
 
 	if (!rpt_resolve_key_scan(outer_plan, outer_attno,
@@ -451,9 +260,9 @@ rpt_add_edge(PlannedStmt *stmt, RptTransferMgr *mgr, JoinType jointype,
 	inner_v = &mgr->vertices[mgr->vertex_index_by_rtindex[inner_rtindex]];
 
 	/* The preserved side of an outer join is protected from reduction. */
-	if (jointype == JOIN_LEFT)
+	if (!AnserJoinSideReducible(jointype, false))
 		protected_rtindex = outer_rtindex;
-	else if (jointype == JOIN_RIGHT)
+	else if (!AnserJoinSideReducible(jointype, true))
 		protected_rtindex = inner_rtindex;
 
 	if (outer_rtindex <= inner_rtindex)
@@ -515,8 +324,10 @@ rpt_collect_clauses(PlannedStmt *stmt, RptTransferMgr *mgr, JoinType jointype,
 		Var		   *inner_var;
 		Oid			key_type;
 
-		if (!rpt_equality_clause((Node *) lfirst(lc),
-								 &outer_var, &inner_var, &key_type))
+		if (!RptPgCall([&]() {
+			return AnserEqualityKeys((Node *) lfirst(lc),
+									 &outer_var, &inner_var, &key_type);
+		}))
 			continue;
 
 		rpt_add_edge(stmt, mgr, jointype,
@@ -539,7 +350,7 @@ rpt_collect_clauses(PlannedStmt *stmt, RptTransferMgr *mgr, JoinType jointype,
 static void
 rpt_walk(PlannedStmt *stmt, RptTransferMgr *mgr, Plan *plan)
 {
-	ListCell   *lc;
+	struct WalkContext { PlannedStmt *stmt; RptTransferMgr *mgr; } context = {stmt, mgr};
 
 	if (plan == NULL)
 		return;
@@ -565,41 +376,10 @@ rpt_walk(PlannedStmt *stmt, RptTransferMgr *mgr, Plan *plan)
 			break;
 	}
 
-	rpt_walk(stmt, mgr, outerPlan(plan));
-	rpt_walk(stmt, mgr, innerPlan(plan));
-
-	switch (nodeTag(plan))
-	{
-		case T_Append:
-			foreach(lc, ((Append *) plan)->appendplans)
-				rpt_walk(stmt, mgr, (Plan *) lfirst(lc));
-			break;
-		case T_MergeAppend:
-			foreach(lc, ((MergeAppend *) plan)->mergeplans)
-				rpt_walk(stmt, mgr, (Plan *) lfirst(lc));
-			break;
-		case T_Sequence:
-			foreach(lc, ((Sequence *) plan)->subplans)
-				rpt_walk(stmt, mgr, (Plan *) lfirst(lc));
-			break;
-		case T_BitmapAnd:
-			foreach(lc, ((BitmapAnd *) plan)->bitmapplans)
-				rpt_walk(stmt, mgr, (Plan *) lfirst(lc));
-			break;
-		case T_BitmapOr:
-			foreach(lc, ((BitmapOr *) plan)->bitmapplans)
-				rpt_walk(stmt, mgr, (Plan *) lfirst(lc));
-			break;
-		case T_SubqueryScan:
-			rpt_walk(stmt, mgr, ((SubqueryScan *) plan)->subplan);
-			break;
-		case T_CustomScan:
-			foreach(lc, ((CustomScan *) plan)->custom_plans)
-				rpt_walk(stmt, mgr, (Plan *) lfirst(lc));
-			break;
-		default:
-			break;
-	}
+	AnserForEachChildPlan(plan, [](Plan *child, void *arg) {
+		WalkContext *context = (WalkContext *) arg;
+		rpt_walk(context->stmt, context->mgr, child);
+	}, &context);
 }
 
 /*

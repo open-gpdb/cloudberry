@@ -115,20 +115,27 @@ installcheck-with-install:
 
 # Uses PostgreSQL headers but no server: synthetic plans exercise the exact
 # production graph code and deterministic failure paths.
+ANSER_SHARED_HEADERS = $(wildcard $(srcdir)/../anser/include/*.h)
+
 .PHONY: unitcheck
-unitcheck: test/graph_test test/inject_test test/forward_walk_test
+unitcheck: test/graph_test test/inject_test test/forward_walk_test test/local_hash_test
 	./test/graph_test
 	./test/inject_test
 	./test/forward_walk_test
+	./test/local_hash_test
 
-test/graph_test: $(srcdir)/test/graph_test.cpp $(wildcard $(srcdir)/src/*.cpp) $(srcdir)/include/rpt.h $(srcdir)/include/rptqual.h
-	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(PG_CPPFLAGS) $< -o $@
+# Exercise Anser's real shared key checks, not copies in the test fixture.
+test/anserplankeys.o: $(srcdir)/../anser/src/anserplankeys.c $(srcdir)/../anser/include/anserplan.h
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(PG_CPPFLAGS) -c $< -o $@
 
-test/inject_test: $(srcdir)/test/inject_test.cpp $(wildcard $(srcdir)/src/*.cpp) $(srcdir)/include/rpt.h $(srcdir)/include/rptinject.h $(srcdir)/../anser/include/ansertlist.h
+test/graph_test: $(srcdir)/test/graph_test.cpp test/anserplankeys.o $(wildcard $(srcdir)/src/*.cpp) $(srcdir)/include/rpt.h $(srcdir)/include/rptqual.h $(ANSER_SHARED_HEADERS)
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(PG_CPPFLAGS) $< test/anserplankeys.o -o $@
+
+test/inject_test: $(srcdir)/test/inject_test.cpp $(wildcard $(srcdir)/src/*.cpp) $(srcdir)/include/rpt.h $(srcdir)/include/rptinject.h $(srcdir)/../anser/include/ansertlist.h $(ANSER_SHARED_HEADERS)
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(PG_CPPFLAGS) -ffunction-sections -fdata-sections \
 	  $(WALK_TEST_LDFLAGS) $< -o $@
 
-EXTRA_CLEAN += test/graph_test test/inject_test
+EXTRA_CLEAN += test/graph_test test/inject_test test/anserplankeys.o
 
 SURVEY_PYTHON ?= python3
 .PHONY: surveycheck
@@ -146,7 +153,7 @@ endif
 test/forward_walk_backend.o: $(top_srcdir)/src/backend/optimizer/util/walkers.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(PG_CPPFLAGS) -ffunction-sections -fdata-sections -c $< -o $@
 
-test/forward_walk_test: $(srcdir)/test/forward_walk_test.cpp $(srcdir)/src/rptforward.cpp $(srcdir)/include/rpt.h $(srcdir)/include/rptinject.h test/forward_walk_backend.o
+test/forward_walk_test: $(srcdir)/test/forward_walk_test.cpp $(srcdir)/src/rptforward.cpp $(srcdir)/include/rpt.h $(srcdir)/include/rptinject.h test/forward_walk_backend.o $(ANSER_SHARED_HEADERS)
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(PG_CPPFLAGS) -ffunction-sections -fdata-sections \
 	  $(WALK_TEST_LDFLAGS) $< test/forward_walk_backend.o -o $@
 
@@ -155,3 +162,10 @@ EXTRA_CLEAN += test/forward_walk_test test/forward_walk_backend.o
 .PHONY: diagnosticcheck
 diagnosticcheck:
 	PYTHONDONTWRITEBYTECODE=1 $(SURVEY_PYTHON) $(srcdir)/test/diagnose_rpt_test.py
+
+# Run the real local reducer producer/consumer over storage-shaped Datums.
+test/local_hash_test: $(srcdir)/test/local_hash_test.c $(srcdir)/src/rptlocal.c $(srcdir)/../anser/include/anserbloom.h $(ANSER_SHARED_HEADERS)
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(PG_CPPFLAGS) -ffunction-sections -fdata-sections \
+	  $(WALK_TEST_LDFLAGS) $< -o $@
+
+EXTRA_CLEAN += test/local_hash_test

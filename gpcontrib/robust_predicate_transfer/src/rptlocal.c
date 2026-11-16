@@ -35,8 +35,8 @@
  * The registry entry lives in the executor's query context and unregisters
  * itself when that context goes, so an aborted execution leaves nothing behind.
  *
- * Keys are hashed as raw Datums, exactly as Anser does: both sides have the
- * same by-value type, whose equality is bitwise (rptregion.cpp).
+ * Keys use Anser's width-normalized Datum representation. Unused upper
+ * bytes can differ between heap and AOCO even for the same by-value column.
  *
  * IDENTIFICATION
  *	  gpcontrib/robust_predicate_transfer/src/rptlocal.c
@@ -45,6 +45,9 @@
  */
 #include "postgres.h"
 
+#include "anserplanutils.h"
+
+#include "anserbloom.h"
 #include "ansertlist.h"
 
 #include "commands/explain.h"
@@ -82,6 +85,7 @@ typedef struct RptLocalScanState
 	CustomScanState csstate;
 	uint32		condition_id;
 	AttrNumber	key_attno;
+	int16		key_length;
 	int64		total_elems;
 	bool		started;
 	RptLocalEntry *entry;		/* producer: where it adds; consumer: what it probes */
@@ -143,32 +147,6 @@ RptIsLocalScan(const Plan *plan)
 
 /* ---- plan construction ---- */
 
-/* Pass-through targetlist over the child's output, as Anser's nodes use. */
-static List *
-rpt_local_identity_tlist(List *child_tlist)
-{
-	List	   *tlist = NIL;
-	ListCell   *lc;
-	AttrNumber	attno = 0;
-
-	foreach(lc, child_tlist)
-	{
-		TargetEntry *tle = (TargetEntry *) lfirst(lc);
-
-		attno++;
-		tlist = lappend(tlist,
-						makeTargetEntry((Expr *) makeVar(INDEX_VAR, attno,
-														 exprType((Node *) tle->expr),
-														 exprTypmod((Node *) tle->expr),
-														 exprCollation((Node *) tle->expr),
-														 0),
-										attno,
-										tle->resname ? pstrdup(tle->resname) : NULL,
-										tle->resjunk));
-	}
-	return tlist;
-}
-
 static CustomScan *
 rpt_local_build(const CustomScanMethods *methods, Plan *child,
 				AttrNumber key_attno, uint32 condition_id, int64 total_elems)
@@ -178,18 +156,9 @@ rpt_local_build(const CustomScanMethods *methods, Plan *child,
 	cs->custom_private = list_make3(makeInteger((int) condition_id),
 									makeInteger((int) key_attno),
 									makeInteger((int) Min(total_elems, PG_INT32_MAX)));
-	cs->scan.plan.targetlist = rpt_local_identity_tlist(child->targetlist);
-	cs->scan.plan.startup_cost = child->startup_cost;
-	cs->scan.plan.total_cost = child->total_cost;
-	cs->scan.plan.plan_rows = child->plan_rows;
-	cs->scan.plan.plan_width = child->plan_width;
-	cs->scan.plan.parallel_aware = false;
+	AnserInitFilterScan(cs, methods, child);
 	cs->scan.plan.parallel_safe = false;
-	cs->scan.plan.flow = (Flow *) copyObject(child->flow);
-	cs->scan.scanrelid = 0;
-	cs->custom_plans = list_make1(child);
-	cs->custom_scan_tlist = AnserFilterScanTlist(child);
-	cs->methods = methods;
+
 	return cs;
 }
 
@@ -272,19 +241,7 @@ rpt_local_begin(CustomScanState *node, EState *estate, int eflags)
 	 * every slice, and EXPLAIN initializes without running. */
 	node->custom_ps = list_make1(ExecInitNode((Plan *) linitial(cscan->custom_plans),
 											  estate, eflags));
-}
-
-static TupleTableSlot *
-rpt_local_pass(CustomScanState *node, TupleTableSlot *childslot)
-{
-	ExecCopySlot(node->ss.ss_ScanTupleSlot, childslot);
-	return node->ss.ss_ScanTupleSlot;
-}
-
-static bool
-rpt_local_recheck(CustomScanState *node, TupleTableSlot *slot)
-{
-	return true;
+	st->key_length = AnserKeyLength((PlanState *) linitial(node->custom_ps), st->key_attno);
 }
 
 static TupleTableSlot *
@@ -335,17 +292,18 @@ rpt_local_produce_next(CustomScanState *node)
 		Datum		value = slot_getattr(slot, st->key_attno, &isnull);
 
 		if (!isnull)
-			bloom_add_element(st->entry->filter, (unsigned char *) &value,
-							  sizeof(Datum));
+		{
+			AnserBloomAddKey(st->entry->filter, value, st->key_length);
+		}
 	}
-	return rpt_local_pass(node, slot);
+	return AnserFilterChildSlot(node, slot);
 }
 
 static TupleTableSlot *
 rpt_local_produce_exec(CustomScanState *node)
 {
 	return ExecScan(&node->ss, (ExecScanAccessMtd) rpt_local_produce_next,
-					(ExecScanRecheckMtd) rpt_local_recheck);
+					(ExecScanRecheckMtd) AnserFilterRecheck);
 }
 
 static TupleTableSlot *
@@ -371,21 +329,20 @@ rpt_local_consume_next(CustomScanState *node)
 		if (TupIsNull(slot))
 			return NULL;
 		if (st->entry == NULL)
-			return rpt_local_pass(node, slot);	/* fail open */
+			return AnserFilterChildSlot(node, slot);	/* fail open */
 
 		/* NULLs never match an equijoin key; let the join handle them. */
 		value = slot_getattr(slot, st->key_attno, &isnull);
 		if (!isnull)
 		{
 			InstrCountFiltered1(node, 1);
-			if (bloom_lacks_element(st->entry->filter, (unsigned char *) &value,
-									sizeof(Datum)))
+			if (AnserBloomLacksKey(st->entry->filter, value, st->key_length))
 			{
 				InstrCountFiltered2(node, 1);
 				continue;
 			}
 		}
-		return rpt_local_pass(node, slot);
+		return AnserFilterChildSlot(node, slot);
 	}
 }
 
@@ -393,7 +350,7 @@ static TupleTableSlot *
 rpt_local_consume_exec(CustomScanState *node)
 {
 	return ExecScan(&node->ss, (ExecScanAccessMtd) rpt_local_consume_next,
-					(ExecScanRecheckMtd) rpt_local_recheck);
+					(ExecScanRecheckMtd) AnserFilterRecheck);
 }
 
 static void

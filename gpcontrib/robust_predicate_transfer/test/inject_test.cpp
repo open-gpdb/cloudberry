@@ -67,6 +67,28 @@ void ExceptionalCondition(const char *, const char *, int) { abort(); }
 bool errstart(int, const char *) { abort(); }
 void errfinish(const char *, int, const char *) { abort(); }
 void errmsg_internal(const char *, ...) { abort(); }
+char *pstrdup(const char *value)
+{
+	char *out = (char *) palloc(strlen(value) + 1);
+	strcpy(out, value);
+	return out;
+}
+Oid exprType(const Node *node) { CHECK(IsA(node, Var)); return ((const Var *) node)->vartype; }
+int32 exprTypmod(const Node *node) { CHECK(IsA(node, Var)); return ((const Var *) node)->vartypmod; }
+Oid exprCollation(const Node *node) { CHECK(IsA(node, Var)); return ((const Var *) node)->varcollid; }
+Var *makeVar(int varno, AttrNumber attno, Oid type, int32 typmod, Oid collation, Index level)
+{
+	Var *var = makeNode(Var);
+	var->varno = varno; var->varattno = attno; var->vartype = type;
+	var->vartypmod = typmod; var->varcollid = collation; var->varlevelsup = level;
+	return var;
+}
+TargetEntry *makeTargetEntry(Expr *expr, AttrNumber resno, char *name, bool junk)
+{
+	TargetEntry *entry = makeNode(TargetEntry);
+	entry->expr = expr; entry->resno = resno; entry->resname = name; entry->resjunk = junk;
+	return entry;
+}
 char *psprintf(const char *fmt, ...)
 {
 	char *p = (char *) palloc(128);
@@ -120,6 +142,11 @@ void *copyObjectImpl(const void *input)
 {
 	if (input == NULL) return NULL;
 	const Node *node = (const Node *) input;
+	if (IsA(node, Flow))
+	{
+		Flow *out = (Flow *) palloc(sizeof(Flow));
+		memcpy(out, input, sizeof(Flow)); return out;
+	}
 	if (IsA(node, Var))
 	{
 		Var *out = (Var *) palloc(sizeof(Var));
@@ -385,6 +412,12 @@ static void backward_stacks(bool refused, bool materialize, bool with_forward)
 static void stacked_deparse_targetlists()
 {
 	SeqScan base = {}; base.scan.plan.type = T_SeqScan;
+	Flow flow = {}; flow.type = T_Flow; flow.numsegments = 3;
+	base.scan.plan.flow = &flow;
+	base.scan.plan.parallel_aware = base.scan.plan.parallel_safe = true;
+	base.scan.plan.startup_cost = 1; base.scan.plan.total_cost = 25;
+	base.scan.plan.plan_rows = 1000; base.scan.plan.plan_width = 8;
+	const CustomScanMethods methods = {};
 	Var columns[2] = {}; TargetEntry entries[2] = {};
 	for (int i = 0; i < 2; ++i)
 	{
@@ -398,20 +431,17 @@ static void stacked_deparse_targetlists()
 	for (int depth = 0; depth < 8; ++depth)
 	{
 		CustomScan *node = &stack[depth]; node->scan.plan.type = T_CustomScan;
-		node->custom_scan_tlist = AnserFilterScanTlist(child);
+		/* AnserInitFilterScan's own fields are Anser's contract; RPT relies
+		 * on stacked filters resolving to the base relation's columns. */
+		AnserInitFilterScan(node, &methods, child);
 		for (int i = 0; i < 2; ++i)
 		{
 			TargetEntry *resolved = get_tle_by_resno(node->custom_scan_tlist, i + 1);
 			CHECK(((Var *) resolved->expr)->varno == 42);
 			CHECK(((Var *) resolved->expr)->varattno == i + 7);
 			CHECK(resolved->resjunk == (i == 1));
-			Var *var = (Var *) copyObjectImpl(&columns[i]);
-			var->varno = INDEX_VAR; var->varattno = i + 1;
-			TargetEntry *tle = (TargetEntry *) copyObjectImpl(&entries[i]);
-			tle->expr = (Expr *) var;
-			node->scan.plan.targetlist = lappend(node->scan.plan.targetlist, tle);
+
 		}
-		node->custom_plans = list_make1(child);
 		child = &node->scan.plan;
 	}
 	/* Resolve the referenced slot, not the tlist's positional order. */
