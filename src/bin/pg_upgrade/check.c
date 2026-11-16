@@ -91,6 +91,10 @@ output_check_banner(bool live_check)
 void
 check_and_dump_old_cluster(bool live_check, char **sequence_script_file_name)
 {
+	bool		retire_distributed_log =
+		old_cluster.version.type == Greenplum &&
+		GET_MAJOR_VERSION(old_cluster.major_version) == 904;
+
 	/* -- OLD -- */
 
 	if (!live_check)
@@ -98,6 +102,10 @@ check_and_dump_old_cluster(bool live_check, char **sequence_script_file_name)
 
 	/* Extract a list of databases and tables from the old cluster */
 	get_db_and_rel_infos(&old_cluster);
+
+	/* Retiring GPDB6 distributed mappings requires this even with --skip-checks. */
+	if (retire_distributed_log)
+		check_for_prepared_transactions(&old_cluster);
 
 	if (skip_checks())
 	{
@@ -118,7 +126,8 @@ check_and_dump_old_cluster(bool live_check, char **sequence_script_file_name)
 	report_progress(&old_cluster, CHECK, "Failure checks");
 	check_is_install_user(&old_cluster);
 	check_proper_datallowconn(&old_cluster);
-	check_for_prepared_transactions(&old_cluster);
+	if (!retire_distributed_log)
+		check_for_prepared_transactions(&old_cluster);
 	check_for_composite_data_type_usage(&old_cluster);
 	check_for_reg_data_type_usage(&old_cluster);
 	check_for_isn_and_int8_passing_mismatch(&old_cluster);

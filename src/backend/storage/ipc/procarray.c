@@ -1911,9 +1911,12 @@ ComputeXidHorizons(ComputeXidHorizonsResult *h, bool updateGlobalVis)
 		 * account.
 		 * We don't try to advance oldestxmin across DtxSnapshots, it
 		 * should be done during GetSnapshotData() which is enough.
+		 * Binary upgrade has no distributed transactions; consulting the
+		 * inherited distributed log would prevent catalog tuples from being
+		 * removed and frozen before the segment's XID counters are reset.
 		 */
 		if (IsPostmasterEnvironment && updateGlobalVis
-			&& !IS_QUERY_DISPATCHER() && !gp_maintenance_mode)
+			&& !IS_QUERY_DISPATCHER() && !IsBinaryUpgrade && !gp_maintenance_mode)
 			xmin = DistributedLog_GetOldestXmin(xmin);
 
 		/*

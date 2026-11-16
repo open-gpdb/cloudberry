@@ -63,6 +63,7 @@ static void setup(char *argv0, bool *live_check);
 static void get_cluster_version(ClusterInfo *cluster);
 
 static void copy_subdir_files(const char *old_subdir, const char *new_subdir);
+static void transfer_distributed_log(void);
 
 #ifdef WIN32
 static int	CreateRestrictedProcess(char *cmd, PROCESS_INFORMATION *processInfo, const char *progname);
@@ -228,11 +229,7 @@ main(int argc, char **argv)
 			  new_cluster.pgdata);
 	check_ok();
 
-	/*
-	 * GPDB_UPGRADE_FIXME: Copy the pg_distributedlog over in vanilla.
-	 * The assumption that this works needs to be verified
-	 */
-	copy_subdir_files("pg_distributedlog", "pg_distributedlog");
+	transfer_distributed_log();
 
 	/* New now using xids of the old system */
 
@@ -646,6 +643,10 @@ setup(char *argv0, bool *live_check)
 static void
 prepare_new_cluster(void)
 {
+	PGconn	   *conn_template1;
+	PGresult   *dbres;
+	int			dbnum;
+
 	/*
 	 * It would make more sense to freeze after loading the schema, but that
 	 * would cause us to lose the frozenxids restored by the load. We use
@@ -668,12 +669,35 @@ prepare_new_cluster(void)
 
 
 	/*
-	 * We do freeze after analyze so pg_statistic is also frozen. template0 is
-	 * not frozen here, but data rows were frozen by initdb, and we set its
-	 * datfrozenxid, relfrozenxids, and relminmxid later to match the new xid
-	 * counter later.
+	 * Freeze after analyze so pg_statistic is also frozen.  Include databases
+	 * such as template0 that vacuumdb --all skips.  This must happen before
+	 * replacing the target's transaction history and counters with the source's:
+	 * after that, new catalog tuples can precede the target's freeze horizons.
 	 */
 	prep_status("Freezing all rows in the new cluster");
+	conn_template1 = connectToServer(&new_cluster, "template1");
+	dbres = executeQueryOrDie(conn_template1,
+							  "SELECT datname FROM pg_catalog.pg_database "
+							  "WHERE NOT datallowconn");
+	for (dbnum = 0; dbnum < PQntuples(dbres); dbnum++)
+	{
+		char	   *datname = PQgetvalue(dbres, dbnum, 0);
+		PGconn	   *conn;
+
+		PQclear(executeQueryOrDie(conn_template1,
+								  "ALTER DATABASE %s ALLOW_CONNECTIONS = true",
+								  quote_identifier(datname)));
+		conn = connectToServer(&new_cluster, datname);
+		PQclear(executeQueryOrDie(conn, "VACUUM FREEZE"));
+		PQfinish(conn);
+		PQclear(executeQueryOrDie(conn_template1,
+								  "ALTER DATABASE %s ALLOW_CONNECTIONS = false",
+								  quote_identifier(datname)));
+	}
+	PQclear(dbres);
+	PQfinish(conn_template1);
+
+	/* Also freeze the shared pg_database rows updated by the flag changes. */
 	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
 			  "%s \"%s/vacuumdb\" %s --all --freeze %s",
 			  PG_OPTIONS_UTILITY_MODE_VERSION(new_cluster.major_version),
@@ -863,6 +887,39 @@ copy_subdir_files(const char *old_subdir, const char *new_subdir)
 			  old_path, new_path);
 
 	check_ok();
+}
+
+static void
+transfer_distributed_log(void)
+{
+	if (old_cluster.version.type == Greenplum &&
+		GET_MAJOR_VERSION(old_cluster.major_version) == 904)
+	{
+		char		new_path[MAXPGPATH];
+		struct stat st;
+
+		/*
+		 * GPDB6 stores a timestamp and 32-bit GXID in each entry;
+		 * GPDB7 and newer interpret those bytes as one 64-bit GXID.  Such
+		 * entries would make old committed tuples appear to be in progress.
+		 *
+		 * The source is shut down cleanly and has no prepared transactions,
+		 * so no distributed transaction spans the upgrade.  Retire its old
+		 * mappings and keep the copied pg_xact as the commit-status authority.
+		 * Clear any template mappings too.  Binary-upgrade startup initializes
+		 * the pages needed for new transactions, including across XID wrap.
+		 */
+		snprintf(new_path, sizeof(new_path), "%s/pg_distributedlog",
+				 new_cluster.pgdata);
+		if (lstat(new_path, &st) != 0)
+			pg_fatal("could not stat directory \"%s\": %m\n", new_path);
+		if (!S_ISDIR(st.st_mode))
+			pg_fatal("distributed transaction log path \"%s\" is not a directory\n",
+					 new_path);
+		remove_new_subdir("pg_distributedlog", false);
+	}
+	else
+		copy_subdir_files("pg_distributedlog", "pg_distributedlog");
 }
 
 static void
@@ -1075,18 +1132,6 @@ set_frozenxids(bool minmxid_only)
 		 * allow_system_table_mods first.
 		 */
 		PQclear(executeQueryOrDie(conn, "set allow_system_table_mods=true"));
-
-		/*
-		 * Instead of assuming template0 will be frozen by initdb, its worth
-		 * making sure we freeze it here before updating the relfrozenxid
-		 * directly for the tables in pg_class and datfrozenxid for the
-		 * database in pg_database. Its fast and safe worth than assuming for
-		 * template0.
-		 */
-		if (!minmxid_only && strcmp(datallowconn, "f") == 0)
-		{
-			PQclear(executeQueryOrDie(conn, "VACUUM FREEZE"));
-		}
 
 		if (!minmxid_only)
 			/* set pg_class.relfrozenxid */
