@@ -45,6 +45,84 @@ INSERT INTO no_cols_left VALUES (1, 2, 3), (4, 5, 6), (7, 8, 9);
 ALTER TABLE no_cols_left DROP COLUMN a;
 ALTER TABLE no_cols_left DROP COLUMN b;
 ALTER TABLE no_cols_left DROP COLUMN c;
+-- Preserve different heap layouts across ADD and EXCHANGE PARTITION.
+CREATE TABLE part_layout (a int, dead text, b int NOT NULL, payload text DEFAULT 'default',
+                          CONSTRAINT layout_positive CHECK (b > 0))
+    DISTRIBUTED BY (b) PARTITION BY RANGE (a)
+    (PARTITION old START (0) END (10), PARTITION swapped START (10) END (20));
+ALTER TABLE part_layout ALTER COLUMN payload SET STORAGE EXTERNAL;
+INSERT INTO part_layout
+    SELECT i, repeat('dropped', 100), i + 10, repeat(md5(i::text), 1000)
+    FROM generate_series(0, 2) i;
+ALTER TABLE part_layout DROP COLUMN dead;
+ALTER TABLE part_layout ADD PARTITION added START (20) END (30);
+ALTER TABLE part_layout ALTER COLUMN payload SET STORAGE EXTERNAL;
+INSERT INTO part_layout
+    SELECT i, i + 10, repeat(md5(i::text), 1000) FROM generate_series(20, 22) i;
+CREATE TABLE part_layout_swap (a int, b int NOT NULL, dead text, payload text DEFAULT 'leaf default',
+                               CONSTRAINT layout_positive CHECK (b > 0)) DISTRIBUTED BY (b);
+ALTER TABLE part_layout_swap ALTER COLUMN payload SET STORAGE EXTERNAL;
+INSERT INTO part_layout_swap
+    SELECT i, i + 10, repeat('dropped', 100), repeat(md5(i::text), 1000)
+    FROM generate_series(10, 12) i;
+ALTER TABLE part_layout_swap DROP COLUMN dead;
+ALTER TABLE part_layout EXCHANGE PARTITION swapped WITH TABLE part_layout_swap;
+DROP TABLE part_layout_swap;
+CREATE VIEW part_layout_rowtype AS SELECT p FROM part_layout_1_prt_swapped p;
+SET optimizer = off;
+SELECT count(*), sum(a), sum(b), sum(length(payload)) FROM part_layout;
+ count | sum | sum |  sum   
+-------+-----+-----+--------
+     9 |  99 | 189 | 288000
+(1 row)
+
+SELECT count(*) FROM part_layout_rowtype;
+ count 
+-------
+     3
+(1 row)
+
+RESET optimizer;
+-- Reserve colliding partition array names in target creation order.
+-- Both levels include a DEFAULT partition; exchanged leaves already have arrays.
+CREATE TABLE part_array_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx (k int, p int, r int)
+    DISTRIBUTED BY (k) PARTITION BY RANGE (p) SUBPARTITION BY LIST (r)
+    (PARTITION p0 START (0) END (100)
+     (SUBPARTITION a0 VALUES (0), DEFAULT SUBPARTITION ad),
+     DEFAULT PARTITION pd
+     (SUBPARTITION b0 VALUES (0), DEFAULT SUBPARTITION bd));
+CREATE TABLE part_array_swap (k int, p int, r int) DISTRIBUTED BY (k);
+INSERT INTO part_array_swap VALUES (1, 1, 0);
+ALTER TABLE part_array_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ALTER PARTITION p0 EXCHANGE PARTITION a0 WITH TABLE part_array_swap;
+DROP TABLE part_array_swap;
+CREATE TABLE part_array_swap (k int, p int, r int) DISTRIBUTED BY (k);
+INSERT INTO part_array_swap VALUES (101, 101, 0);
+ALTER TABLE part_array_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ALTER PARTITION pd EXCHANGE PARTITION b0 WITH TABLE part_array_swap;
+DROP TABLE part_array_swap;
+CREATE TABLE part_array_oids AS
+    SELECT c.oid AS relid, c.reltype AS rowtype, t.typarray AS arraytype
+    FROM pg_class c JOIN pg_type t ON t.oid = c.reltype
+    JOIN pg_inherits i ON i.inhrelid = c.oid
+    JOIN pg_inherits parent ON parent.inhrelid = i.inhparent
+    WHERE parent.inhparent = 'part_array_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'::regclass
+      AND (c.relname LIKE '%_a0' OR c.relname LIKE '%_b0')
+    DISTRIBUTED BY (relid);
+CREATE VIEW part_array_oid_check AS
+    SELECT bool_and(c.reltype = s.rowtype AND t.typarray = s.arraytype) AS oids_preserved
+    FROM part_array_oids s JOIN pg_class c ON c.oid = s.relid
+    JOIN pg_type t ON t.oid = c.reltype;
+SELECT * FROM part_array_oid_check;
+ oids_preserved 
+----------------
+ t
+(1 row)
+
+SELECT count(*) FROM part_array_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx;
+ count 
+-------
+     2
+(1 row)
+
 -- Test a database with a recreated "public" schema for upgrade test later.
 -- Note that the public schema should be as vanilla as possible, so should expect no dependency on it for a new database.
 -- If you are adding tests, you most likely want to add them BEFORE this, since
