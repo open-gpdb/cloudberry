@@ -166,6 +166,7 @@ getSchemaData(Archive *fout, int *numTablesPtr)
 	getPartitionDefs(fout, tblinfo, numTables);
 
 	getPartitionParents(fout, tblinfo, numTables);
+	getLegacyPartitionLayouts(fout);
 
 	getOwnedSeqs(fout, tblinfo, numTables);
 

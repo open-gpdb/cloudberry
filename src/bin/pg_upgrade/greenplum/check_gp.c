@@ -16,6 +16,7 @@
 
 #include "pg_upgrade_greenplum.h"
 #include "catalog/pg_class_d.h"
+#include "fe_utils/legacy_partition.h"
 
 #define RELSTORAGE_EXTERNAL	'x'
 
@@ -168,6 +169,9 @@ check_partition_layouts(void)
 			"JOIN pg_catalog.pg_class child ON child.oid = pr.parchildrelid "
 			"JOIN pg_catalog.pg_namespace cn ON cn.oid = child.relnamespace "
 			"WHERE NOT p.paristemplate AND child.relstorage IN ('h', 'a', 'c') "
+			/* pg_dump reconstructs only these supported storage leaves. */
+			"  AND NOT "
+			LEGACY_HEAP_PARTITION_REBUILDABLE
 			"  AND (parent.relnatts <> child.relnatts OR EXISTS ( "
 			"    SELECT 1 FROM pg_catalog.pg_attribute pa "
 			"    LEFT JOIN pg_catalog.pg_attribute ca "
@@ -206,8 +210,8 @@ check_partition_layouts(void)
 		pg_log(PG_REPORT, "fatal\n");
 		gp_fatal_log(
 			"| Your installation contains GPDB 6 partitions whose physical\n"
-			"| column layouts differ from their partition roots. Binary upgrade\n"
-			"| cannot preserve these layouts; transferring their files is unsafe.\n"
+			"| column layouts differ from their partition roots and cannot be\n"
+			"| preserved by binary upgrade. Transferring their files is unsafe.\n"
 			"| Recreate the affected partitions with matching physical layouts\n"
 			"| and reload their data, or use a logical upgrade. A list is in:\n"
 			"|   %s\n\n", output_path);

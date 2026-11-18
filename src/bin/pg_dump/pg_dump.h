@@ -404,6 +404,7 @@ typedef struct _tableInfo
 	char	*partclause;	/* partition definition, if table is partition parent */
 	char	*parttemplate;	/* subpartition template */
 	bool	is_part_parent;	/* legacy root or intermediate partition parent */
+	bool	legacy_part_recreate; /* recreate a legacy heap leaf with its own layout */
 } TableInfo;
 
 typedef struct _tableAttachInfo
@@ -781,6 +782,7 @@ extern void getSubscriptions(Archive *fout);
 extern ExtProtInfo *getExtProtocols(Archive *fout, int *numExtProtocols);
 extern BinaryUpgradeInfo *getBinaryUpgradeObjects(void);
 extern void getLegacyExternalPartitions(Archive *fout, TableInfo tblinfo[], int numTables);
+extern void getLegacyPartitionLayouts(Archive *fout);
 extern void getPartitionDefs(Archive *fout, TableInfo tblinfo[], int numTables);
 extern void getPartitionParents(Archive *fout, TableInfo tblinfo[], int numTables);
 /* END MPP ADDITION */
