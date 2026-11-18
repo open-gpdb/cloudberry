@@ -28,17 +28,104 @@ extern "C"
 {
 #include "postgres.h"
 #include "catalog/pg_type.h"
+#include "cdb/cdbllize.h"
 #include "nodes/makefuncs.h"
-#include "anserplan.h"
+#include "optimizer/planmain.h"
 }
 
 
-/* The caller owns a private copy of the statement. This function may throw;
- * publish that copy only after the entire injection pass has succeeded.
- * Children must be non-parallel reducer producers that return NULL at EOF.
- * The final empty Result makes EXISTS drain the Sequence completely. */
+static Result *
+rpt_make_empty_result(Flow *flow, int plan_node_id)
+{
+	/* Result's constant qual is an implicit-AND list. */
+	Result *empty = make_result(NIL, (Node *) list_make1(makeBoolConst(false, false)),
+								NULL);
+
+	empty->plan.plan_node_id = plan_node_id;
+	empty->plan.flow = flow;
+	return empty;
+}
+
+static Sequence *
+rpt_make_reducer_sequence(List *children, Result *empty, int plan_node_id)
+{
+	Sequence *sequence = makeNode(Sequence);
+
+	sequence->plan.plan_node_id = plan_node_id;
+	sequence->plan.flow = empty->plan.flow;
+	/* Sequence drains the producers and emits only the empty Result's output. */
+	sequence->subplans = lappend(list_copy(children), empty);
+	return sequence;
+}
+
+static Motion *
+rpt_make_reducer_gather(Sequence *sequence, int sender_slice, int plan_node_id)
+{
+	Motion *gather = makeNode(Motion);
+	Flow *flow = makeFlow(FLOW_SINGLETON, 1);
+
+	flow->locustype = CdbLocusType_Entry;
+	flow->segindex = -1;
+	gather->plan.plan_node_id = plan_node_id;
+	gather->plan.lefttree = &sequence->plan;
+	gather->plan.flow = flow;
+	gather->motionType = MOTIONTYPE_GATHER;
+	gather->motionID = sender_slice;
+	return gather;
+}
+
+static void
+rpt_append_reducer_slices(PlannedStmt *stmt, int width)
+{
+	int root_slice = stmt->numSlices;
+	int sender_slice = root_slice + 1;
+	PlanSlice *slices = (PlanSlice *) palloc0(sizeof(PlanSlice) * (sender_slice + 1));
+
+	memcpy(slices, stmt->slices, sizeof(PlanSlice) * stmt->numSlices);
+	slices[root_slice].sliceIndex = root_slice;
+	slices[root_slice].parentIndex = -1;
+	slices[root_slice].gangType = GANGTYPE_UNALLOCATED;
+	slices[root_slice].segindex = -1;
+	slices[sender_slice].sliceIndex = sender_slice;
+	slices[sender_slice].parentIndex = root_slice;
+	slices[sender_slice].gangType = GANGTYPE_PRIMARY_READER;
+	slices[sender_slice].segindex = 0;
+	slices[sender_slice].numsegments = width;
+	stmt->slices = slices;
+	stmt->numSlices += 2;
+}
+
+static void
+rpt_register_reducer_subplan(PlannedStmt *stmt, Motion *gather, int root_slice)
+{
+	int old_subplans = list_length(stmt->subplans);
+	int param_id = list_length(stmt->paramExecTypes);
+	int *slice_ids = (int *) palloc(sizeof(int) * (old_subplans + 1));
+	SubPlan *subplan = makeNode(SubPlan);
+
+	if (old_subplans)
+		memcpy(slice_ids, stmt->subplan_sliceIds, sizeof(int) * old_subplans);
+	slice_ids[old_subplans] = root_slice;
+
+	/* EXISTS runs to EOF because the Gather receives no tuples. */
+	subplan->subLinkType = EXISTS_SUBLINK;
+	subplan->plan_id = old_subplans + 1;
+	subplan->plan_name = psprintf("InitPlan %d", subplan->plan_id);
+	subplan->firstColType = VOIDOID;
+	subplan->firstColTypmod = -1;
+	subplan->is_initplan = true;
+	subplan->setParam = list_make1_int(param_id);
+	stmt->subplans = lappend(stmt->subplans, gather);
+	stmt->paramExecTypes = lappend_oid(stmt->paramExecTypes, BOOLOID);
+	stmt->planTree->initPlan = lappend(stmt->planTree->initPlan, subplan);
+	stmt->subplan_sliceIds = slice_ids;
+}
+
+/* The caller publishes its private statement only after injection succeeds.
+ * Children are non-parallel reducer producers that return NULL at EOF. */
 void
-RptAttachReducerInitPlan(PlannedStmt *stmt, List *children, int width)
+RptAttachReducerInitPlan(PlannedStmt *stmt, List *children, int width,
+						int next_plan_node_id)
 {
 	RptPgCall([&]() {
 		if (children == NIL || !stmt->planTree || width <= 0 ||
@@ -46,74 +133,15 @@ RptAttachReducerInitPlan(PlannedStmt *stmt, List *children, int width)
 			(stmt->subplans != NIL && !stmt->subplan_sliceIds))
 			elog(ERROR, "invalid RPT reducer InitPlan input");
 
-		int max_plan_node_id = AnserMaxPlanNodeId(stmt);
-		ListCell *lc;
-		foreach(lc, children)
-		{
-			PlannedStmt child_stmt = {};
-			child_stmt.planTree = (Plan *) lfirst(lc);
-			max_plan_node_id = Max(max_plan_node_id, AnserMaxPlanNodeId(&child_stmt));
-		}
-		int next_plan_node_id = max_plan_node_id + 1;
-		int root_slice_index = stmt->numSlices;
-		int sender_slice_index = root_slice_index + 1;
-		int old_subplans = list_length(stmt->subplans);
-		int param_exec_id = list_length(stmt->paramExecTypes);
-		Flow *distributed = makeNode(Flow);
-		distributed->flotype = FLOW_PARTITIONED;
-		distributed->locustype = CdbLocusType_Strewn;
-		distributed->numsegments = width;
-		Result *empty = makeNode(Result);
-		empty->plan.plan_node_id = next_plan_node_id++;
-		empty->plan.flow = distributed;
-		/* ExecInitResult passes this field to ExecInitQual as implicit AND. */
-		empty->resconstantqual = (Node *) list_make1(makeBoolConst(false, false));
-		Sequence *sequence = makeNode(Sequence);
-		sequence->plan.plan_node_id = next_plan_node_id++;
-		sequence->plan.flow = distributed;
-		sequence->subplans = lappend(list_copy(children), empty);
-		Motion *gather = makeNode(Motion);
-		gather->plan.plan_node_id = next_plan_node_id++;
-		gather->plan.lefttree = (Plan *) sequence;
-		gather->motionType = MOTIONTYPE_GATHER;
-		gather->motionID = sender_slice_index;
-		Flow *singleton = makeNode(Flow);
-		singleton->flotype = FLOW_SINGLETON;
-		singleton->locustype = CdbLocusType_Entry;
-		singleton->segindex = -1;
-		singleton->numsegments = 1;
-		gather->plan.flow = singleton;
+		int root_slice = stmt->numSlices;
+		Flow *flow = makeFlow(FLOW_PARTITIONED, width);
+		flow->locustype = CdbLocusType_Strewn;
 
-		PlanSlice *slices = (PlanSlice *) palloc0(
-			 sizeof(PlanSlice) * (stmt->numSlices + 2));
-		memcpy(slices, stmt->slices, sizeof(PlanSlice) * stmt->numSlices);
-		slices[root_slice_index].sliceIndex = root_slice_index;
-		slices[root_slice_index].parentIndex = -1;
-		slices[root_slice_index].gangType = GANGTYPE_UNALLOCATED;
-		slices[root_slice_index].segindex = -1;
-		slices[sender_slice_index].sliceIndex = sender_slice_index;
-		slices[sender_slice_index].parentIndex = root_slice_index;
-		slices[sender_slice_index].gangType = GANGTYPE_PRIMARY_READER;
-		slices[sender_slice_index].segindex = 0;
-		slices[sender_slice_index].numsegments = width;
-		int *subplan_slice_indexes = (int *) palloc(sizeof(int) * (old_subplans + 1));
-		if (old_subplans)
-			memcpy(subplan_slice_indexes, stmt->subplan_sliceIds, sizeof(int) * old_subplans);
-		subplan_slice_indexes[old_subplans] = root_slice_index;
+		Result *empty = rpt_make_empty_result(flow, next_plan_node_id++);
+		Sequence *sequence = rpt_make_reducer_sequence(children, empty, next_plan_node_id++);
+		Motion *gather = rpt_make_reducer_gather(sequence, root_slice + 1, next_plan_node_id);
 
-		SubPlan *subplan = makeNode(SubPlan);
-		subplan->subLinkType = EXISTS_SUBLINK;
-		subplan->plan_id = old_subplans + 1;
-		subplan->plan_name = psprintf("InitPlan %d", subplan->plan_id);
-		subplan->firstColType = VOIDOID;
-		subplan->firstColTypmod = -1;
-		subplan->is_initplan = true;
-		subplan->setParam = list_make1_int(param_exec_id);
-		stmt->subplans = lappend(stmt->subplans, gather);
-		stmt->paramExecTypes = lappend_oid(stmt->paramExecTypes, BOOLOID);
-		stmt->planTree->initPlan = lappend(stmt->planTree->initPlan, subplan);
-		stmt->subplan_sliceIds = subplan_slice_indexes;
-		stmt->slices = slices;
-		stmt->numSlices += 2;
+		rpt_append_reducer_slices(stmt, width);
+		rpt_register_reducer_subplan(stmt, gather, root_slice);
 	});
 }

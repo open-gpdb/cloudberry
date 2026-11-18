@@ -119,6 +119,22 @@ Node *makeBoolConst(bool value, bool isnull)
 	Const *c = makeNode(Const); c->consttype = BOOLOID; c->constvalue = BoolGetDatum(value);
 	c->constisnull = isnull; return (Node *) c;
 }
+Flow *makeFlow(FlowType type, int width)
+{
+	Flow *flow = makeNode(Flow);
+	flow->flotype = type;
+	flow->locustype = CdbLocusType_Null;
+	flow->numsegments = width;
+	return flow;
+}
+Result *make_result(List *tlist, Node *qual, Plan *child)
+{
+	Result *result = makeNode(Result);
+	result->plan.targetlist = tlist;
+	result->plan.lefttree = child;
+	result->resconstantqual = qual;
+	return result;
+}
 static int max_plan_node_id(Plan *p)
 {
 	if (!p) return 0;
@@ -240,7 +256,8 @@ static void layout(bool existing)
 	Result child = {}; child.plan.type = T_Result; child.plan.plan_node_id = 110;
 	List *children = list_make1(&child);
 	int old_slices = stmt.numSlices;
-	RptAttachReducerInitPlan(&stmt, children, 8);
+	int next_plan_node_id = child.plan.plan_node_id + 1;
+	RptAttachReducerInitPlan(&stmt, children, 8, next_plan_node_id);
 	CHECK(stmt.numSlices == old_slices + 2);
 	CHECK(memcmp(stmt.slices, initial, sizeof(PlanSlice) * old_slices) == 0);
 	for (int i = 0; i < stmt.numSlices; ++i) CHECK(stmt.slices[i].sliceIndex == i);
@@ -285,9 +302,9 @@ static void layout(bool existing)
 	collect_plan_node_ids(stmt.planTree, plan_node_ids);
 	ListCell *lc; foreach(lc, stmt.subplans) collect_plan_node_ids((Plan *) lfirst(lc), plan_node_ids);
 	CHECK(plan_node_ids.size() == (existing ? 6U : 5U));
-	int previous_max = 110;
-	CHECK(empty->plan.plan_node_id > previous_max &&
-		  seq->plan.plan_node_id > previous_max && motion->plan.plan_node_id > previous_max);
+	CHECK(empty->plan.plan_node_id == next_plan_node_id);
+	CHECK(seq->plan.plan_node_id == next_plan_node_id + 1);
+	CHECK(motion->plan.plan_node_id == next_plan_node_id + 2);
 }
 static void backward_stacks(bool refused, bool materialize, bool with_forward)
 {

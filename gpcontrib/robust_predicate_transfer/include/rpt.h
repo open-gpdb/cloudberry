@@ -378,7 +378,8 @@ extern void RptSelectBackward(const RptTransferMgr &schedule,
 							 const std::map<int, int> &slice_processes,
 							 RptFilterSizeFn size_fn,
 							 std::vector<RptBackwardClass> *out);
-extern void RptDumpBackward(const std::vector<RptBackwardClass> &classes,
+extern void RptDumpBackward(const RptTransferMgr &schedule,
+							const std::vector<RptBackwardClass> &classes,
 						   std::string *out);
 
 /* rptforwardplan.cpp: pure selection over a forward schedule. */
@@ -418,7 +419,8 @@ extern void RptBuildClasses(RptTransferMgr *mgr);
 extern void RptBuildTransferPlan(PlannedStmt *stmt, RptTransferMgr *mgr);
 extern void RptBuildForwardPlan(const RptTransferMgr *analysis,
 								RptTransferMgr *forward);
-extern void RptAttachReducerInitPlan(PlannedStmt *stmt, List *children, int width);
+extern void RptAttachReducerInitPlan(PlannedStmt *stmt, List *children, int width,
+									int next_plan_node_id);
 extern void RptCheckBackwardConsumers(PlannedStmt *stmt, RptTransferMgr *mgr);
 extern double RptEstimateDistinct(const RptVertexInfo &vertex, AttrNumber attno);
 extern void RptDumpTransferPlan(const PlannedStmt *stmt,

@@ -455,6 +455,22 @@ rpt_assign_forward_channels(std::vector<RptForwardComponent> &comps,
 			}
 }
 
+static void
+rpt_dump_forward_injection(const std::vector<RptForwardComponent> &comps,
+						   const std::map<int, RptForwardVertexEst> &est,
+						   std::string *trace)
+{
+	if (!trace)
+		return;
+
+	RptDumpForward(comps, trace);
+	for (const RptForwardComponent &comp : comps)
+		for (int rtindex : comp.chain_rtindexes)
+			if (est.at(rtindex).quals_dropped)
+				*trace += "forward: quals of " + std::to_string(rtindex) +
+					" dropped in the reducer (not provably error-free)\n";
+}
+
 /* Build the forward part using the statement's shared IDs and scan stacks.
  * The selected components also supply root selectivity to backward sizing. */
 static List *
@@ -492,12 +508,7 @@ RptInjectForward(const RptTransferMgr &forward,
 	}
 
 	rpt_assign_forward_channels(comps, state);
-	RptDumpForward(comps, trace);
-	for (const RptForwardComponent &comp : comps)
-		for (int rtindex : comp.chain_rtindexes)
-			if (est.at(rtindex).quals_dropped)
-				*trace += "forward: quals of " + std::to_string(rtindex) +
-					" dropped in the reducer (not provably error-free)\n";
+	rpt_dump_forward_injection(comps, est, trace);
 
 	for (const RptForwardComponent &comp : comps)
 		*injected = *injected || comp.accepted;
@@ -578,17 +589,24 @@ RptInjectForward(const RptTransferMgr &forward,
 	return children;
 }
 
+static void
+rpt_trace_skip(std::string *trace, const char *reason)
+{
+	if (trace)
+		trace->append(reason);
+}
+
 PlannedStmt *
 RptInject(PlannedStmt *stmt, bool materialize, std::string *trace)
 {
 	if (!gp_anser_enable || gp_anser_runtime_filter)
 	{
-		*trace += "forward: needs anser.enable=on and anser.runtime_filter=off\n";
+		rpt_trace_skip(trace, "forward: needs anser.enable=on and anser.runtime_filter=off\n");
 		return stmt;
 	}
 	if (rpt_has_runtime_filters(stmt))
 	{
-		*trace += "forward: plan already carries Anser nodes\n";
+		rpt_trace_skip(trace, "forward: plan already carries Anser nodes\n");
 		return stmt;
 	}
 
@@ -601,7 +619,7 @@ RptInject(PlannedStmt *stmt, bool materialize, std::string *trace)
 	RptCollectGraph(work, &analysis);
 	if (analysis.vertices.empty())
 	{
-		*trace += "forward: no transfer regions\n";
+		rpt_trace_skip(trace, "forward: no transfer regions\n");
 		return stmt;
 	}
 	RptBuildClasses(&analysis);
@@ -651,14 +669,14 @@ RptInject(PlannedStmt *stmt, bool materialize, std::string *trace)
 		children = RptInjectForward(forward, params, est, materialize,
 									state, comps, trace, &any);
 	else
-		*trace += "forward: disabled\n";
+		rpt_trace_skip(trace, "forward: disabled\n");
 
 	if (rpt_backward)
 		RptInjectBackward(work, forward, comps, params, rpt_anser_size,
 						  materialize, &state, trace, &any);
 	else
-		*trace += "backward: disabled\n";
+		rpt_trace_skip(trace, "backward: disabled\n");
 	if (materialize && children != NIL)
-		RptAttachReducerInitPlan(work, children, params.width);
+		RptAttachReducerInitPlan(work, children, params.width, state.next_plan_node_id);
 	return materialize && any ? work : stmt;
 }

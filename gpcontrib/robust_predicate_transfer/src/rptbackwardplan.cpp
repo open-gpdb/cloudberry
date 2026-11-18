@@ -132,8 +132,22 @@ RptSelectBackward(const RptTransferMgr &schedule,
 }
 
 void
-RptDumpBackward(const std::vector<RptBackwardClass> &classes, std::string *out)
+RptDumpBackward(const RptTransferMgr &schedule,
+				const std::vector<RptBackwardClass> &classes, std::string *out)
 {
+	size_t root_classes = 0, strict = 0, eligible = 0;
+	for (const auto &group : schedule.groups)
+		root_classes += schedule.root_rtindexes.count(group.second.leader_rtindex);
+	for (const auto &proof : schedule.backward_consumers)
+	{
+		strict += proof.strict_eligible;
+		eligible += proof.eligible;
+	}
+	*out += "runtime survey classes=" + std::to_string(schedule.groups.size()) +
+		" root_classes=" + std::to_string(root_classes) +
+		" strict=" + std::to_string(strict) + " eligible=" + std::to_string(eligible) + "\n";
+
+
 	std::ostringstream text;
 	text << std::fixed << std::setprecision(3);
 	for (const auto &cls : classes)

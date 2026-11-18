@@ -89,6 +89,15 @@ static PlannedStmt *rpt_planner(Query *parse, const char *query_string,
 								int cursorOptions, ParamListInfo boundParams,
 								OptimizerOptions *optimizer_options);
 
+static void
+rpt_append_injection_analysis(PlannedStmt *stmt, StringInfo out)
+{
+	std::string trace;
+
+	(void) RptInject(stmt, false, &trace);
+	RptPgCall([&]() { appendStringInfoString(out, trace.c_str()); });
+}
+
 /* Run analysis with C++ unwinding before reporting an error to C callers. */
 static void
 rpt_analyze(PlannedStmt *stmt, StringInfo out)
@@ -110,11 +119,7 @@ rpt_analyze(PlannedStmt *stmt, StringInfo out)
 			RptBuildTransferPlan(stmt, &mgr);
 			RptDumpTransferPlan(stmt, &mgr, out);
 
-			/* Dry-run the configured runtime passes without changing the plan. */
-			std::string injection_trace;
-
-			(void) RptInject(stmt, false, &injection_trace);
-			RptPgCall([&]() { appendStringInfoString(out, injection_trace.c_str()); });
+			rpt_append_injection_analysis(stmt, out);
 		}
 		return;
 	}
@@ -308,7 +313,7 @@ rpt_build_injection(PlannedStmt *stmt)
 	try
 	{
 		std::string trace;
-		PlannedStmt *result = RptInject(stmt, true, &trace);
+		PlannedStmt *result = RptInject(stmt, true, rpt_debug ? &trace : nullptr);
 
 		if (rpt_debug)
 			RptPgCall([&]() { elog(DEBUG1, "rpt injection:\n%s", trace.c_str()); });

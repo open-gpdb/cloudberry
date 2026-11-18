@@ -48,17 +48,6 @@ RptInjectBackward(PlannedStmt *stmt, const RptTransferMgr &schedule,
 				  bool materialize, RptInjectionState *state,
 				  std::string *trace, bool *injected)
 {
-	size_t root_classes = 0, strict = 0, eligible = 0;
-	for (const auto &group : schedule.groups)
-		root_classes += schedule.root_rtindexes.count(group.second.leader_rtindex);
-	for (const auto &proof : schedule.backward_consumers)
-	{
-		strict += proof.strict_eligible;
-		eligible += proof.eligible;
-	}
-	*trace += "runtime survey classes=" + std::to_string(schedule.groups.size()) +
-		" root_classes=" + std::to_string(root_classes) +
-		" strict=" + std::to_string(strict) + " eligible=" + std::to_string(eligible) + "\n";
 	std::map<int, int> widths;
 	for (const auto &decision : schedule.backward_consumers)
 		if (decision.eligible)
@@ -138,5 +127,6 @@ RptInjectBackward(PlannedStmt *stmt, const RptTransferMgr &schedule,
 		}
 		*injected = true;
 	}
-	RptDumpBackward(classes, trace);
+	if (trace)
+		RptDumpBackward(schedule, classes, trace);
 }
