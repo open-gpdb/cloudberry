@@ -73,7 +73,7 @@ bool		rpt_forward = true;
 /* Measured 2026-11-10 on one host with three primaries. */
 double		rpt_forward_ms_per_mib_part = 3.5;
 double		rpt_delivery_ms_per_mib = 0.8;
-double		rpt_forward_max_exchange_ms = 100.0;
+double		rpt_forward_max_exchange_ms = 10000.0;
 double		rpt_forward_min_root_rows = 10000.0;
 /* The RPT+ paper's lambda (its Algorithm 2 threshold). */
 double		rpt_forward_max_selectivity = 0.35;
@@ -227,7 +227,7 @@ rpt_define_gucs(void)
 	DefineCustomRealVariable("rpt.forward_max_exchange_ms",
 							 "Skips a forward chain or backward class above this exchange cost.",
 							 "-1 disables the limit; QD-only.",
-							 &rpt_forward_max_exchange_ms, 100.0, -1.0, 1.0e9,
+							 &rpt_forward_max_exchange_ms, 10000.0, -1.0, 1.0e9,
 							 PGC_USERSET, 0, NULL, NULL, NULL);
 
 	DefineCustomRealVariable("rpt.forward_min_root_rows",

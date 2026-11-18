@@ -438,7 +438,7 @@ collection_ms_per_MiB × producer_processes × filter_MiB
 `rpt.forward_ms_per_mib_part` (3.5) controls collection, and
 `rpt.delivery_ms_per_mib` (0.8) controls delivery. The defaults come from the
 2026-11-10 measurement on one host with three primaries. The existing
-`rpt.forward_max_exchange_ms` (100 ms) and
+`rpt.forward_max_exchange_ms` (10,000 ms, or 10 seconds) and
 `rpt.forward_max_selectivity` (0.35) names are retained and apply to both
 passes. The exchange limit is per forward chain or backward class; `-1` disables it. A selectivity threshold of 1 disables
 the benefit gate. Unknown backward NDV is treated as a kept fraction of 1.

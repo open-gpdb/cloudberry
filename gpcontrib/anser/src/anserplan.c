@@ -51,7 +51,7 @@
 #include "utils/typcache.h"
 
 /* Runtime-filter bloom size bounds (realized bitset bytes). */
-#define ANSER_RF_MIN_BYTES		(1024 * 1024)		/* bloom_create's 1 MB floor */
+#define ANSER_RF_MIN_BYTES		ANSER_BLOOM_MIN_BYTES
 #define ANSER_RF_MAX_BYTES		(64 * 1024 * 1024)
 #define ANSER_RF_HEADER_ROOM	64
 
@@ -187,7 +187,7 @@ anser_max_plan_node_id(Plan *plan)
  * the estimated build cardinality.  Both call AnserBloomCreate (== bloom_create)
  * with the SAME (total_elems, max_payload) so they realize an identical filter;
  * we mirror bloom_create's own math here so `planned_bytes` (shown in EXPLAIN)
- * equals the realized bitset: target ~2 bytes/element, floor at 1 MB, cap at the
+ * equals the realized bitset: target ~2 bytes/element, floor at 8 KiB, cap at the
  * server payload budget, round DOWN to a power of two.
  */
 bool
@@ -250,7 +250,7 @@ AnserRuntimeFilterSize(double est_rows, int64 *total_elems, int64 *max_payload,
 	/*
 	 * The filter is built from total_elems (bloom_create sizes from the
 	 * element count, not from planned_bytes), so a floor on realized alone
-	 * only inflates the EXPLAIN number: a 200-row build still produces a 1 MB
+	 * only inflates the EXPLAIN number: a 200-row build still produces an 8 KiB
 	 * filter whatever the knob says.  Raise the element count to match the
 	 * forced size, so producer and consumer really build it.  The extra hash
 	 * functions cost only probe time, and the larger bitset only lowers the

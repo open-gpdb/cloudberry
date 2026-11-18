@@ -43,7 +43,7 @@ void slot_getsomeattrs_int(TupleTableSlot *slot, int attnum) { abort(); }
 void ExecReScan(PlanState *state) { abort(); }
 void *palloc0(Size bytes) { abort(); }
 void MemoryContextRegisterResetCallback(MemoryContext ctx, MemoryContextCallback *cb) { abort(); }
-bloom_filter *bloom_create(int64 elems, int mem, uint64 seed) { abort(); }
+bloom_filter *bloom_create_with_minimum(int64 elems, int mem, uint64 seed, Size minimum) { abort(); }
 void bloom_add_element(bloom_filter *filter, unsigned char *value, size_t len)
 {
 	CHECK(len == sizeof(Datum));

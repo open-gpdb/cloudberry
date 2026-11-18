@@ -48,6 +48,7 @@
 #include "anserplanutils.h"
 
 #include "anserbloom.h"
+#include "anserfilter.h"
 #include "ansertlist.h"
 
 #include "commands/explain.h"
@@ -270,7 +271,8 @@ rpt_local_produce_next(CustomScanState *node)
 
 			e->estate = estate;
 			e->condition_id = st->condition_id;
-			e->filter = bloom_create(Max(st->total_elems, 1), work_mem, 0);
+			e->filter = bloom_create_with_minimum(Max(st->total_elems, 1), work_mem, 0,
+													 ANSER_BLOOM_MIN_BYTES);
 			e->unregister.func = rpt_local_unregister;
 			e->unregister.arg = e;
 			MemoryContextRegisterResetCallback(estate->es_query_cxt, &e->unregister);
