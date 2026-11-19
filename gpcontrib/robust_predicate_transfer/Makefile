@@ -131,7 +131,7 @@ test/anserplankeys.o: $(srcdir)/../anser/src/anserplankeys.c $(srcdir)/../anser/
 test/graph_test: $(srcdir)/test/graph_test.cpp test/anserplankeys.o $(wildcard $(srcdir)/src/*.cpp) $(srcdir)/include/rpt.h $(srcdir)/include/rptqual.h $(ANSER_SHARED_HEADERS)
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(PG_CPPFLAGS) $< test/anserplankeys.o -o $@
 
-test/inject_test: $(srcdir)/test/inject_test.cpp $(wildcard $(srcdir)/src/*.cpp) $(srcdir)/include/rpt.h $(srcdir)/include/rptinject.h $(srcdir)/../anser/include/ansertlist.h $(ANSER_SHARED_HEADERS)
+test/inject_test: $(srcdir)/test/inject_test.cpp $(wildcard $(srcdir)/src/*.cpp) $(srcdir)/include/rpt.h $(srcdir)/include/rptinject.h $(srcdir)/include/rptchannel.h $(srcdir)/../anser/include/ansertlist.h $(ANSER_SHARED_HEADERS)
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(PG_CPPFLAGS) -ffunction-sections -fdata-sections \
 	  $(WALK_TEST_LDFLAGS) $< -o $@
 
@@ -153,7 +153,7 @@ endif
 test/forward_walk_backend.o: $(top_srcdir)/src/backend/optimizer/util/walkers.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(PG_CPPFLAGS) -ffunction-sections -fdata-sections -c $< -o $@
 
-test/forward_walk_test: $(srcdir)/test/forward_walk_test.cpp $(srcdir)/src/rptforward.cpp $(srcdir)/include/rpt.h $(srcdir)/include/rptinject.h test/forward_walk_backend.o $(ANSER_SHARED_HEADERS)
+test/forward_walk_test: $(srcdir)/test/forward_walk_test.cpp $(srcdir)/src/rptforward.cpp $(srcdir)/include/rpt.h $(srcdir)/include/rptinject.h $(srcdir)/include/rptchannel.h test/forward_walk_backend.o $(ANSER_SHARED_HEADERS)
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(PG_CPPFLAGS) -ffunction-sections -fdata-sections \
 	  $(WALK_TEST_LDFLAGS) $< test/forward_walk_backend.o -o $@
 

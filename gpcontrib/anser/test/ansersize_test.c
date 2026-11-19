@@ -76,12 +76,45 @@ roundtrip(double rows)
 	free(payload);
 }
 
+static void
+merged_filter_delivery(void)
+{
+	bloom_filter *filter = AnserBloomCreate(32, 8192 + 64, 123);
+	unsigned char *first;
+	unsigned char *second;
+	Size len;
+	Size wire_len;
+
+	CHECK(filter != NULL);
+	len = AnserBloomSerializedSize(filter);
+	first = palloc(len);
+	second = palloc(len);
+	CHECK(AnserBloomSerializePart(filter, 0, 2, first, len, &wire_len));
+	CHECK(wire_len == len);
+	CHECK(AnserBloomSerializePart(filter, 1, 2, second, len, &wire_len));
+	CHECK(wire_len == len);
+
+	/* Each part is half full. Their disjoint bits saturate the union. */
+	memset(first + sizeof(AnserBloomPartHeader), 0x0f, bloom_bitset_bytes(filter));
+	memset(second + sizeof(AnserBloomPartHeader), 0xf0, bloom_bitset_bytes(filter));
+	CHECK(AnserBloomPartWorthSending(first, len));
+	CHECK(AnserBloomPartWorthSending(second, len));
+	CHECK(AnserBloomFoldPartInPlace(first, len, second, len));
+	CHECK(!AnserBloomPartWorthSending(first, len));
+
+	pfree(second);
+	pfree(first);
+	bloom_free(filter);
+}
+
 int main(void)
 {
 	bloom_filter *filter, *legacy_copy;
 	double rows[] = {0, 1, 32, 1000, 4096, 4097, 8192, 1000000};
 	int64 elems, cap, bytes;
 	int i;
+
+	merged_filter_delivery();
 
 	/* Existing core callers keep the historical 1 MiB minimum. */
 	filter = bloom_create(32, 8, 123);

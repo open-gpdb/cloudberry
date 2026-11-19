@@ -50,7 +50,7 @@
  *-------------------------------------------------------------------------
  */
 #include "rpt.h"
-#include "rptinject.h"
+#include "rptchannel.h"
 
 extern "C"
 {
@@ -448,11 +448,7 @@ rpt_assign_forward_channels(std::vector<RptForwardComponent> &comps,
 	for (auto &comp : comps)
 		if (comp.accepted)
 			for (auto &ch : comp.channels)
-			{
-				ch.condition_id = state.next_condition_id++;
-				ch.condition_key = "rpt_f_" + std::to_string(ch.source_rtindex) + "_" +
-					std::to_string(ch.target_rtindex);
-			}
+				RptAssignForwardChannel(state, ch);
 }
 
 static void

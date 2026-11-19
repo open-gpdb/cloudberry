@@ -22,7 +22,7 @@
  *
  *-------------------------------------------------------------------------
  */
-#include "rptinject.h"
+#include "rptchannel.h"
 
 extern "C"
 {
@@ -39,6 +39,75 @@ rpt_backward_endpoint(const RptTransferMgr &schedule,
 	return vertex.scan != NULL && IsA(vertex.scan, SeqScan) &&
 		RptStackMatches(state, vertex.scan, parent) &&
 		attno > 0 && RptScanKeyPosition(vertex.scan, key) == attno;
+}
+
+/* Refuse the whole class before changing any scan stack. */
+static bool
+rpt_preflight_backward_class(const RptTransferMgr &schedule,
+							 const RptInjectionState &state,
+							 const std::map<int, int> &widths,
+							 RptBackwardClass &cls)
+{
+	for (const auto &target : cls.consumers)
+	{
+		if (!target.accepted)
+			continue;
+		const auto &proof = target.proof;
+		auto width = widths.find(proof.producer_slice_index);
+		if (proof.producer_key == cls.producer_key &&
+			width != widths.end() && width->second == cls.producer_processes &&
+			rpt_backward_endpoint(schedule, state, cls.producer_rtindex,
+								  cls.producer_key, proof.producer_parent, proof.producer_attno) &&
+			rpt_backward_endpoint(schedule, state, proof.consumer_rtindex,
+								  proof.consumer_key, proof.consumer_parent, proof.consumer_attno))
+			continue;
+
+		cls.accepted = false;
+		cls.reason = "backward placement changed or key is unavailable";
+		for (auto &consumer : cls.consumers)
+			if (consumer.accepted)
+			{
+				consumer.accepted = false;
+				consumer.reason = cls.reason;
+			}
+		return false;
+	}
+	return true;
+}
+
+/* Wrap the current stack tops so the producer sees forward-filtered rows. */
+static void
+rpt_install_backward_class(const RptTransferMgr &schedule,
+						   const RptBackwardClass &cls, RptInjectionState *state)
+{
+	Plan *scan = schedule.vertices.at(
+		schedule.vertex_index_by_rtindex.at(cls.producer_rtindex)).scan;
+	Plan *producer = RptPgCall([&]() {
+		CustomScan *node = AnserBuildBloomProducerScan(state->tops.at(scan),
+			RptScanKeyPosition(scan, cls.producer_key), cls.condition_id,
+			cls.condition_key.c_str(), cls.total_elems, (Size) cls.max_payload,
+			cls.planned_bytes, cls.producer_processes);
+		node->scan.plan.plan_node_id = state->next_plan_node_id++;
+		return (Plan *) node;
+	});
+	RptRelinkStack(state, scan, producer);
+	for (const auto &target : cls.consumers)
+	{
+		if (!target.accepted)
+			continue;
+		const auto &proof = target.proof;
+		scan = schedule.vertices.at(
+			schedule.vertex_index_by_rtindex.at(proof.consumer_rtindex)).scan;
+		Plan *consumer = RptPgCall([&]() {
+			CustomScan *node = AnserBuildBloomConsumerScan(state->tops.at(scan),
+				proof.consumer_attno, cls.condition_id, cls.condition_key.c_str(),
+				cls.total_elems, (Size) cls.max_payload, cls.planned_bytes,
+				cls.producer_processes, proof.defer_first);
+			node->scan.plan.plan_node_id = state->next_plan_node_id++;
+			return (Plan *) node;
+		});
+		RptRelinkStack(state, scan, consumer);
+	}
 }
 
 void
@@ -62,69 +131,12 @@ RptInjectBackward(PlannedStmt *stmt, const RptTransferMgr &schedule,
 	RptSelectBackward(schedule, forward, params, widths, size_fn, &classes);
 	for (auto &cls : classes)
 	{
-		if (!cls.accepted)
+		if (!cls.accepted || !rpt_preflight_backward_class(schedule, *state, widths, cls))
 			continue;
-		/* Class-wide preflight before allocating any executable node. */
-		for (const auto &target : cls.consumers)
-		{
-			if (!target.accepted)
-				continue;
-			const auto &proof = target.proof;
-			if (!(proof.producer_key == cls.producer_key) ||
-				widths[proof.producer_slice_index] != cls.producer_processes ||
-				!rpt_backward_endpoint(schedule, *state, cls.producer_rtindex,
-					cls.producer_key, proof.producer_parent, proof.producer_attno) ||
-				!rpt_backward_endpoint(schedule, *state, proof.consumer_rtindex,
-					proof.consumer_key, proof.consumer_parent, proof.consumer_attno))
-			{
-				cls.accepted = false;
-				cls.reason = "backward placement changed or key is unavailable";
-				break;
-			}
-		}
-		if (!cls.accepted)
-		{
-			for (auto &target : cls.consumers)
-				if (target.accepted)
-				{
-					target.accepted = false;
-					target.reason = cls.reason;
-				}
-			continue;
-		}
-		cls.condition_id = state->next_condition_id++;
-		cls.condition_key = "rpt_b_" + std::to_string(cls.producer_rtindex) + "_" +
-			std::to_string(cls.class_key.rtindex) + "_" + std::to_string(cls.class_key.attno);
+		RptAssignBackwardChannel(*state, cls);
 		if (!materialize)
 			continue;
-		Plan *scan = schedule.vertices.at(
-			schedule.vertex_index_by_rtindex.at(cls.producer_rtindex)).scan;
-		Plan *producer = RptPgCall([&]() {
-			CustomScan *node = AnserBuildBloomProducerScan(state->tops.at(scan),
-				RptScanKeyPosition(scan, cls.producer_key), cls.condition_id,
-				cls.condition_key.c_str(), cls.total_elems, (Size) cls.max_payload,
-				cls.planned_bytes, cls.producer_processes);
-			node->scan.plan.plan_node_id = state->next_plan_node_id++;
-			return (Plan *) node;
-		});
-		RptRelinkStack(state, scan, producer);
-		for (const auto &target : cls.consumers)
-		{
-			if (!target.accepted)
-				continue;
-			const auto &proof = target.proof;
-			scan = schedule.vertices.at(
-				schedule.vertex_index_by_rtindex.at(proof.consumer_rtindex)).scan;
-			Plan *consumer = RptPgCall([&]() {
-				CustomScan *node = AnserBuildBloomConsumerScan(state->tops.at(scan),
-					proof.consumer_attno, cls.condition_id, cls.condition_key.c_str(),
-					cls.total_elems, (Size) cls.max_payload, cls.planned_bytes,
-					cls.producer_processes, proof.defer_first);
-				node->scan.plan.plan_node_id = state->next_plan_node_id++;
-				return (Plan *) node;
-			});
-			RptRelinkStack(state, scan, consumer);
-		}
+		rpt_install_backward_class(schedule, cls, state);
 		*injected = true;
 	}
 	if (trace)

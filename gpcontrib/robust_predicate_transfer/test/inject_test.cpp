@@ -48,6 +48,7 @@ struct BuiltFilter
 	Plan *child;
 	AttrNumber attno;
 	uint32 condition_id;
+	std::string condition_key;
 	int processes;
 	bool defer_first;
 };
@@ -199,17 +200,17 @@ int AnserSliceProducers(PlannedStmt *, int slice_index)
 	return slice_index >= 0 ? 3 : 0;
 }
 CustomScan *AnserBuildBloomProducerScan(Plan *child, AttrNumber attno, uint32 condition_id,
-	const char *, int64, Size, int64, int processes)
+	const char *condition_key, int64, Size, int64, int processes)
 {
-	built_filters.push_back({true, child, attno, condition_id, processes, false});
+	built_filters.push_back({true, child, attno, condition_id, condition_key, processes, false});
 	CustomScan *cs = makeNode(CustomScan);
 	cs->custom_plans = list_make1(child);
 	return cs;
 }
 CustomScan *AnserBuildBloomConsumerScan(Plan *child, AttrNumber attno, uint32 condition_id,
-	const char *, int64, Size, int64, int processes, bool defer_first)
+	const char *condition_key, int64, Size, int64, int processes, bool defer_first)
 {
-	built_filters.push_back({false, child, attno, condition_id, processes, defer_first});
+	built_filters.push_back({false, child, attno, condition_id, condition_key, processes, defer_first});
 	CustomScan *cs = makeNode(CustomScan);
 	cs->custom_plans = list_make1(child);
 	return cs;
@@ -306,7 +307,110 @@ static void layout(bool existing)
 	CHECK(seq->plan.plan_node_id == next_plan_node_id + 1);
 	CHECK(motion->plan.plan_node_id == next_plan_node_id + 2);
 }
-static void backward_stacks(bool refused, bool materialize, bool with_forward)
+static void channel_identities()
+{
+	RptInjectionState state;
+	RptForwardChannel forward;
+	forward.source_rtindex = 12;
+	forward.target_rtindex = 3;
+	RptAssignForwardChannel(state, forward);
+	CHECK(forward.condition_id == 0 && forward.condition_key == "rpt_f_12_3");
+
+	RptBackwardClass backward;
+	backward.producer_rtindex = 3;
+	backward.class_key = {12, 7};
+	RptAssignBackwardChannel(state, backward);
+	CHECK(backward.condition_id == 1 && backward.condition_key == "rpt_b_3_12_7");
+
+	RptBackwardClass other_class = backward;
+	other_class.class_key.attno = 8;
+	RptAssignBackwardChannel(state, other_class);
+	CHECK(other_class.condition_id == 2 && other_class.condition_key == "rpt_b_3_12_8");
+
+	RptForwardChannel reverse;
+	reverse.source_rtindex = 3;
+	reverse.target_rtindex = 12;
+	RptAssignForwardChannel(state, reverse);
+	CHECK(reverse.condition_id == 3 && reverse.condition_key == "rpt_f_3_12");
+	CHECK(state.next_condition_id == 4);
+
+	RptInjectionState next_statement;
+	RptAssignForwardChannel(next_statement, forward);
+	CHECK(forward.condition_id == 0 && forward.condition_key == "rpt_f_12_3");
+
+	Plan child = {};
+	int next_plan_node_id = 10;
+	built_filters.clear();
+	rpt_wrap_producer(&child, 1, forward, 3, &next_plan_node_id);
+	rpt_wrap_consumer(&child, 1, forward, 3, &next_plan_node_id);
+	CHECK(built_filters.size() == 2);
+	for (const auto &filter : built_filters)
+	{
+		CHECK(filter.condition_id == forward.condition_id);
+		CHECK(filter.condition_key == forward.condition_key);
+	}
+}
+
+static void backward_class_helpers(const RptTransferMgr &schedule,
+								   RptInjectionState &state,
+								   const RptBackwardConsumer &decision)
+{
+	RptBackwardClass cls;
+	cls.accepted = true;
+	cls.producer_rtindex = decision.producer_rtindex;
+	cls.producer_key = decision.producer_key;
+	cls.producer_processes = 3;
+	cls.condition_id = 7;
+	cls.condition_key = "rpt_b_1_1_2";
+	cls.total_elems = 1000;
+	cls.max_payload = cls.planned_bytes = 1024;
+
+	RptBackwardTarget accepted;
+	accepted.accepted = true;
+	accepted.proof = decision;
+	RptBackwardTarget skipped;
+	skipped.reason = "already refused";
+	cls.consumers = {accepted, skipped};
+	const std::map<int, int> widths = {{decision.producer_slice_index, 3}};
+	const auto original_tops = state.tops;
+	const size_t allocation_count = allocations.size();
+
+	CHECK(rpt_preflight_backward_class(schedule, state, widths, cls));
+	CHECK(cls.accepted && cls.consumers[0].accepted && !cls.consumers[1].accepted);
+
+	/* A later invalid endpoint rejects even a previously validated consumer. */
+	RptBackwardClass invalid = cls;
+	invalid.consumers.push_back(accepted);
+	invalid.consumers.back().proof.consumer_attno = 99;
+	CHECK(!rpt_preflight_backward_class(schedule, state, widths, invalid));
+	CHECK(!invalid.accepted && !invalid.consumers[0].accepted &&
+		  !invalid.consumers[2].accepted);
+	CHECK(invalid.consumers[0].reason == invalid.reason);
+	CHECK(invalid.consumers[2].reason == invalid.reason);
+	CHECK(invalid.consumers[1].reason == "already refused");
+
+	RptBackwardClass changed_width = cls;
+	CHECK(!rpt_preflight_backward_class(schedule, state,
+		  {{decision.producer_slice_index, 2}}, changed_width));
+	CHECK(state.tops == original_tops && allocations.size() == allocation_count);
+	CHECK(state.next_plan_node_id == 100);
+
+	built_filters.clear();
+	rpt_install_backward_class(schedule, cls, &state);
+	CHECK(built_filters.size() == 2 && state.next_plan_node_id == 102);
+	Plan *producer_scan = schedule.vertices[0].scan;
+	Plan *consumer_scan = schedule.vertices[1].scan;
+	CHECK(built_filters[0].producer && !built_filters[1].producer);
+	CHECK(built_filters[0].child == original_tops.at(producer_scan));
+	CHECK(built_filters[1].child == original_tops.at(consumer_scan));
+	CHECK(built_filters[0].condition_id == 7 && built_filters[1].condition_id == 7);
+	CHECK(built_filters[1].defer_first);
+	CHECK(decision.producer_parent->lefttree->plan_node_id == 100);
+	CHECK(decision.consumer_parent->lefttree->plan_node_id == 101);
+}
+
+static void backward_stacks(bool refused, bool materialize, bool with_forward,
+							bool test_helpers = false)
 {
 	RptTransferMgr schedule;
 	SeqScan scans[2] = {};
@@ -375,6 +479,11 @@ static void backward_stacks(bool refused, bool materialize, bool with_forward)
 		forward.custom_plans = list_make1(&scans[0]);
 		RptRelinkStack(&state, &scans[0].scan.plan, &forward.scan.plan);
 	}
+	if (test_helpers)
+	{
+		backward_class_helpers(schedule, state, schedule.backward_consumers.front());
+		return;
+	}
 	if (refused)
 		schedule.backward_consumers[0].consumer_attno =
 			schedule.backward_consumers[1].consumer_attno = 99;
@@ -411,6 +520,8 @@ static void backward_stacks(bool refused, bool materialize, bool with_forward)
 			CHECK(built_filters[2*i].producer && !built_filters[2*i+1].producer);
 			CHECK(built_filters[2*i].condition_id == uint32(7+i));
 			CHECK(built_filters[2*i+1].condition_id == uint32(7+i));
+			CHECK(built_filters[2*i].condition_key == (i == 0 ? "rpt_b_1_1_2" : "rpt_b_1_1_3"));
+			CHECK(built_filters[2*i+1].condition_key == built_filters[2*i].condition_key);
 			CHECK(built_filters[2*i].processes == 3 && built_filters[2*i+1].defer_first);
 			CHECK(built_filters[2*i].attno == 1 && built_filters[2*i+1].attno == 1);
 		}
@@ -470,7 +581,9 @@ static void stacked_deparse_targetlists()
 
 int main()
 {
+	channel_identities();
 	stacked_deparse_targetlists();
+	backward_stacks(false, true, true, true);
 	backward_stacks(false, true, true);
 	backward_stacks(false, true, false);
 	backward_stacks(true, true, true);
