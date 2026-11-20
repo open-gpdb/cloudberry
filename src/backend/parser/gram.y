@@ -1025,13 +1025,9 @@ static void check_expressions_in_partition_key(PartitionSpec *spec, core_yyscan_
 %nonassoc	IDENT GENERATED NULL_P PARTITION RANGE ROWS GROUPS PRECEDING FOLLOWING CUBE ROLLUP
 
 /*
- * GPDB_14_MERGE_FIXME: need to update this list to reflect new keywords added
- * as part of merge in bare_label_keyword,.....
- */
-/*
- * This is a bit ugly... To allow these to be column aliases without
- * the "AS" keyword, and not conflict with PostgreSQL's non-standard
- * suffix operators, we need to give these a precedence.
+ * GPDB: these precedences resolve shift/reduce conflicts in the grammar. The
+ * list need not cover every keyword: a new keyword that conflicts makes bison
+ * fail the build, because of %expect 0.
  */
 %nonassoc   ABORT_P
 			%nonassoc ABSOLUTE_P
@@ -3592,6 +3588,18 @@ alter_table_cmd:
 					n->num = (int16) $3;
 					n->def = (Node *) makeInteger($6);
 					$$ = (Node *) n;
+				}
+			/* ALTER TABLE <name> ALTER COLUMN <column> SET ENCODING <coldef> */
+			| ALTER opt_column ColId SET ENCODING definition
+				{
+					ColumnReferenceStorageDirective *c =
+						makeNode(ColumnReferenceStorageDirective);
+					c->column = $3;
+					c->encoding = $6;
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_SetColumnEncoding;
+					n->def = (Node *)c;
+					$$ = (Node *)n;
 				}
 			/* ALTER TABLE <name> ALTER [COLUMN] <colname> SET ( column_parameter = value [, ... ] ) */
 			| ALTER opt_column ColId SET reloptions

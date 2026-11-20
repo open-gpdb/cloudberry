@@ -51,6 +51,17 @@ endif
 ifeq "$(with_gp_stats_collector)" "yes"
 	recurse_targets += gp_stats_collector
 endif
+
+# Anser is opt-in at configure time: --with-anser (off by default).
+ifeq "$(with_anser)" "yes"
+	recurse_targets += anser
+endif
+
+# RPT+ rides on Anser: --with-rpt (off by default, needs --with-anser).
+ifeq "$(with_rpt)" "yes"
+	recurse_targets += robust_predicate_transfer
+endif
+
 $(call recurse,all install clean distclean, $(recurse_targets))
 
 all: gpcloud orafce
@@ -92,3 +103,4 @@ installcheck:
 	$(MAKE) -C gp_toolkit installcheck
 	$(MAKE) -C gp_exttable_fdw installcheck
 	if [ "$(with_diskquota)" = "yes" ]; then $(MAKE) -C diskquota installcheck; fi
+	if [ "$(with_anser)" = "yes" ]; then $(MAKE) -C anser installcheck; fi
