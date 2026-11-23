@@ -882,15 +882,13 @@ build-postgresql:
       </varlistentry>
 
       <varlistentry>
-       <term><option>--disable-plperlu-extension</option></term>
+       <term><option>--enable-plperlu-extension</option></term>
        <listitem>
         <para>
-         Do not install the <literal>plperlu</literal> extension files or
-         its transform extension files.  By default, these files are installed
-         when <option>--with-perl</option> is specified.  This option does not
-         disable building the <application>PL/Perl</application> language
-         module.  Some tests require these extensions and must be run with
-         the default setting.
+         Install the <literal>plperlu</literal> extension files and its
+         transform extension files when building with <option>--with-perl</option>.
+         These files are omitted by default.  Enable this option for test
+         builds that run the PL/Perl regression tests.
         </para>
        </listitem>
       </varlistentry>
@@ -905,17 +903,16 @@ build-postgresql:
       </varlistentry>
 
       <varlistentry>
-       <term><option>--disable-plpythonu-extension</option></term>
+       <term><option>--enable-plpythonu-extension</option></term>
        <listitem>
         <para>
-         Do not install the untrusted <application>PL/Python</application>
-         extension files.  This applies to <literal>plpython2u</literal> or
-         <literal>plpython3u</literal> for the selected Python version and
-         to the legacy <literal>plpythonu</literal> compatibility extension.
-         By default, these files are installed when
-         <option>--with-python</option> is specified.  This
-         option does not disable building the language module.  Some tests
-         require these extensions and must be run with the default setting.
+         Install the untrusted <application>PL/Python</application> extension
+         files when building with <option>--with-python</option>.  This applies
+         to <literal>plpython2u</literal> or <literal>plpython3u</literal>,
+         depending on the selected Python version, and to the legacy
+         <literal>plpythonu</literal> compatibility extension.  These files
+         are omitted by default.  Enable this option for test builds that run
+         the PL/Python regression tests.
         </para>
        </listitem>
       </varlistentry>

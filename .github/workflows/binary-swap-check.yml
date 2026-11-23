@@ -257,7 +257,7 @@ jobs:
           set -eo pipefail
           echo "baseline" > "${SRC_DIR}/BUILD_NUMBER"
           chmod +x "${SRC_DIR}"/devops/build/automation/cloudberry/scripts/configure-cloudberry.sh
-          time su - gpadmin -c "cd ${SRC_DIR} && SRC_DIR=${SRC_DIR} ENABLE_DEBUG=false ${SRC_DIR}/devops/build/automation/cloudberry/scripts/configure-cloudberry.sh"
+          time su - gpadmin -c "cd ${SRC_DIR} && SRC_DIR=${SRC_DIR} ENABLE_DEBUG=false ${SRC_DIR}/devops/build/automation/cloudberry/scripts/configure-cloudberry.sh --enable-plpythonu-extension --enable-plperlu-extension"
 
       - name: Build
         env:
@@ -402,7 +402,7 @@ jobs:
           set -eo pipefail
           echo "current" > "${SRC_DIR}/BUILD_NUMBER"
           chmod +x "${SRC_DIR}"/devops/build/automation/cloudberry/scripts/configure-cloudberry.sh
-          time su - gpadmin -c "cd ${SRC_DIR} && SRC_DIR=${SRC_DIR} ENABLE_DEBUG=false ${SRC_DIR}/devops/build/automation/cloudberry/scripts/configure-cloudberry.sh"
+          time su - gpadmin -c "cd ${SRC_DIR} && SRC_DIR=${SRC_DIR} ENABLE_DEBUG=false ${SRC_DIR}/devops/build/automation/cloudberry/scripts/configure-cloudberry.sh --enable-plpythonu-extension --enable-plperlu-extension"
 
       - name: Build
         env:
