@@ -38,11 +38,13 @@ OBJS = \
 	plpy_typeio.o \
 	plpy_util.o
 
+ifeq ($(disable_plpythonu_extension),no)
 DATA = $(NAME)u.control $(NAME)u--1.0.sql
 # Keep the legacy plpythonu extension files installed so GPDB6 dumps that
 # include "CREATE EXTENSION plpythonu" can still be restored during a binary
 # upgrade.
 DATA += plpythonu.control plpythonu--1.0.sql
+endif
 
 # header files to install - it's not clear which of these might be needed
 # so install them all.
@@ -139,7 +141,9 @@ installdirs: installdirs-lib
 uninstall: uninstall-lib uninstall-data
 
 install-data: installdirs
+ifneq ($(strip $(DATA)),)
 	$(INSTALL_DATA) $(addprefix $(srcdir)/, $(DATA)) '$(DESTDIR)$(datadir)/extension/'
+endif
 	$(INSTALL_DATA) $(addprefix $(srcdir)/, $(INCS)) '$(DESTDIR)$(includedir_server)'
 	$(INSTALL_DATA) $(srcdir)/regress-python3-mangle.mk '$(DESTDIR)$(pgxsdir)/src/pl/plpython'
 
