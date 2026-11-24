@@ -1449,6 +1449,16 @@ code or new licensing patterns.
             <exclude>gpcontrib/gp_relsizes_stats/**/*.out</exclude>
             <exclude>gpcontrib/gp_stats_collector/**/*.sql</exclude>
             <exclude>gpcontrib/gp_stats_collector/**/*.out</exclude>
+
+            <!-- Imported SQL and regression fixtures for gp_url_tools and uuid_cb. -->
+            <exclude>gpcontrib/gp_url_tools/sql/gp_url_tools--1.0.sql</exclude>
+            <exclude>gpcontrib/gp_url_tools/test/expected/gp_url_tools.out</exclude>
+            <exclude>gpcontrib/gp_url_tools/test/sql/gp_url_tools.sql</exclude>
+            <exclude>gpcontrib/uuid_cb/sql/uuid-cb--1.0.sql</exclude>
+            <exclude>gpcontrib/uuid_cb/sql/uuid-cb--unpackaged--1.0.sql</exclude>
+            <exclude>gpcontrib/uuid_cb/test/expected/uuid_cb.out</exclude>
+            <exclude>gpcontrib/uuid_cb/test/sql/uuid_cb.sql</exclude>
+
             <exclude>.github/full_color_black.svg</exclude>
             <exclude>.github/full_color_white.svg</exclude>
             <exclude>sonar-project.properties</exclude>
