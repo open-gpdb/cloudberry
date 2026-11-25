@@ -180,7 +180,8 @@ select relid::regclass as relname, phase, heap_blks_total, heap_blks_scanned, he
 2: SELECT gp_inject_fault('vacuum_worker_changed', 'reset', dbid) FROM gp_segment_configuration WHERE content > -1 AND role = 'p';
 2: SELECT gp_wait_until_triggered_fault('vacuum_ao_post_cleanup_end', 1, dbid) FROM gp_segment_configuration WHERE content > -1 AND role = 'p';
 
--- The previous collected num_dead_tuples in compact phase is zero.
+-- The new worker has lost the compact phase's counters. Post-cleanup reports
+-- its own truncation and index vacuum work, while num_dead_tuples stays zero.
 select gp_segment_id, relid::regclass as relname, phase, heap_blks_total, heap_blks_scanned, heap_blks_vacuumed, index_vacuum_count, max_dead_tuples, num_dead_tuples from gp_stat_progress_vacuum where gp_segment_id > -1;
 select relid::regclass as relname, phase, heap_blks_total, heap_blks_scanned, heap_blks_vacuumed, index_vacuum_count, max_dead_tuples, num_dead_tuples from gp_stat_progress_vacuum_summary;
 
@@ -198,3 +199,6 @@ select relid::regclass as relname, phase, heap_blks_total, heap_blks_scanned, he
 SELECT gp_inject_fault_infinite('all', 'reset', dbid) FROM gp_segment_configuration;
 reset Debug_appendonly_print_compaction;
 reset default_table_access_method;
+ALTER SYSTEM RESET gp_fts_mark_mirror_down_grace_period;
+ALTER SYSTEM RESET gp_fts_probe_interval;
+SELECT gp_segment_id, pg_reload_conf() FROM gp_id UNION SELECT gp_segment_id, pg_reload_conf() FROM gp_dist_random('gp_id');
