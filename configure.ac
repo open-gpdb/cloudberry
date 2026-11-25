@@ -237,6 +237,26 @@ PGAC_ARG_BOOL(enable, debug-extensions, yes,
               [exclude debug extensions in gpcontrib])
 AC_SUBST(enable_debug_extensions)
 
+# Allow test builds to install untrusted language extensions.
+AC_ARG_ENABLE([plpythonu-extension],
+              [AS_HELP_STRING([--enable-plpythonu-extension],
+                              [install untrusted PL/Python extensions (default: no)])],
+              [AS_CASE([$enableval],
+                       [yes], [disable_plpythonu_extension=no],
+                       [no], [disable_plpythonu_extension=yes],
+                       [AC_MSG_ERROR([invalid value for --enable-plpythonu-extension: $enableval])])],
+              [disable_plpythonu_extension=yes])
+AC_SUBST(disable_plpythonu_extension)
+AC_ARG_ENABLE([plperlu-extension],
+              [AS_HELP_STRING([--enable-plperlu-extension],
+                              [install the untrusted plperlu extension and its transforms (default: no)])],
+              [AS_CASE([$enableval],
+                       [yes], [disable_plperlu_extension=no],
+                       [no], [disable_plperlu_extension=yes],
+                       [AC_MSG_ERROR([invalid value for --enable-plperlu-extension: $enableval])])],
+              [disable_plperlu_extension=yes])
+AC_SUBST(disable_plperlu_extension)
+
 #
 # Enable fault injector
 #

@@ -882,10 +882,37 @@ build-postgresql:
       </varlistentry>
 
       <varlistentry>
+       <term><option>--enable-plperlu-extension</option></term>
+       <listitem>
+        <para>
+         Install the <literal>plperlu</literal> extension files and its
+         transform extension files when building with <option>--with-perl</option>.
+         These files are omitted by default.  Enable this option for test
+         builds that run the PL/Perl regression tests.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
        <term><option>--with-python</option></term>
        <listitem>
         <para>
          Build the <application>PL/Python</application> server-side language.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term><option>--enable-plpythonu-extension</option></term>
+       <listitem>
+        <para>
+         Install the untrusted <application>PL/Python</application> extension
+         files when building with <option>--with-python</option>.  This applies
+         to <literal>plpython2u</literal> or <literal>plpython3u</literal>,
+         depending on the selected Python version, and to the legacy
+         <literal>plpythonu</literal> compatibility extension.  These files
+         are omitted by default.  Enable this option for test builds that run
+         the PL/Python regression tests.
         </para>
        </listitem>
       </varlistentry>
