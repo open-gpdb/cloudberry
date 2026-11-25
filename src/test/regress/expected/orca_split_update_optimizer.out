@@ -48,7 +48,7 @@ EXPLAIN (COSTS OFF) UPDATE ao_su SET id = 999 WHERE id = 1;
          ->  Result
                ->  Redistribute Motion 3:3  (slice1; segments: 3)
                      Hash Key: id
-                     ->  Split Update
+                     ->  Split
                            ->  Seq Scan on ao_su
                                  Filter: (id = 1)
  Optimizer: GPORCA

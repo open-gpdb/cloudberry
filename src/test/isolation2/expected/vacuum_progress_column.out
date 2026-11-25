@@ -452,18 +452,19 @@ select relid::regclass as relname, phase, heap_blks_total, heap_blks_scanned, he
  Success:                      
 (3 rows)
 
--- The previous collected num_dead_tuples in compact phase is zero.
+-- The new worker has lost the compact phase's counters. Post-cleanup reports
+-- its own truncation and index vacuum work, while num_dead_tuples stays zero.
 select gp_segment_id, relid::regclass as relname, phase, heap_blks_total, heap_blks_scanned, heap_blks_vacuumed, index_vacuum_count, max_dead_tuples, num_dead_tuples from gp_stat_progress_vacuum where gp_segment_id > -1;
  gp_segment_id | relname                   | phase                         | heap_blks_total | heap_blks_scanned | heap_blks_vacuumed | index_vacuum_count | max_dead_tuples | num_dead_tuples 
 ---------------+---------------------------+-------------------------------+-----------------+-------------------+--------------------+--------------------+-----------------+-----------------
- 2             | vacuum_progress_ao_column | append-optimized post-cleanup | 0               | 0                 | 0                  | 0                  | 0               | 0               
- 0             | vacuum_progress_ao_column | append-optimized post-cleanup | 0               | 0                 | 0                  | 0                  | 0               | 0               
- 1             | vacuum_progress_ao_column | append-optimized post-cleanup | 0               | 0                 | 0                  | 0                  | 0               | 0               
+ 2             | vacuum_progress_ao_column | append-optimized post-cleanup | 0               | 0                 | 9                  | 2                  | 0               | 0               
+ 0             | vacuum_progress_ao_column | append-optimized post-cleanup | 0               | 0                 | 9                  | 2                  | 0               | 0               
+ 1             | vacuum_progress_ao_column | append-optimized post-cleanup | 0               | 0                 | 9                  | 2                  | 0               | 0               
 (3 rows)
 select relid::regclass as relname, phase, heap_blks_total, heap_blks_scanned, heap_blks_vacuumed, index_vacuum_count, max_dead_tuples, num_dead_tuples from gp_stat_progress_vacuum_summary;
  relname                   | phase                         | heap_blks_total | heap_blks_scanned | heap_blks_vacuumed | index_vacuum_count | max_dead_tuples | num_dead_tuples 
 ---------------------------+-------------------------------+-----------------+-------------------+--------------------+--------------------+-----------------+-----------------
- vacuum_progress_ao_column | append-optimized post-cleanup | 0               | 0                 | 0                  | 0                  | 0               | 0               
+ vacuum_progress_ao_column | append-optimized post-cleanup | 0               | 0                 | 27                 | 6                  | 0               | 0               
 (1 row)
 
 2: SELECT gp_inject_fault('vacuum_ao_post_cleanup_end', 'reset', dbid) FROM gp_segment_configuration WHERE content > -1 AND role = 'p';
@@ -511,3 +512,15 @@ reset Debug_appendonly_print_compaction;
 RESET
 reset default_table_access_method;
 RESET
+ALTER SYSTEM RESET gp_fts_mark_mirror_down_grace_period;
+ALTER
+ALTER SYSTEM RESET gp_fts_probe_interval;
+ALTER
+SELECT gp_segment_id, pg_reload_conf() FROM gp_id UNION SELECT gp_segment_id, pg_reload_conf() FROM gp_dist_random('gp_id');
+ gp_segment_id | pg_reload_conf 
+---------------+----------------
+ 2             | t              
+ 1             | t              
+ 0             | t              
+ -1            | t              
+(4 rows)

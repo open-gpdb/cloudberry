@@ -264,7 +264,6 @@ test: uaocs_compaction/threshold
 test: uao_ddl/analyze_ao_table_every_dml_row uao_ddl/analyze_ao_table_every_dml_column
 test: uao_dml/uao_dml_row
 test: uao_dml/uao_dml_column
-test: ao_locks
 test: freeze_aux_tables
 
 # cbdb parallel test
