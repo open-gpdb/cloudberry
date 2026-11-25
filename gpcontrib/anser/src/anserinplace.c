@@ -37,6 +37,12 @@
  *	   for every table AM; a qual would not on AOCO, which evaluates the
  *	   qual before it loads columns the plan's own qual does not use.
  *
+ * The coordinator and the segments only agree if they see the same inputs.
+ * Where they might not -- an extension's own exchanges placed after the
+ * coordinator's walk, say -- the outcome is a join with both an exchanged and
+ * an in-place filter, or with neither.  Both filters only drop rows whose key
+ * the build side lacks, so either way the answer is the same.
+ *
  * The filter never makes the scan wait: a join that fetches its first outer
  * tuple before building its hash table just sees that tuple unfiltered.
  * Keys are hashed in Anser's normalized form (AnserNormalizeBloomDatum) on
@@ -104,7 +110,11 @@ typedef struct AnserInplaceWalk
 	int			local_slice;
 	int			slice_index;
 	Bitmapset  *nestloop_params;
+	bool		skip_filtered_key;	/* see AnserSetInplaceRequest */
 } AnserInplaceWalk;
+
+/* An extension's say on in-place filters; see AnserSetInplaceRequest. */
+static AnserInplaceRequestFn inplace_request = NULL;
 
 static AnserInplaceFilter *
 anser_inplace_lookup(PlanState *build)
@@ -321,7 +331,7 @@ anser_inplace_find_scans(HashJoinState *hjs, AttrNumber attno, List **scans,
 			return false;
 		var = (Var *) te->expr;
 
-		if (IsA(child, CustomScanState) && AnserIsRuntimeFilterScan(child->plan) &&
+		if (IsA(child, CustomScanState) && AnserIsFilterScan(child->plan) &&
 			list_length(((CustomScanState *) child)->custom_ps) == 1)
 		{
 			if (var->varno != INDEX_VAR || var->varattno < 1)
@@ -434,7 +444,8 @@ anser_inplace_walk(PlanState *ps, AnserInplaceWalk *walk)
 
 	if (IsA(ps, HashJoinState) && walk->slice_index == walk->local_slice &&
 		AnserInplaceEligible((HashJoin *) ps->plan, walk->stmt,
-							 walk->slice_index, walk->nestloop_params))
+							 walk->slice_index, walk->nestloop_params,
+							 walk->skip_filtered_key))
 		anser_inplace_setup((HashJoinState *) ps, walk);
 
 	anser_inplace_walk(outerPlanState(ps), walk);
@@ -472,6 +483,12 @@ anser_inplace_walk(PlanState *ps, AnserInplaceWalk *walk)
  * filters: the coordinator's slice is never eligible.
  */
 void
+AnserSetInplaceRequest(AnserInplaceRequestFn request)
+{
+	inplace_request = request;
+}
+
+void
 AnserInplaceExecutorStart(QueryDesc *queryDesc, int eflags)
 {
 	AnserInplaceWalk walk = {0};
@@ -479,8 +496,13 @@ AnserInplaceExecutorStart(QueryDesc *queryDesc, int eflags)
 
 	if (Gp_role != GP_ROLE_EXECUTE)
 		return;
-	if (!gp_anser_enable || !gp_anser_runtime_filter ||
-		!gp_anser_runtime_filter_inplace)
+	if (!gp_anser_enable || !gp_anser_runtime_filter_inplace)
+		return;
+	if (gp_anser_runtime_filter)
+		walk.skip_filtered_key = false;		/* as AnserApplyRuntimeFilters */
+	else if (inplace_request != NULL && inplace_request())
+		walk.skip_filtered_key = true;	/* as AnserApplyInplaceRuntimeFilters */
+	else
 		return;
 	if (eflags & EXEC_FLAG_EXPLAIN_ONLY)
 		return;
