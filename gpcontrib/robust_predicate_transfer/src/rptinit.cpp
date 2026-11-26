@@ -76,6 +76,14 @@ double		rpt_forward_ms_per_mib_part = 3.5;
 double		rpt_delivery_ms_per_mib = 0.8;
 double		rpt_forward_max_exchange_ms = 10000.0;
 bool		rpt_forward_total_cost = true;
+bool		rpt_prefer_inplace = true;
+bool		rpt_key_survival = true;
+bool		rpt_extended_safe_quals = true;
+double		rpt_cost_scan_row = 0.00015;
+double		rpt_cost_scan_byte = 0.000002;
+double		rpt_cost_build_row = 0.00010;
+double		rpt_cost_probe_row = 0.00008;
+double		rpt_cost_downstream_row = 0.00060;
 double		rpt_forward_min_root_rows = 10000.0;
 /* The RPT+ paper's lambda (its Algorithm 2 threshold). */
 double		rpt_forward_max_selectivity = 0.35;
@@ -187,7 +195,7 @@ _PG_init(void)
 static bool
 rpt_inplace_requested(void)
 {
-	return rpt_enable && rpt_backward;
+	return rpt_enable && (rpt_backward || (rpt_forward && rpt_prefer_inplace));
 }
 
 /*
@@ -230,8 +238,9 @@ rpt_define_gucs(void)
 
 	DefineCustomBoolVariable("rpt.forward",
 							 "Developer control for forward reducer injection.",
-							 "QD-only. Needs anser.enable=on and anser.runtime_filter=off.",
-							 &rpt_forward, true, PGC_USERSET, GUC_NOT_IN_SAMPLE,
+							 "Needs anser.enable=on and anser.runtime_filter=off.",
+							 &rpt_forward, true, PGC_USERSET,
+							 GUC_NOT_IN_SAMPLE | GUC_GPDB_NEED_SYNC,
 							 NULL, NULL, NULL);
 
 	DefineCustomRealVariable("rpt.forward_ms_per_mib_part",
@@ -245,6 +254,46 @@ rpt_define_gucs(void)
 							 "Shared by forward and backward exchanges; QD-only.",
 							 &rpt_delivery_ms_per_mib, 0.8, 0.0, 1.0e6,
 							 PGC_USERSET, 0, NULL, NULL, NULL);
+
+	DefineCustomBoolVariable("rpt.prefer_inplace",
+							 "Prefer eligible Anser in-place filters on covered probe keys.",
+							 NULL, &rpt_prefer_inplace, true, PGC_USERSET,
+							 GUC_NOT_IN_SAMPLE | GUC_GPDB_NEED_SYNC, NULL, NULL, NULL);
+
+	DefineCustomBoolVariable("rpt.key_survival",
+							 "Estimate distinct keys retained and choose the strongest transfer key.",
+							 NULL, &rpt_key_survival, true, PGC_USERSET,
+							 GUC_NOT_IN_SAMPLE, NULL, NULL, NULL);
+
+	DefineCustomBoolVariable("rpt.extended_safe_quals",
+							 "Allow additional safe comparisons in the forward reducer.",
+							 NULL, &rpt_extended_safe_quals, true, PGC_USERSET,
+							 GUC_NOT_IN_SAMPLE, NULL, NULL, NULL);
+
+	DefineCustomRealVariable("rpt.cost_scan_row",
+							 "Estimated milliseconds per reducer input row.",
+							 NULL, &rpt_cost_scan_row, 0.00015, 0.0, 1e6, PGC_USERSET,
+							 GUC_NOT_IN_SAMPLE, NULL, NULL, NULL);
+
+	DefineCustomRealVariable("rpt.cost_scan_byte",
+							 "Estimated milliseconds per reducer input byte.",
+							 NULL, &rpt_cost_scan_byte, 0.000002, 0.0, 1e6, PGC_USERSET,
+							 GUC_NOT_IN_SAMPLE, NULL, NULL, NULL);
+
+	DefineCustomRealVariable("rpt.cost_build_row",
+							 "Estimated milliseconds per Bloom build row.",
+							 NULL, &rpt_cost_build_row, 0.00010, 0.0, 1e6, PGC_USERSET,
+							 GUC_NOT_IN_SAMPLE, NULL, NULL, NULL);
+
+	DefineCustomRealVariable("rpt.cost_probe_row",
+							 "Estimated milliseconds per Bloom probe row.",
+							 NULL, &rpt_cost_probe_row, 0.00008, 0.0, 1e6, PGC_USERSET,
+							 GUC_NOT_IN_SAMPLE, NULL, NULL, NULL);
+
+	DefineCustomRealVariable("rpt.cost_downstream_row",
+							 "Estimated milliseconds per downstream row avoided.",
+							 NULL, &rpt_cost_downstream_row, 0.00060, 0.0, 1e6, PGC_USERSET,
+							 GUC_NOT_IN_SAMPLE, NULL, NULL, NULL);
 
 	DefineCustomBoolVariable("rpt.forward_total_cost",
 							 "Rejects weak or unprofitable forward transfers.",

@@ -501,7 +501,7 @@ AnserInplaceExecutorStart(QueryDesc *queryDesc, int eflags)
 	if (gp_anser_runtime_filter)
 		walk.skip_filtered_key = false;		/* as AnserApplyRuntimeFilters */
 	else if (inplace_request != NULL && inplace_request())
-		walk.skip_filtered_key = true;	/* as AnserApplyInplaceRuntimeFilters */
+		walk.skip_filtered_key = !gp_anser_inplace_with_consumer;
 	else
 		return;
 	if (eflags & EXEC_FLAG_EXPLAIN_ONLY)

@@ -63,6 +63,11 @@ extern PGDLLEXPORT void AnserApplyRuntimeFilters(PlannedStmt *stmt);
  */
 extern PGDLLEXPORT bool AnserApplyRuntimeFilterFallback(PlannedStmt *stmt);
 extern PGDLLEXPORT bool AnserApplyInplaceRuntimeFilters(PlannedStmt *stmt);
+typedef void (*AnserInplaceProbeFn)(Plan *probe, AttrNumber probe_key,
+									 HashJoin *join, void *arg);
+extern PGDLLEXPORT void AnserVisitInplaceProbes(PlannedStmt *stmt,
+												AnserInplaceProbeFn visit, void *arg);
+
 typedef void (*AnserInplaceCandidateFn)(Plan *build, AttrNumber build_key,
 										Plan *probe, AttrNumber probe_key,
 										void *arg);
